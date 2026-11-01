@@ -12,6 +12,9 @@ The baselines are black boxes on purpose: see docs/STATUS.md. Node counts are pr
 they are a check of their own, and a baseline that keeps going past a finished game will
 report more of them.
 
+syntaks and pentakle have one perft each, and neither makes the last ply: proved for syntaks and
+inferred for pentakle, both from outside. They only race on bulk.
+
 Stdlib only.
 """
 
@@ -37,6 +40,8 @@ POSITIONS = [
 ]
 
 LINE = re.compile(r"(full|bulk) depth (\d+): (\d+)\s+([\d.]+)s\s+([\d.]+) Mnps")
+TOTAL = re.compile(r"total: (\d+)")
+RATE = re.compile(r"([\d.]+) (M?)nps")
 
 
 def timed(command: list[str], depth: int, runs: int) -> dict[str, tuple[int, float]]:
@@ -47,6 +52,19 @@ def timed(command: list[str], depth: int, runs: int) -> dict[str, tuple[int, flo
         for kind, d, nodes, _seconds, mnps in LINE.findall(out):
             if int(d) == depth and (kind not in best or float(mnps) > best[kind][1]):
                 best[kind] = (int(nodes), float(mnps))
+    return best
+
+
+def piped(binary: Path, commands: str, runs: int) -> dict[str, tuple[int, float]]:
+    """The same for a binary driven over stdin, which prints a total and then a rate."""
+    best: dict[str, tuple[int, float]] = {}
+    for _ in range(runs):
+        out = subprocess.run([str(binary)], input=commands, capture_output=True, text=True).stdout
+        total, rate = TOTAL.search(out), RATE.search(out)
+        if total and rate:
+            mnps = float(rate.group(1)) / (1 if rate.group(2) else 1e6)
+            if "bulk" not in best or mnps > best["bulk"][1]:
+                best["bulk"] = (int(total.group(1)), mnps)
     return best
 
 
@@ -62,6 +80,8 @@ def main() -> int:
     suffix = ".exe" if os.name == "nt" else ""
     tiltak = base / f"tiltak-perft{suffix}"
     topaz = base / f"topaz-perft{suffix}"
+    syntaks = base / f"syntaks{suffix}"
+    pentakle = base / f"pentakle{suffix}"
 
     for name, tps, depth in POSITIONS:
         print(f"== {name}, depth {depth}", flush=True)
@@ -72,6 +92,12 @@ def main() -> int:
             rows["tiltak"] = timed([str(tiltak), "6", str(depth)] + extra, depth, args.runs)
         if topaz.exists():
             rows["topaz"] = timed([str(topaz), str(depth)] + extra, depth, args.runs)
+        position = f"position tps {tps}\n" if tps else "position startpos\n"
+        if syntaks.exists():
+            rows["syntaks"] = piped(syntaks, f"tei\nisready\nteinewgame 6\n{position}"
+                                    f"splitperft {depth}\nisready\nquit\n", args.runs)
+        if pentakle.exists():
+            rows["pentakle"] = piped(pentakle, f"{position}perft {depth}\n", args.runs)
 
         for kind in ("full", "bulk"):
             rivals = [row[kind][1] for engine, row in rows.items()
@@ -82,7 +108,7 @@ def main() -> int:
                     lead = ""
                     if engine == "yapper" and rivals:
                         lead = f"  {mnps / max(rivals):.1f}x the best baseline"
-                    print(f"  {engine:7} {kind} {nodes:>14,} nodes {mnps:9.1f} Mnps{lead}",
+                    print(f"  {engine:8} {kind} {nodes:>14,} nodes {mnps:9.1f} Mnps{lead}",
                           flush=True)
     return 0
 

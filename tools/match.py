@@ -438,9 +438,11 @@ def main() -> int:
     pair_count = (games + 1) // 2
 
     base_time, inc = parse_tc(args.tc)
+    # Windows will not start a relative path written with forward slashes.
+    dev_path, base_path = str(Path(args.dev).resolve()), str(Path(args.base).resolve())
     config = Config(
-        dev_command=[args.dev] + ([args.dev_arg] if args.dev_arg else []),
-        base_command=[args.base] + ([args.base_arg] if args.base_arg else []),
+        dev_command=[dev_path] + ([args.dev_arg] if args.dev_arg else []),
+        base_command=[base_path] + ([args.base_arg] if args.base_arg else []),
         dev_options={**split_options(args.dev_options), "HalfKomi": str(args.halfkomi)},
         base_options={**split_options(args.base_options), "HalfKomi": str(args.halfkomi)},
         dev_limits=Limits(base_time, inc, args.dev_nodes, args.dev_depth),

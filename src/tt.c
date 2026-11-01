@@ -43,12 +43,16 @@ void tt_clear(void) {
 
 void tt_new_search(void) { Generation = (Generation + 1) & 63; }
 
+/* The position hash is a sum, weak in its low bits, and this is the one reader of those. */
+static inline u64 tt_key(u64 hash) { return (hash ^ hash >> 32) * 0x9E3779B97F4A7C15ULL; }
+
 /* The index comes from the low bits and the check from the high bits, so the two are
  * independent and a table of any size keeps a full 16 bits of verification. */
 static inline Bucket *bucket_of(u64 key) { return &Table[key & BucketMask]; }
 static inline u16 check_of(u64 key) { return (u16)(key >> 48); }
 
-bool tt_probe(u64 key, TTEntry *out) {
+bool tt_probe(u64 hash, TTEntry *out) {
+    const u64 key        = tt_key(hash);
     const Bucket *bucket = bucket_of(key);
     const u16 check      = check_of(key);
     for (int i = 0; i < BUCKET_ENTRIES; i++) {
@@ -61,7 +65,8 @@ bool tt_probe(u64 key, TTEntry *out) {
     return false;
 }
 
-void tt_store(u64 key, Move move, int score, int eval, int depth, Bound bound) {
+void tt_store(u64 hash, Move move, int score, int eval, int depth, Bound bound) {
+    const u64 key   = tt_key(hash);
     Bucket *bucket  = bucket_of(key);
     const u16 check = check_of(key);
 

@@ -6,12 +6,16 @@
 constants, and a size is only a mask and a carry limit. One binary plays all sizes through one
 code path with no per-size specialisation.
 
-**A stack is a shift register.** `stones[sq]` holds one bit per stone with bit 0 on top, so
-taking `k` stones is a mask and a shift, and landing `d` is a shift and an OR. Height lives
-apart in `height[sq]`, which fits in one cache line for the whole board. A stack passes 64
-stones only on 7x7 and 8x8, and only contrived ones; `deep[sq]` carries the overflow behind an
-unlikely branch at the far end of the struct, so it costs nothing in play and the board is
-still correct for the tallest legal stack.
+**A stack is a shift register with its height built in.** `stones[sq]` holds one bit per stone
+with bit 0 on top, and a 1 above the bottom stone, so an empty square holds 1. Taking `k` stones
+is a mask and a shift, landing `d` is a shift and an OR, and there is no height to keep in step
+with either.
+
+**Towers cost nothing until one exists.** A word can hold 63 stones and `deep[sq]` carries the
+rest, for the contrived stacks only 7x7 and 8x8 can reach. With no stack of 47 stones on the
+board, none can overflow in one spread, so a spread does not have to ask. `towers` in the state
+says when it does, and `spread()` is built twice from one body: the build for towers makes calls
+in the middle of its loop, and the common one makes none and has no question to ask at any hop.
 
 **Only the top stone has a type.** Nothing lands on a wall or capstone without flattening it,
 so everything below the top is a flat. `walls` and `caps` are bitboards and need no per-stack
@@ -25,20 +29,56 @@ stone `i`. Carry count, hop count and drop sizes are all read off with bit opera
 
 Which spreads a stack has depends on just two numbers: how much it may carry and how far is
 open. So `movegen_init()` builds one list of pre-shifted patterns per pair, and generating a
-direction is a table lookup plus an OR over a run of u16s, which compilers vectorise for AVX2
-and NEON alike. Counting is the same lookup with no list at all, which is why bulk perft runs
-above a billion leaves a second.
+direction is a table lookup plus an OR over a run of u16s. The vectors are GCC's own, so they
+lower to SSE, AVX or NEON with no intrinsics in the source. A lane always copies eight moves and
+the list then advances by what was meant, so a short run has no loop to mispredict.
 
-The road check is what usually dominates a Tak node, and it is local here. A road can only
-appear through a square the move changed, so `board_outcome_after()` floods from those squares
-alone, inside only the player's own stones, and a small group stops after a round or two. A
-position where the move made no new road stone does no flood at all.
+Placements work the same way, a rank at a time: the byte of empty squares picks a ready-made list
+of moves, and adding the rank's first square makes them real. A rank costs the same with one
+empty square as with eight. Lone stones go the same way, a direction and then a rank at a time,
+so the per-stack path only ever sees real stacks and capstones. That is not square order, and
+search sees the lone stones' moves first.
 
-Make saves four bitboards and the hash, and unmake restores them rather than undoing them. That
-also recovers a flattened wall with no special case. Only the stacks are walked back.
+Reach comes from a table of every line of eight squares, indexed by the byte of blockers on the
+line, so a stack costs two lookups rather than four bit scans. A file becomes a byte with one
+multiply.
 
-The hash treats a square's whole stack as one value, so a spread costs per square touched
-rather than per stone moved, and no table has to span every height a stack can reach.
+Counting needs no list. Most stones on a board are alone, and a lone stone has one move per open
+neighbour, so all of them are counted at once with four shifts and popcounts; `tall` says which
+stacks are left to walk, and those cost a table read per line. That is why bulk perft runs at
+several billion leaves a second.
+
+The road check is what usually dominates a Tak node, and it barely runs here. A road must cross
+from every rank to the next, or from every file to the next, along a pair of adjacent stones, and
+`road_conceivable()` tests that in a dozen operations and no branches. A flood only follows if it
+passes, and then only from squares the move changed, inside the player's own stones.
+
+Make and unmake split the board into two parts. The 64 bytes of `PositionState` are saved once
+for a node, and restored by one copy after each of its moves, which is also what recovers a
+flattened wall with no special case. Only the stacks are walked back, and that is a single shift
+per hop. Saving per move would be slower than it looks, because each copy would read what the one
+before it wrote.
+
+A lone flat or wall stepping one square has a make and unmake of its own. It has no hops to walk
+and no pattern to read, and its new owner is simply the side to move. The generator lists these
+together, so the branch that picks the path predicts well, and `board_play()` takes it too, so
+perft and search time the same code.
+
+The hash is a sum: each stack's whole word times a key for its square, plus a key for each wall
+and capstone. A spread therefore costs one multiply for each square it touches, however many
+stones move, and needs no table spanning every height. A sum is weak in its low bits, so the
+transposition table mixes it before reading them; everything else compares all 64 bits. The side
+to move is not in it, or anywhere: white moves on even plies, so `board_stm()` reads the ply, and
+`board_key()` adds the side only for the one reader that needs it. Make ends with `ply++`.
+
+**Register pressure is the real enemy.** A spread has around fifteen values live, and what a
+compiler does when it runs out shows up directly: an early version spent 290 instructions on a
+1-hop spread, most of them spills and reloads. Hence no calls inside the fast spread, owners
+worked out in registers and written once, and the rare paths out of line. `perft_node` is
+flattened so a node saves registers once rather than at every call into the board, and has a loop
+for each kind of move. An `Undo` that never escapes can stay in registers across all of a node's
+moves, and clang does exactly that, which is why it is used when it is there and why the sources
+are built as one translation unit.
 
 ## Tactics
 

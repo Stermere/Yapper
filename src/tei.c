@@ -159,9 +159,10 @@ static bool handle_debug(const char *command, char *args) {
         char tps[TPS_BUFFER];
         board_to_tps(&Root, tps, sizeof(tps));
         const int outcome = board_outcome(&Root);
-        printf("tps %s\nhash %016llx\noutcome %d\neval %d\n", tps, (unsigned long long)Root.hash,
-               outcome,
-               evaluate(&Root, Root.ply >= 2 ? board_road_placements(&Root, !Root.stm) : 0));
+        printf(
+            "tps %s\nhash %016llx\noutcome %d\neval %d\n", tps, (unsigned long long)Root.hash,
+            outcome,
+            evaluate(&Root, Root.ply >= 2 ? board_road_placements(&Root, !board_stm(&Root)) : 0));
     } else if (strcmp(command, "moves") == 0) {
         Move list[MAX_MOVES];
         const int count = board_outcome(&Root) == ONGOING ? movegen_all(&Root, list) : 0;

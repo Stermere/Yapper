@@ -45,27 +45,32 @@ static void check_consistent(const Board *b) {
     show(b, tps, sizeof(tps));
 
     u64 owned[2]  = {0, 0};
+    u64 tall      = 0;
+    u64 words     = 0;
     int stones[2] = {0, 0}, caps[2] = {0, 0};
     for (int sq = 0; sq < SQUARE_COUNT; sq++) {
-        const int height = b->height[sq];
+        const int height = board_height(b, sq);
+        words |= b->stones[sq];
         if (!((b->mask >> sq) & 1)) {
             CHECK(height == 0, "stones off the board at %d: %s", sq, tps);
             continue;
         }
         if (height == 0) {
-            CHECK(b->stones[sq] == 0 && b->deep[sq] == 0, "residue on empty %d: %s", sq, tps);
+            CHECK(b->stones[sq] == 1 && b->deep[sq] == 0, "residue on empty %d: %s", sq, tps);
             continue;
         }
         const int top = (int)(b->stones[sq] & 1);
         owned[top] |= 1ULL << sq;
+        tall |= (u64)(height > 1) << sq;
         for (int i = 0; i < height; i++) {
-            const u64 word = i >= 64 ? b->deep[sq] : b->stones[sq];
-            stones[(word >> (i & 63)) & 1]++;
+            stones[board_stone(b, sq, i)]++;
         }
         caps[top] += (int)((b->caps >> sq) & 1);
     }
     CHECK(owned[WHITE] == b->owned[WHITE], "white squares: %s", tps);
     CHECK(owned[BLACK] == b->owned[BLACK], "black squares: %s", tps);
+    CHECK(tall == b->tall, "tall squares: %s", tps);
+    CHECK((words >> TOWER_BITS != 0) == b->towers, "towers: %s", tps);
     CHECK((b->walls & b->caps) == 0, "wall and capstone on one square: %s", tps);
     CHECK(((b->walls | b->caps) & ~(b->owned[0] | b->owned[1])) == 0, "typed empty: %s", tps);
     CHECK(b->hash == board_compute_hash(b), "incremental hash: %s", tps);
@@ -103,7 +108,7 @@ static void check_moves(Board *b) {
 
     memset(seen, 0, sizeof(seen));
     const Board before = *b;
-    const u64 winning  = b->ply >= 2 ? board_road_placements(b, b->stm) : 0;
+    const u64 winning  = b->ply >= 2 ? board_road_placements(b, board_stm(b)) : 0;
     u64 found          = 0;
 
     for (int i = 0; i < count; i++) {
@@ -119,8 +124,12 @@ static void check_moves(Board *b) {
         const Outcome fast = board_outcome_after(b, &undo);
         const Outcome slow = board_outcome(b);
         CHECK(fast == slow, "outcome %d vs %d after %s: %s", fast, slow, move_format(m, text), tps);
+        if (move_is_place(m)) {
+            CHECK(board_outcome_after_place(b, m) == slow, "outcome after placing %s: %s",
+                  move_format(m, text), tps);
+        }
         CHECK(b->hash == board_compute_hash(b), "hash after %s: %s", move_format(m, text), tps);
-        const Outcome win = before.stm == WHITE ? WHITE_ROAD : BLACK_ROAD;
+        const Outcome win = board_stm(&before) == WHITE ? WHITE_ROAD : BLACK_ROAD;
         if (move_is_place(m) && move_stone(m) != WALL && slow == win) {
             found |= 1ULL << move_square(m);
         }
@@ -129,7 +138,7 @@ static void check_moves(Board *b) {
               tps);
     }
 
-    if (b->ply >= 2 && (b->flats[b->stm] || b->capstones[b->stm])) {
+    if (b->ply >= 2 && (b->flats[board_stm(b)] || b->capstones[board_stm(b)])) {
         CHECK(found == winning, "road placements %llx vs %llx: %s", (unsigned long long)winning,
               (unsigned long long)found, tps);
     }
@@ -320,7 +329,7 @@ static void rules(void) {
         const int wall = 2 * 8 + 2;
         CHECK(!((board.walls >> wall) & 1), "wall is gone");
         CHECK((board.caps >> wall) & 1, "capstone is on top");
-        CHECK(board.height[wall] == 2, "wall stayed as a stone");
+        CHECK(board_height(&board, wall) == 2, "wall stayed as a stone");
         CHECK((board.stones[wall] >> 1) & 1, "and stayed black");
         CHECK(board.reversible == 0, "a flattening cannot be taken back");
         board_unmake(&board, move_parse("b3>"), &undo);
@@ -341,7 +350,7 @@ static void towers(void) {
     sprintf(p, ",x7/x8/x8/x8/x8/x8/x8/x8 2 60");
     Board board;
     CHECK(board_from_tps(&board, tps, 0), "tower: position");
-    CHECK(board.height[56] == 98, "tower: height %d", board.height[56]);
+    CHECK(board_height(&board, 56) == 98, "tower: height %d", board_height(&board, 56));
     check_consistent(&board);
     check_tps_round_trip(&board);
 

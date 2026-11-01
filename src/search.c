@@ -152,7 +152,7 @@ static inline bool answers_threat(Move m, u64 threats) {
  * replies that stop the road. */
 static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *moves) {
     Board *b     = &w->board;
-    const int us = b->stm;
+    const int us = board_stm(b);
 
     w->nodes++;
     if (ply > w->seldepth) {
@@ -181,18 +181,19 @@ static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *move
 
     const int count = movegen_all(b, moves);
     int best        = -SCORE_WIN + ply + 2; /* the road lands unless a reply stops it */
+    Undo undo;
+    board_save(b, &undo);
     for (int i = 0; i < count; i++) {
         const Move m = moves[i];
         if (!answers_threat(m, threats)) {
             continue;
         }
-        Undo undo;
-        board_make(b, m, &undo);
+        board_play(b, m, &undo);
         const Outcome outcome = board_outcome_after(b, &undo);
         int score;
         if (outcome != ONGOING) {
             score = outcome_score(outcome, us, ply + 1);
-        } else if (board_road_placements(b, b->stm)) {
+        } else if (board_road_placements(b, board_stm(b))) {
             /* Still lost to a road. */
             score = -SCORE_WIN + ply + 2;
         } else {
@@ -220,7 +221,7 @@ static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *move
 static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Move tt_move, int ply,
                         u64 threats) {
     const Board *b      = &w->board;
-    const int us        = b->stm;
+    const int us        = board_stm(b);
     const Move killer_a = w->killers[ply][0];
     const Move killer_b = w->killers[ply][1];
     const u64 near_mine = neighbours(board_road_stones(b, us));
@@ -269,7 +270,7 @@ static inline Move pick_next(Move *moves, i32 *scores, int from, int count) {
 
 static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *moves, i32 *scores) {
     Board *b           = &w->board;
-    const int us       = b->stm;
+    const int us       = board_stm(b);
     const bool pv_node = beta - alpha > 1;
     const bool root    = ply == 0;
 
@@ -301,7 +302,8 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
     }
 
     TTEntry entry;
-    const bool hit = tt_probe(b->hash, &entry);
+    const u64 key  = board_key(b);
+    const bool hit = tt_probe(key, &entry);
     Move tt_move   = hit ? entry.move : MOVE_NONE;
     if (hit && !pv_node && entry.depth >= depth) {
         const int score   = score_from_tt(entry.score, ply);
@@ -328,7 +330,7 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
             const int reduction = 3 + depth / 4;
             Undo undo;
             board_make_null(b, &undo);
-            w->keys[w->key_count++] = undo.hash;
+            w->keys[w->key_count++] = b->hash;
             const int score =
                 -search(w, -beta, -beta + 1, depth - 1 - reduction, ply + 1, moves, scores);
             w->key_count--;
@@ -352,6 +354,8 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
     int best_score           = -SCORE_WIN;
     Move best_move           = MOVE_NONE;
     int searched             = 0;
+    Undo undo;
+    board_save(b, &undo);
 
     for (int i = 0; i < count; i++) {
         const Move m = pick_next(moves, scores, i, count);
@@ -362,8 +366,7 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
             break;
         }
 
-        Undo undo;
-        board_make(b, m, &undo);
+        board_play(b, m, &undo);
         const Outcome outcome = board_outcome_after(b, &undo);
         searched++;
         w->pv_length[ply + 1] = 0;
@@ -436,8 +439,8 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
     const Bound bound = best_score >= beta            ? BOUND_LOWER
                         : best_score > original_alpha ? BOUND_EXACT
                                                       : BOUND_UPPER;
-    tt_store(b->hash, best_move != MOVE_NONE ? best_move : tt_move, score_to_tt(best_score, ply),
-             eval, depth, bound);
+    tt_store(key, best_move != MOVE_NONE ? best_move : tt_move, score_to_tt(best_score, ply), eval,
+             depth, bound);
     return best_score;
 }
 
@@ -472,9 +475,9 @@ static void set_time_budget(Worker *w, const SearchLimits *limits) {
     } else if (limits->clock) {
         /* Never staking more than half of what is left lets a low clock settle at the
          * increment, where spending it all flags on the first slow reply. */
-        const i64 left   = limits->time[w->board.stm] - MOVE_OVERHEAD_MS;
+        const i64 left   = limits->time[board_stm(&w->board)] - MOVE_OVERHEAD_MS;
         const i64 usable = left > 0 ? left : 0;
-        const i64 inc    = limits->inc[w->board.stm];
+        const i64 inc    = limits->inc[board_stm(&w->board)];
         w->soft_ms       = usable / 30 + inc * 3 / 4;
         w->hard_ms       = w->soft_ms * 3;
         if (w->hard_ms > usable / 2) {

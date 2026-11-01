@@ -56,7 +56,8 @@ python tools/perftdiff.py --games 400 --depth 3     # for a board rewrite
 ```
 
 Random games from takref, compared with the engine on the exact move list, the game result
-under four komi values, and perft. After a deliberate rule change only:
+under four komi values, and perft. It takes every core for about 48 minutes, so nothing can be
+timed alongside it. After a deliberate rule change only:
 
 ```sh
 python tools/perftdiff.py --seal tests/perft/sealed.perft
@@ -81,7 +82,16 @@ make speed
 ```
 
 Races perft against the binaries in `external/engines`, best of three, and prints the lead on
-each position. Takes about ten minutes, and needs the machine to itself.
+each position. Takes about fifteen minutes, and needs the machine to itself. syntaks and pentakle
+have no full count, so they only appear on bulk: E13 is how that was established.
+
+A rebuild alone moves these numbers by about 3%, because code layout changes, so do not read
+anything into a difference smaller than that. Bulk runs under 100 ms are noise: measure a
+change at one depth deeper.
+
+The full count must time real work. `board_touched()` in `perft.c` forces the position into
+memory between make and unmake at every leaf. Without it, a compiler that inlines both may delete
+nearly all of them, and report an empty loop as a record.
 
 ## SPRT
 
@@ -100,6 +110,11 @@ counting wins. The test is a GSPRT with bounds `[elo0, elo1]` and error rates `a
 Do not stop early because the number looks good, and do not read the Elo of a passed test as
 accurate: an SPRT measures which side of the bounds a change is on, and stopping at a bound
 biases the estimate upward.
+
+A change that is meant to be neutral, such as a new hash, is a non-regression test: say what it
+must not lose, with `--elo0 -20 --elo1 5`. At 2+0.02 that takes minutes, where tighter bounds
+take hours, because pairs in Tak are polarised. A failed test stands. Do not rerun it to get a
+pass; change the design, or drop it.
 
 Run nothing else during a match, and keep `--concurrency` below the core count: a starved
 engine flags, and the result is noise that looks like data. Stay at or above 2+0.02 on 8x8.

@@ -48,13 +48,10 @@ static int groups_score(const Board *b, int color) {
 /* Stones under a top stone can be carried away with it, as far as the carry limit. */
 static int stacks_score(const Board *b, int color) {
     int score  = 0;
-    u64 stacks = b->owned[color];
+    u64 stacks = b->owned[color] & b->tall;
     while (stacks) {
-        const int sq     = pop_lsb(&stacks);
-        const int height = b->height[sq];
-        if (height < 2) {
-            continue;
-        }
+        const int sq      = pop_lsb(&stacks);
+        const int height  = board_short_height(b, sq);
         const int under   = height - 1 < b->size - 1 ? height - 1 : b->size - 1;
         const u64 window  = (b->stones[sq] >> 1) & ((1ULL << under) - 1);
         const int blacks  = popcount(window);
@@ -83,7 +80,7 @@ int evaluate(const Board *b, u64 threats) {
 
     int score = side_score(b, WHITE, flat_value, inner) - side_score(b, BLACK, flat_value, inner);
     score -= b->halfkomi * flat_value / 2;
-    if (b->stm == BLACK) {
+    if (board_stm(b) == BLACK) {
         score = -score;
     }
 

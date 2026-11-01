@@ -8,25 +8,82 @@
 #include "movegen.h"
 #include "notation.h"
 
-static u64 perft_node(Board *b, int depth, PerftOptions options) {
-    if (options.bulk && depth == 1) {
-        return (u64)movegen_count(b);
+/* Far deeper than any tree that could finish. */
+#define PERFT_MAX_DEPTH 32
+
+/* As in search, each level's moves sit above the last on one arena. A worst-case list in
+ * every frame would mean a stack probe on Windows at every node, leaves included. This is
+ * address space: only what a tree reaches is touched. */
+static Move Arena[PERFT_MAX_DEPTH * MAX_MOVES];
+
+/* Nothing reads a leaf, so once make and unmake are inlined together a compiler may drop
+ * nearly all of both, and the full count would then time an empty loop. This forces the
+ * position to really exist in memory between them. */
+static inline void board_touched(const Board *b) { __asm__ volatile("" : : "r"(b) : "memory"); }
+
+/* Flattened, so that registers are saved once for a node rather than once for each call
+ * into the board at each of its moves. Placements come first in the list, so each kind gets
+ * a loop to itself, and neither pays for the registers of the other. */
+__attribute__((flatten)) static u64 perft_node(Board *b, int depth, PerftOptions options,
+                                               Move *list) {
+    const int count = movegen_all(b, list);
+    Undo undo;
+    board_save(b, &undo);
+    int i = 0;
+
+    if (depth == 1) {
+        for (; i < count && move_is_place(list[i]); i++) {
+            board_play_place(b, list[i]);
+            board_touched(b);
+            board_unmake_place(b, list[i], &undo);
+        }
+        for (; i < count && board_is_step(b, list[i]); i++) {
+            board_play_step(b, list[i]);
+            board_touched(b);
+            board_unmake_step(b, list[i], &undo);
+        }
+        for (; i < count; i++) {
+            board_play_spread(b, list[i], &undo);
+            board_touched(b);
+            board_unmake_spread(b, list[i], &undo);
+        }
+        return (u64)count;
     }
 
-    Move list[MAX_MOVES];
-    const int count = movegen_all(b, list);
-    u64 nodes       = 0;
-    for (int i = 0; i < count; i++) {
-        Undo undo;
-        board_make(b, list[i], &undo);
-        if (depth == 1) {
-            nodes++;
-        } else if (board_outcome_after(b, &undo) != ONGOING) {
+    const bool last_level = options.bulk && depth == 2;
+    u64 nodes             = 0;
+    for (; i < count && move_is_place(list[i]); i++) {
+        board_play_place(b, list[i]);
+        if (board_outcome_after_place(b, list[i]) != ONGOING) {
             nodes += options.ended_is_leaf;
+        } else if (last_level) {
+            nodes += (u64)movegen_count(b);
         } else {
-            nodes += perft_node(b, depth - 1, options);
+            nodes += perft_node(b, depth - 1, options, list + count);
         }
-        board_unmake(b, list[i], &undo);
+        board_unmake_place(b, list[i], &undo);
+    }
+    for (; i < count && board_is_step(b, list[i]); i++) {
+        board_play_step(b, list[i]);
+        if (board_outcome_after(b, &undo) != ONGOING) {
+            nodes += options.ended_is_leaf;
+        } else if (last_level) {
+            nodes += (u64)movegen_count(b);
+        } else {
+            nodes += perft_node(b, depth - 1, options, list + count);
+        }
+        board_unmake_step(b, list[i], &undo);
+    }
+    for (; i < count; i++) {
+        board_play_spread(b, list[i], &undo);
+        if (board_outcome_after(b, &undo) != ONGOING) {
+            nodes += options.ended_is_leaf;
+        } else if (last_level) {
+            nodes += (u64)movegen_count(b);
+        } else {
+            nodes += perft_node(b, depth - 1, options, list + count);
+        }
+        board_unmake_spread(b, list[i], &undo);
     }
     return nodes;
 }
@@ -38,7 +95,10 @@ u64 perft(Board *b, int depth, PerftOptions options) {
     if (board_outcome(b) != ONGOING) {
         return options.ended_is_leaf;
     }
-    return perft_node(b, depth, options);
+    if (options.bulk && depth == 1) {
+        return (u64)movegen_count(b);
+    }
+    return perft_node(b, depth, options, Arena);
 }
 
 void perft_divide(Board *b, int depth) {

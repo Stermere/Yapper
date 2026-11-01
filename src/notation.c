@@ -183,7 +183,6 @@ bool board_from_tps(Board *b, const char *tps, int halfkomi) {
         move < 1) {
         return false;
     }
-    b->stm = player - 1;
     b->ply = (move - 1) * 2 + (player - 1);
     board_refresh(b);
     return true;
@@ -197,7 +196,7 @@ void board_to_tps(const Board *b, char *out, size_t cap) {
         bool first = true;
         for (int file = 0; file < b->size && p < end; file++) {
             const int sq     = rank * 8 + file;
-            const int height = b->height[sq];
+            const int height = board_height(b, sq);
             if (height == 0) {
                 run++;
                 continue;
@@ -215,8 +214,7 @@ void board_to_tps(const Board *b, char *out, size_t cap) {
             }
             first = false;
             for (int i = height - 1; i >= 0 && p < end; i--) {
-                const u64 word = i >= 64 ? b->deep[sq] : b->stones[sq];
-                *p++           = (char)('1' + ((word >> (i & 63)) & 1));
+                *p++ = (char)('1' + board_stone(b, sq, i));
             }
             const StoneType top = board_top(b, sq);
             if (top != FLAT) {
@@ -233,7 +231,7 @@ void board_to_tps(const Board *b, char *out, size_t cap) {
             *p++ = '/';
         }
     }
-    sprintf(p, " %d %d", b->stm + 1, b->ply / 2 + 1);
+    sprintf(p, " %d %d", board_stm(b) + 1, b->ply / 2 + 1);
 }
 
 bool position_parse(Board *b, const char *text, int size, int halfkomi, u64 *hashes, int hashes_cap,

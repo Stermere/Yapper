@@ -76,6 +76,10 @@ than a bug: it makes every later result untrustworthy.
     else, racetrack's `Termination` included. Its list is `formats` in
     `src/Game/PTN/Tag.js`.
 
+11. **The full perft count must make and unmake every leaf for real.** `board_touched()` keeps
+    a compiler from deleting them as dead code. Without it a build once reported 517 Mnps for
+    an empty loop.
+
 ## Testing discipline
 
 Read [docs/TESTING.md](docs/TESTING.md). Record every result in

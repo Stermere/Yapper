@@ -12,9 +12,15 @@ static const u8 StartReserves[MAX_SIZE + 1][2] = {
     [3] = {10, 0}, [4] = {15, 0}, [5] = {21, 1}, [6] = {30, 1}, [7] = {40, 2}, [8] = {50, 2},
 };
 
-static u64 SquareKeys[SQUARE_COUNT][3];
-static u64 HeightKeys[MAX_STONES + 1];
-static u64 EmptyKeys[SQUARE_COUNT];
+/* The hash is the sum over the squares of each stack's word times the key of its square,
+ * plus a key per wall or capstone. Moving stones then costs one multiply for each square
+ * touched, however many stones it moves, and no table has to span every height. A sum
+ * says little in its low bits, so a reader that needs those has to mix it first. */
+static u64 StackKeys[SQUARE_COUNT];
+static u64 TowerKeys[SQUARE_COUNT];
+static u64 TypeKeys[SQUARE_COUNT][3]; /* zero for a flat */
+/* An empty square turning into a lone stone, by square, type and colour. */
+static u64 PlaceKeys[SQUARE_COUNT][3][2];
 static u64 SideKey;
 
 /* Fixed seed. Keys taken from any entropy source would make bench unrepeatable. */
@@ -25,44 +31,20 @@ static u64 splitmix64(u64 *state) {
     return z ^ (z >> 31);
 }
 
-/* A square's contribution is a function of its whole stack, not a sum over its stones, so
- * a spread costs per square touched however many stones it moves, and no table has to
- * span every height a stack can reach. */
-static inline u64 key_start(int sq, StoneType top, u64 stones) {
-    const u64 x = (stones ^ SquareKeys[sq][top]) * 0x9E3779B97F4A7C15ULL;
-    return x ^ (x >> 32);
-}
-
-static inline u64 key_finish(u64 x, int height) {
-    x = (x ^ HeightKeys[height]) * 0xD6E8FEB86659FD93ULL;
-    return x ^ (x >> 32);
-}
-
-static inline u64 square_key(int sq, StoneType top, u64 stones, int height) {
-    return key_finish(key_start(sq, top, stones), height);
-}
-
-static inline u64 square_key_of(const Board *b, int sq, StoneType top) {
-    const int height = b->height[sq];
-    u64 x            = key_start(sq, top, b->stones[sq]);
-    if (unlikely(height > 64)) {
-        x ^= b->deep[sq] * 0xFF51AFD7ED558CCDULL;
-    }
-    return key_finish(x, height);
-}
-
 void board_init(void) {
     u64 state = 0x59415050455221ULL; /* "YAPPER!" */
     for (int sq = 0; sq < SQUARE_COUNT; sq++) {
+        StackKeys[sq]      = splitmix64(&state);
+        TowerKeys[sq]      = splitmix64(&state);
+        TypeKeys[sq][FLAT] = 0;
+        TypeKeys[sq][WALL] = splitmix64(&state);
+        TypeKeys[sq][CAP]  = splitmix64(&state);
         for (int top = 0; top < 3; top++) {
-            SquareKeys[sq][top] = splitmix64(&state);
+            for (int color = 0; color < 2; color++) {
+                /* From a word of 1 to a word of 2 or 3. */
+                PlaceKeys[sq][top][color] = StackKeys[sq] * (u64)(1 + color) + TypeKeys[sq][top];
+            }
         }
-    }
-    for (int h = 0; h <= MAX_STONES; h++) {
-        HeightKeys[h] = splitmix64(&state);
-    }
-    for (int sq = 0; sq < SQUARE_COUNT; sq++) {
-        EmptyKeys[sq] = square_key(sq, FLAT, 0, 0);
     }
     SideKey = splitmix64(&state);
 }
@@ -70,19 +52,28 @@ void board_init(void) {
 int board_start_flats(int size) { return StartReserves[size][0]; }
 int board_start_capstones(int size) { return StartReserves[size][1]; }
 
+static inline u64 stack_key(const Board *b, int sq) {
+    return StackKeys[sq] * b->stones[sq] + TowerKeys[sq] * b->deep[sq];
+}
+
 u64 board_compute_hash(const Board *b) {
-    u64 hash    = b->stm == BLACK ? SideKey : 0;
+    u64 hash    = 0;
     u64 squares = b->mask;
     while (squares) {
         const int sq = pop_lsb(&squares);
-        hash ^= square_key_of(b, sq, board_top(b, sq));
+        hash += stack_key(b, sq) + TypeKeys[sq][board_top(b, sq)];
     }
     return hash;
 }
 
+u64 board_key(const Board *b) { return b->hash + (SideKey & -(u64)board_stm(b)); }
+
 void board_clear(Board *b, int size, int halfkomi) {
     assert(size >= MIN_SIZE && size <= MAX_SIZE);
     memset(b, 0, sizeof(*b));
+    for (int sq = 0; sq < SQUARE_COUNT; sq++) {
+        b->stones[sq] = 1;
+    }
     b->size        = size;
     b->halfkomi    = halfkomi;
     const u64 rank = size == 8 ? RANK_1 : (1ULL << size) - 1;
@@ -92,22 +83,70 @@ void board_clear(Board *b, int size, int halfkomi) {
     }
     b->file_last = FILE_A << (size - 1);
     b->rank_last = RANK_1 << ((size - 1) * 8);
+    /* Bit 7 of every rank below the last, and every file below the last: see
+     * road_conceivable(). */
+    b->rank_links = 0x8080808080808080ULL & ((1ULL << ((size - 1) * 8)) - 1);
+    b->file_links = (1ULL << (size - 1)) - 1;
     for (int color = 0; color < 2; color++) {
         b->flats[color]     = StartReserves[size][0];
         b->capstones[color] = StartReserves[size][1];
     }
+    memcpy(b->stack_keys, StackKeys, sizeof(StackKeys));
     b->hash = board_compute_hash(b);
 }
 
-void board_set_stack(Board *b, int sq, const u8 *colors, int height, StoneType top) {
-    u64 stones = 0, deep = 0;
-    for (int i = 0; i < height; i++) {
-        deep   = deep << 1 | stones >> 63;
-        stones = stones << 1 | colors[i];
+#define TOWER_FLAG (1ULL << 63)
+
+/* A stack as one 128-bit shift register, which is what `stones` and `deep` are unless the
+ * stones run past the first word. */
+typedef struct {
+    u64 high;
+    u64 low;
+} Tower;
+
+static inline Tower tower_load(const Board *b, int sq) {
+    const u64 stones = b->stones[sq];
+    const u64 deep   = b->deep[sq];
+    if (deep == 0) {
+        return (Tower){0, stones};
     }
-    b->stones[sq] = stones;
-    b->deep[sq]   = deep;
-    b->height[sq] = (u8)height;
+    return (Tower){deep >> 1, (stones & ~TOWER_FLAG) | deep << 63};
+}
+
+static inline void tower_store(Board *b, int sq, Tower t) {
+    b->stones[sq] = t.high ? t.low | TOWER_FLAG : t.low;
+    b->deep[sq]   = t.high ? t.high << 1 | t.low >> 63 : 0;
+}
+
+/* k and d are at most 8, so every shift below is in range. */
+static void tower_push(Board *b, int sq, u64 chunk, int d) {
+    Tower t = tower_load(b, sq);
+    t.high  = t.high << d | t.low >> (64 - d);
+    t.low   = t.low << d | chunk;
+    tower_store(b, sq, t);
+}
+
+static u64 tower_pop(Board *b, int sq, int k) {
+    Tower t         = tower_load(b, sq);
+    const u64 taken = t.low & ((1ULL << k) - 1);
+    t.low           = t.low >> k | t.high << (64 - k);
+    t.high >>= k;
+    tower_store(b, sq, t);
+    return taken;
+}
+
+static bool has_towers(const Board *b) {
+    u64 words = 0;
+    for (int sq = 0; sq < SQUARE_COUNT; sq++) {
+        words |= b->stones[sq];
+    }
+    return (words >> TOWER_BITS) != 0;
+}
+
+void board_set_stack(Board *b, int sq, const u8 *colors, int height, StoneType top) {
+    for (int i = 0; i < height; i++) {
+        tower_push(b, sq, colors[i], 1);
+    }
     b->walls |= (u64)(top == WALL) << sq;
     b->caps |= (u64)(top == CAP) << sq;
 }
@@ -115,16 +154,21 @@ void board_set_stack(Board *b, int sq, const u8 *colors, int height, StoneType t
 void board_refresh(Board *b) {
     int stones[2] = {0, 0}, capstones[2] = {0, 0};
     b->owned[WHITE] = b->owned[BLACK] = 0;
+    b->tall                           = 0;
+    b->towers                         = has_towers(b);
     u64 squares                       = b->mask;
     while (squares) {
         const int sq     = pop_lsb(&squares);
-        const int height = b->height[sq];
+        const int height = board_height(b, sq);
         if (height == 0) {
             continue;
         }
         const int top = (int)(b->stones[sq] & 1);
         b->owned[top] |= 1ULL << sq;
-        const int blacks = popcount(b->stones[sq]) + popcount(b->deep[sq]);
+        b->tall |= (u64)(height > 1) << sq;
+        /* Less the 1 marking the height, in each word in use. */
+        const int blacks =
+            popcount(b->stones[sq]) - 1 + (b->deep[sq] ? popcount(b->deep[sq]) - 1 : 0);
         stones[BLACK] += blacks;
         stones[WHITE] += height - blacks;
         capstones[top] += (b->caps >> sq) & 1;
@@ -138,167 +182,271 @@ void board_refresh(Board *b) {
     b->hash = board_compute_hash(b);
 }
 
-/* k and d are at most 8, so every shift below is in range. */
-static inline void stack_push(Board *b, int sq, u64 chunk, int d) {
-    const int height = b->height[sq];
-    if (unlikely(height + d > 64)) {
-        b->deep[sq] = b->deep[sq] << d | b->stones[sq] >> (64 - d);
-    }
-    b->stones[sq] = b->stones[sq] << d | chunk;
-    b->height[sq] = (u8)(height + d);
-}
-
-static inline u64 stack_pop(Board *b, int sq, int k) {
-    const u64 taken = b->stones[sq] & ((1ULL << k) - 1);
-    b->stones[sq] >>= k;
-    if (unlikely(b->height[sq] > 64)) {
-        b->stones[sq] |= b->deep[sq] << (64 - k);
-        b->deep[sq] >>= k;
-    }
-    b->height[sq] = (u8)(b->height[sq] - k);
-    return taken;
-}
-
 static inline void make_place(Board *b, Move m) {
     const int sq         = move_square(m);
     const StoneType type = move_stone(m);
     /* Each player's first stone is the opponent's. */
-    const int color = b->stm ^ (b->ply < 2);
+    const int color = board_stm(b) ^ (b->ply < 2);
     if (type == CAP) {
         b->capstones[color]--;
     } else {
         b->flats[color]--;
     }
-    b->stones[sq] = (u64)color;
-    b->height[sq] = 1;
+    b->stones[sq] = 2 | (u64)color;
     b->owned[color] |= 1ULL << sq;
-    b->walls |= (u64)(type == WALL) << sq;
-    b->caps |= (u64)(type == CAP) << sq;
-    b->hash ^= EmptyKeys[sq] ^ square_key(sq, type, (u64)color, 1);
+    if (type != FLAT) {
+        b->walls |= (u64)(type == WALL) << sq;
+        b->caps |= (u64)(type == CAP) << sq;
+    }
+    b->hash += PlaceKeys[sq][type][color];
     b->reversible = 0;
 }
 
-static inline void make_spread(Board *b, Move m) {
-    const int src         = move_square(m);
-    const int step        = DirectionStep[move_direction(m)];
-    int pattern           = move_pattern(m);
-    int left              = move_carry(m);
-    const u64 srcbit      = 1ULL << src;
-    const StoneType moved = board_top(b, src);
-    u64 hash              = b->hash;
+static inline void state_copy(PositionState *restrict to, const PositionState *restrict from) {
+    const StateHalf *restrict in = (const StateHalf *)from;
+    StateHalf *restrict out      = (StateHalf *)to;
+    out[0]                       = in[0];
+    out[1]                       = in[1];
+}
 
-    hash ^= square_key_of(b, src, moved);
-    u64 carried = stack_pop(b, src, left);
-    hash ^= square_key_of(b, src, FLAT);
+/* Written once and built twice. A tower needs calls in the middle of the loop, and those
+ * are what would have every other spread saving registers, so the common build never makes
+ * one and the board tells it in advance when it would have to. Returns what unmake needs.
+ * It takes no Undo, and neither does its counterpart: an Undo whose address never escapes
+ * can live in registers across a whole loop over the moves of a node. */
+static inline __attribute__((always_inline)) u64 spread(Board *b, Move m, bool towers) {
+    const int src  = move_square(m);
+    const int step = DirectionStep[move_direction(m)];
+    int pattern    = move_pattern(m);
+    int left       = move_carry(m);
+    u64 hash       = b->hash;
 
-    b->walls &= ~srcbit;
-    b->caps &= ~srcbit;
-    b->owned[WHITE] &= ~srcbit;
-    b->owned[BLACK] &= ~srcbit;
-    b->owned[b->stones[src] & 1] |= (u64)(b->height[src] != 0) << src;
+    const u64 stones = b->stones[src];
+    /* Only the low `left` bits of this are ever read below, so the fast build has no need
+     * to mask off the stones that stay. */
+    u64 carried = stones, rest;
+    if (towers) {
+        hash -= stack_key(b, src);
+        carried = tower_pop(b, src, left);
+        rest    = b->stones[src];
+        hash += stack_key(b, src);
+    } else {
+        rest           = stones >> left;
+        b->stones[src] = rest;
+        hash += (rest - stones) * b->stack_keys[src];
+    }
 
-    int sq  = src;
-    u64 bit = 0;
+    /* Which side's squares change is as random as the stones, so the owners are worked out
+     * in registers and written once. */
+    const u64 srcbit = 1ULL << src;
+    const u64 stays  = rest > 1 ? srcbit : 0;
+    u64 black        = (rest & 1 ? srcbit : 0) & stays;
+    u64 tall         = rest > 3 ? srcbit : 0;
+    u64 landed       = 0;
+    u64 highest      = 0;
+
+    int sq = src;
     do {
         const int d = __builtin_ctz(pattern) + 1;
         pattern >>= d;
         sq += step;
         left -= d;
-        bit = 1ULL << sq;
 
         /* The bottom of the carried group lands first. */
-        const u64 chunk = carried >> left;
-        carried &= (1ULL << left) - 1;
+        const u64 chunk = (carried >> left) & ((1ULL << d) - 1);
+        const u64 under = b->stones[sq];
+        u64 grown;
+        if (towers) {
+            hash -= stack_key(b, sq);
+            tower_push(b, sq, chunk, d);
+            hash += stack_key(b, sq);
+            grown = b->stones[sq];
+        } else {
+            grown         = under << d | chunk;
+            b->stones[sq] = grown;
+            hash += (grown - under) * b->stack_keys[sq];
+        }
 
-        hash ^= square_key_of(b, sq, (b->walls >> sq) & 1 ? WALL : FLAT);
-        stack_push(b, sq, chunk, d);
-        hash ^= square_key_of(b, sq, pattern ? FLAT : moved);
-
-        const int top = (int)(chunk & 1);
-        b->owned[top] |= bit;
-        b->owned[!top] &= ~bit;
+        const u64 bit = 1ULL << sq;
+        landed |= bit;
+        black |= (grown & 1) << sq;
+        tall |= grown > 3 ? bit : 0;
+        highest |= grown;
     } while (pattern);
 
-    /* The generator only reaches a wall with a lone capstone, so this is the flattening
-     * and nothing else. */
-    b->reversible = (b->walls & bit) ? 0 : b->reversible + 1;
-    b->walls &= ~bit;
-    b->walls |= (u64)(moved == WALL) << sq;
-    b->caps |= (u64)(moved == CAP) << sq;
+    const u64 touched = landed | srcbit;
+    b->owned[WHITE]   = (b->owned[WHITE] & ~touched) | ((landed | stays) & ~black);
+    b->owned[BLACK]   = (b->owned[BLACK] & ~touched) | black;
+    b->tall           = (b->tall & ~touched) | tall;
+    b->reversible++;
+
+    /* A flat on top changes neither set below, and can land on nothing that would. */
+    const u64 walls = b->walls;
+    const u64 caps  = b->caps;
+    if (unlikely(((walls | caps) & srcbit) != 0)) {
+        const u64 dest        = 1ULL << sq;
+        const u64 is_wall     = (walls >> src) & 1;
+        const u64 is_cap      = (caps >> src) & 1;
+        const StoneType moved = is_wall ? WALL : CAP;
+        hash += TypeKeys[sq][moved] - TypeKeys[src][moved];
+        /* The generator only reaches a wall with a lone capstone, so this is the flattening
+         * and nothing else. */
+        if (walls & dest) {
+            hash -= TypeKeys[sq][WALL];
+            b->reversible = 0;
+        }
+        b->walls = (walls & ~(srcbit | dest)) | is_wall << sq;
+        b->caps  = (caps & ~srcbit) | is_cap << sq;
+    }
     b->hash = hash;
+
+    if (towers) {
+        b->towers = has_towers(b);
+        return carried;
+    }
+    if (unlikely(highest >> TOWER_BITS)) {
+        b->towers = 1;
+    }
+    return stones;
+}
+
+static __attribute__((noinline)) u64 make_tower_spread(Board *b, Move m) {
+    return spread(b, m, true);
+}
+
+static inline void make_spread(Board *b, Move m, Undo *u) {
+    u->lifted = unlikely(b->towers) ? make_tower_spread(b, m) : spread(b, m, false);
+}
+
+void board_save(const Board *b, Undo *u) { state_copy(&u->state, &b->state); }
+
+void board_play_place(Board *b, Move m) {
+    make_place(b, m);
+    b->ply++;
+}
+
+void board_play_spread(Board *b, Move m, Undo *u) {
+    make_spread(b, m, u);
+    b->ply++;
+}
+
+void board_play_step(Board *b, Move m) {
+    const int src   = move_square(m);
+    const int sq    = src + DirectionStep[move_direction(m)];
+    const int us    = board_stm(b);
+    const u64 from  = 1ULL << src;
+    const u64 to    = 1ULL << sq;
+    const u64 under = b->stones[sq];
+    const u64 grown = under << 1 | (u64)us;
+    b->stones[src]  = 1;
+    b->stones[sq]   = grown;
+    b->hash += (grown - under) * b->stack_keys[sq] - (u64)(us + 1) * b->stack_keys[src];
+    b->owned[us] = (b->owned[us] ^ from) | to;
+    b->owned[us ^ 1] &= ~to;
+    b->tall |= (u64)(under > 1) << sq;
+    /* A wall can only land where a flat would, so nothing is ever flattened here. */
+    if (unlikely(b->walls & from)) {
+        b->hash += TypeKeys[sq][WALL] - TypeKeys[src][WALL];
+        b->walls ^= from | to;
+    }
+    if (unlikely(grown >> TOWER_BITS)) {
+        b->towers = 1;
+    }
+    b->reversible++;
+    b->ply++;
+}
+
+void board_play(Board *b, Move m, Undo *u) {
+    if (move_is_place(m)) {
+        board_play_place(b, m);
+    } else if (board_is_step(b, m)) {
+        board_play_step(b, m);
+    } else {
+        board_play_spread(b, m, u);
+    }
 }
 
 void board_make(Board *b, Move m, Undo *u) {
-    u->owned[WHITE] = b->owned[WHITE];
-    u->owned[BLACK] = b->owned[BLACK];
-    u->walls        = b->walls;
-    u->caps         = b->caps;
-    u->hash         = b->hash;
-    u->reversible   = b->reversible;
+    board_save(b, u);
+    board_play(b, m, u);
+}
 
-    if (move_is_place(m)) {
-        make_place(b, m);
+static inline __attribute__((always_inline)) void undo_spread(Board *b, Move m, u64 lifted,
+                                                              bool towers) {
+    const int src  = move_square(m);
+    const int step = DirectionStep[move_direction(m)];
+    int pattern    = move_pattern(m);
+    int sq         = src;
+    do {
+        const int d = __builtin_ctz(pattern) + 1;
+        pattern >>= d;
+        sq += step;
+        if (towers) {
+            tower_pop(b, sq, d);
+        } else {
+            b->stones[sq] >>= d;
+        }
+    } while (pattern);
+
+    if (towers) {
+        tower_push(b, src, lifted, move_carry(m));
     } else {
-        make_spread(b, m);
+        b->stones[src] = lifted;
     }
-    b->ply++;
-    b->stm ^= 1;
-    b->hash ^= SideKey;
+}
+
+static __attribute__((noinline)) void unmake_tower_spread(Board *b, Move m, u64 lifted) {
+    undo_spread(b, m, lifted, true);
+}
+
+static inline void unmake_spread(Board *b, Move m, const Undo *u) {
+    /* Whether the move made a tower does not matter: it pops what it pushed. */
+    if (unlikely(u->towers)) {
+        unmake_tower_spread(b, m, u->lifted);
+    } else {
+        undo_spread(b, m, u->lifted, false);
+    }
+}
+
+void board_unmake_place(Board *b, Move m, const Undo *u) {
+    b->stones[move_square(m)] = 1;
+    state_copy(&b->state, &u->state);
+}
+
+void board_unmake_spread(Board *b, Move m, const Undo *u) {
+    unmake_spread(b, m, u);
+    state_copy(&b->state, &u->state);
+}
+
+void board_unmake_step(Board *b, Move m, const Undo *u) {
+    const int src = move_square(m);
+    const int sq  = src + DirectionStep[move_direction(m)];
+    b->stones[sq] >>= 1;
+    b->stones[src] = 2 | (u64)(u->ply & 1);
+    state_copy(&b->state, &u->state);
 }
 
 void board_unmake(Board *b, Move m, const Undo *u) {
-    b->ply--;
-    b->stm ^= 1;
-
+    const int src = move_square(m);
     if (move_is_place(m)) {
-        const int sq    = move_square(m);
-        const int color = b->stm ^ (b->ply < 2);
-        if (move_stone(m) == CAP) {
-            b->capstones[color]++;
-        } else {
-            b->flats[color]++;
-        }
-        b->stones[sq] = 0;
-        b->height[sq] = 0;
+        board_unmake_place(b, m, u);
+    } else if (move_pattern(m) == 1 && b->stones[src] == 1 && !u->towers &&
+               !((u->caps >> src) & 1)) {
+        /* board_is_step(), asked of the position as it was. */
+        board_unmake_step(b, m, u);
     } else {
-        const int src   = move_square(m);
-        const int step  = DirectionStep[move_direction(m)];
-        int pattern     = move_pattern(m);
-        const int carry = move_carry(m);
-        int left        = carry;
-        int sq          = src;
-        u64 carried     = 0;
-        do {
-            const int d = __builtin_ctz(pattern) + 1;
-            pattern >>= d;
-            sq += step;
-            left -= d;
-            carried |= stack_pop(b, sq, d) << left;
-        } while (pattern);
-        stack_push(b, src, carried, carry);
+        board_unmake_spread(b, m, u);
     }
-
-    b->owned[WHITE] = u->owned[WHITE];
-    b->owned[BLACK] = u->owned[BLACK];
-    b->walls        = u->walls;
-    b->caps         = u->caps;
-    b->hash         = u->hash;
-    b->reversible   = u->reversible;
 }
 
 void board_make_null(Board *b, Undo *u) {
-    u->hash       = b->hash;
     u->reversible = b->reversible;
     b->ply++;
-    b->stm ^= 1;
-    b->hash ^= SideKey;
     b->reversible = 0;
 }
 
 void board_unmake_null(Board *b, const Undo *u) {
     b->ply--;
-    b->stm ^= 1;
-    b->hash       = u->hash;
     b->reversible = u->reversible;
 }
 
@@ -307,8 +455,26 @@ static inline bool group_spans(const Board *b, u64 group) {
            ((group & RANK_1) && (group & b->rank_last));
 }
 
-/* Is any square of `seeds` part of a road through `area`? */
-static inline bool road_through(const Board *b, u64 area, u64 seeds) {
+/* A road has to cross from every rank to the next, or from every file to the next, along
+ * a pair of adjacent stones. Testing that is a handful of operations and no branches, and
+ * it rules out most positions long before a flood could. */
+static inline bool road_conceivable(const Board *b, u64 area) {
+    const u64 low = 0x7F7F7F7F7F7F7F7FULL;
+    /* Bit 7 of a byte ends up set if any bit of that byte is. */
+    const u64 north = area & area >> 8;
+    const u64 ranks = ((north & low) + low) | north;
+
+    u64 east = area & area >> 1 & ~FILE_H;
+    east |= east >> 32;
+    east |= east >> 16;
+    east |= east >> 8;
+
+    return ((ranks & b->rank_links) == b->rank_links) | ((east & b->file_links) == b->file_links);
+}
+
+/* Out of line: almost no position gets this far, and the rest should not pay for its
+ * registers. */
+static __attribute__((noinline)) bool road_flood(const Board *b, u64 area, u64 seeds) {
     while (seeds) {
         const u64 group = flood(seeds & -seeds, area);
         if (group_spans(b, group)) {
@@ -317,6 +483,11 @@ static inline bool road_through(const Board *b, u64 area, u64 seeds) {
         seeds &= ~group;
     }
     return false;
+}
+
+/* Is any square of `seeds` part of a road through `area`? */
+static inline bool road_through(const Board *b, u64 area, u64 seeds) {
+    return seeds && road_conceivable(b, area) && road_flood(b, area, seeds);
 }
 
 static inline Outcome flat_outcome(const Board *b) {
@@ -337,7 +508,7 @@ Outcome board_outcome_after(const Board *b, const Undo *u) {
 
     /* A move can complete both roads at once. The mover wins that, and stm is already the
      * other player here, so the mover's road is the one that must be asked about first. */
-    const int mover = !b->stm;
+    const int mover = !board_stm(b);
     if (road_through(b, mover == WHITE ? white : black,
                      mover == WHITE ? fresh_white : fresh_black)) {
         return mover == WHITE ? WHITE_ROAD : BLACK_ROAD;
@@ -349,10 +520,22 @@ Outcome board_outcome_after(const Board *b, const Undo *u) {
     return flat_outcome(b);
 }
 
+Outcome board_outcome_after_place(const Board *b, Move m) {
+    /* In the first two plies the stone is the other player's, and then `seed` is empty. No
+     * road is two stones long, so that is the right answer for those too. */
+    const int mover = !board_stm(b);
+    const u64 mine  = board_road_stones(b, mover);
+    const u64 seed  = mine & 1ULL << move_square(m);
+    if (seed && road_conceivable(b, mine) && road_flood(b, mine, seed)) {
+        return mover == WHITE ? WHITE_ROAD : BLACK_ROAD;
+    }
+    return flat_outcome(b);
+}
+
 Outcome board_outcome(const Board *b) {
     const u64 white  = board_road_stones(b, WHITE);
     const u64 black  = board_road_stones(b, BLACK);
-    const int mover  = !b->stm;
+    const int mover  = !board_stm(b);
     const u64 mine   = mover == WHITE ? white : black;
     const u64 theirs = mover == WHITE ? black : white;
     const u64 edges  = (FILE_A | RANK_1) & b->mask;

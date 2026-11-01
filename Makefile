@@ -18,18 +18,20 @@
 #  Do not break: `make EXE=<name>` must produce exactly <name> (or <name>.exe)
 #  beside this Makefile, and `CC=` must be honoured.
 #
-#  Sources are compiled in a single invocation with LTO. A full rebuild is
-#  about a second, which keeps this file free of dependency tracking.
+#  Sources are compiled as one translation unit, because every hot call crosses
+#  files, and LTO would need a linker plugin that not every clang install has.
+#  A full rebuild is seconds, which keeps this file free of dependency tracking.
 # ============================================================================
 
 EXE  ?= yapper
 ARCH ?= native
-CC   ?= gcc
 
-# `make` predefines CC as `cc`, which `?=` leaves alone. MSYS2 has no such
-# binary on PATH from PowerShell, and gcc is what every platform here has.
+# `make` predefines CC as `cc`, which `?=` leaves alone, and MSYS2 has no such
+# binary on PATH from PowerShell. clang keeps a node's state in registers across
+# its moves where gcc reloads it, so it is used if it is there; gcc is what
+# every platform here has. Either gives the same bench.
 ifeq ($(origin CC),default)
-CC := gcc
+CC := $(shell command -v clang >/dev/null 2>&1 && echo clang || echo gcc)
 endif
 
 SRC := $(wildcard src/*.c) $(wildcard src/test/*.c)
@@ -37,7 +39,7 @@ HDR := $(wildcard src/*.h) $(wildcard src/test/*.h)
 
 CFLAGS_WARN := -std=c17 -Wall -Wextra -Wshadow -Wcast-qual -Wstrict-prototypes \
                -Wmissing-prototypes -Wpointer-arith -Wwrite-strings
-CFLAGS_OPT  := -O3 -flto -funroll-loops -fno-math-errno -fomit-frame-pointer -DNDEBUG
+CFLAGS_OPT  := -O3 -fno-math-errno -fomit-frame-pointer -DNDEBUG
 LDLIBS      := -lm
 
 ifeq ($(OS),Windows_NT)
@@ -57,6 +59,12 @@ else ifeq ($(ARCH),generic)
 else
     $(error Unknown ARCH '$(ARCH)': use native, popcnt or generic)
 endif
+
+# Two gcc passes that cost the spread loop more than they gain, and that clang
+# does not know, so they are asked about rather than assumed.
+GCC_ONLY := -fno-version-loops-for-strides -fno-tree-slp-vectorize
+CFLAGS_OPT += $(shell $(CC) -Werror $(GCC_ONLY) -E -x c /dev/null -o /dev/null 2>/dev/null \
+                     && echo $(GCC_ONLY))
 
 BIN := $(EXE)$(BIN_EXT)
 
@@ -84,7 +92,8 @@ all: $(BIN)
 debug: $(BIN)
 
 $(BIN): $(SRC) $(HDR) .buildflags
-	$(CC) $(CFLAGS) -Isrc $(SRC) -o $@ $(LDFLAGS) $(LDLIBS)
+	printf '#include "%s"\n' $(SRC:src/%=%) | \
+		$(CC) $(CFLAGS) -Isrc -x c - -o $@ $(LDFLAGS) $(LDLIBS)
 
 bench: $(BIN)
 	./$(BIN) bench
