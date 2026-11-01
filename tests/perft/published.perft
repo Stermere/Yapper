@@ -1,0 +1,15 @@
+# Counts published by other engine projects, independent of this codebase: the
+# transcription below is the only part of this file written here. Facts about the game,
+# not ideas. Each line names the convention its project counts by.
+# <size> | <convention> | <position> | <perft 0> <perft 1> ...
+
+5 | none | startpos | 1 25 600 43320 2999784
+6 | none | startpos | 1 36 1260 132720 13586048 1253506520
+6 | none | tps 2,2,21S,2,2,2/2,x,222221,2,2,x/1,1,2221C,x,111112C,2S/x,1,2S,x2,121211212/1,1,1212S,1S,2,1S/x2,2,1,21,1 1 42 | 1 140 21402 2774593 395359484 48986506534
+5 | none | startpos moves d3 c3 c4 1d3< 1c4- Sc4 | 1 87 6155 461800
+5 | none | startpos moves c2 c3 d3 b3 c4 1c2+ 1d3< 1b3> 1c4- Cc2 a1 1c2+ a2 | 1 104 7743 592645
+5 | none | startpos moves c4 c2 d2 c3 b2 d3 1d2+ b3 d2 b4 1c2+ 1b3> 2d3< 1c4- d4 5c3<23 c2 c4 1d4< d3 1d2+ 1c3+ Cc3 2c4> 1c3< d2 c3 1d2+ 1c3+ 1b4> 2b3>11 3c4-12 d2 c4 b4 c5 1b3> 1c4< 3c3- e5 e2 | 1 85 11204 956736
+
+5 | leaf | startpos moves c4 c2 d2 c3 b2 d3 1d2+ b3 d2 b4 1c2+ 1b3> 2d3< 1c4- d4 5c3<23 c2 c4 1d4< d3 1d2+ 1c3+ Cc3 2c4> 1c3< d2 c3 1d2+ 1c3+ 1b4> 2b3>11 3c4-12 d2 c4 b4 c5 1b3> 1c4< 3c3- e5 e2 | 1 85 11206 957000
+5 | leaf | startpos moves a5 b4 c3 d2 e1 d1 c2 d3 c1 d4 d5 c4 c5 b3 b2 a2 Sb1 a3 Ce4 Cb5 a4 a1 e5 e3 c3< Sc3 c1> c1 2d1+ c3- c3 a3> a3 d1 e4< 2c2> c2 e2 b2+ b2 | 1 65 4072 272031 16642760
+5 | leaf | startpos moves a1 b1 c1 d1 e1 e2 d2 c2 b2 a2 a3 b3 c3 d3 e3 a4 b4 c4 d4 e4 a5 a4- b4- c4- d4- e4- a4 b4 c4 d4 e4 2a3> c4> 2e3< a3 4b3- b3 c4 e3 d5 d2< d2 2d4- d4 c5 b5 2c2> d1+ c2 e2+ d1 e2 c5< c5 e4< Se4 2b5- e4- a3- | 1 152 15356 1961479 197434816

@@ -1,0 +1,21 @@
+# Build artifacts
+*.o
+*.d
+*.exe
+*.pdb
+*.gcda
+*.gcno
+/yapper
+/yapper-*
+/build/
+
+# Records the flags the current binary was built with, so switching ARCH
+# actually rebuilds instead of handing back the previous build.
+/.buildflags
+
+# Python
+__pycache__/
+*.pyc
+
+# Books, opponents, baselines, match output, training data. Never commit these.
+/external/
