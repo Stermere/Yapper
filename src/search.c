@@ -56,6 +56,12 @@ typedef struct Worker {
 
     Move *arena;
     i32 *arena_scores;
+
+    /* The network's accumulator for each node on the path, filled only when that node is
+     * evaluated, and cleared by the make that reaches it. A table hit skips the evaluation, so
+     * a frame comes from the nearest ancestor that has one, through the squares the moves since
+     * then changed. The root's is built before the search starts. */
+    NNFrame frames[MAX_PLY + 1];
 } Worker;
 
 static Worker Search;
@@ -144,6 +150,33 @@ static inline void history_update(i32 *slot, int bonus) {
     *slot += bonus - *slot * abs(bonus) / 16384;
 }
 
+/* The evaluation of the node at `ply`. Make and unmake know nothing of the network: the moves on
+ * the path are in `played`, and that is all a frame needs to catch up. */
+static int node_eval(Worker *w, int ply, u64 threats) {
+    const Board *b = &w->board;
+    if (!nn_ready(b->size)) {
+        return evaluate(b, threats);
+    }
+    NNFrame *frame = &w->frames[ply];
+    if (!frame->computed) {
+        u64 touched = 0;
+        int base    = ply - 1;
+        while (base >= 0) {
+            touched |= nn_move_squares(w->played[base]);
+            if (w->frames[base].computed) {
+                break;
+            }
+            base--;
+        }
+        if (base >= 0) {
+            nn_derive(b, frame, &w->frames[base], touched);
+        } else {
+            nn_refresh(b, frame);
+        }
+    }
+    return evaluate_frame(b, threats, frame);
+}
+
 /* What the side to move can do about a road the other side has next move. A placement
  * can only help on one of the squares that finishes the road, so the rest are skipped;
  * a spread can help from anywhere. */
@@ -173,7 +206,7 @@ static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *move
         return 0;
     }
     if (b->ply < 2) {
-        return evaluate(b, 0);
+        return node_eval(w, ply, 0);
     }
 
     /* A win on the spot needs no search, and most of Tak's tactics hang off this test. */
@@ -186,7 +219,7 @@ static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *move
     /* Looking for a spread is the dearest thing a node does, and a stand pat that already
      * fails high can only be confirmed by what it finds. */
     const u64 threats   = board_road_placements(b, !us);
-    const int stand_pat = evaluate(b, threats);
+    const int stand_pat = node_eval(w, ply, threats);
     if (!threats && stand_pat >= beta) {
         return stand_pat;
     }
@@ -208,7 +241,9 @@ static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *move
             continue;
         }
         board_play(b, m, &undo);
-        const Outcome outcome = board_outcome_after(b, &undo);
+        w->played[ply]              = m;
+        w->frames[ply + 1].computed = false;
+        const Outcome outcome       = board_outcome_after(b, &undo);
         int score;
         if (outcome != ONGOING) {
             score = outcome_score(outcome, us, ply + 1);
@@ -317,7 +352,7 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
             return 0;
         }
         if (ply >= MAX_PLY - 1) {
-            return evaluate(b, b->ply >= 2 ? board_road_placements(b, !us) : 0);
+            return node_eval(w, ply, b->ply >= 2 ? board_road_placements(b, !us) : 0);
         }
         alpha = alpha > -SCORE_WIN + ply ? alpha : -SCORE_WIN + ply;
         beta  = beta < SCORE_WIN - ply - 1 ? beta : SCORE_WIN - ply - 1;
@@ -348,7 +383,7 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
     }
 
     const u64 threats = b->ply >= 2 ? board_road_placements(b, !us) : 0;
-    const int eval    = hit ? entry.eval : evaluate(b, threats);
+    const int eval    = hit ? entry.eval : node_eval(w, ply, threats);
 
     if (!pv_node && !threats && !root && depth <= 6 && eval - 90 * depth >= beta &&
         abs(beta) < SCORE_WIN_BOUND) {
@@ -364,8 +399,9 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
             const int reduction = 3 + depth / 4;
             Undo undo;
             board_make_null(b, &undo);
-            w->played[ply]          = MOVE_NONE;
-            w->keys[w->key_count++] = b->hash;
+            w->played[ply]              = MOVE_NONE;
+            w->frames[ply + 1].computed = false;
+            w->keys[w->key_count++]     = b->hash;
             const int score =
                 -search(w, -beta, -beta + 1, depth - 1 - reduction, ply + 1, moves, scores);
             w->key_count--;
@@ -438,8 +474,9 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
         }
         const Outcome outcome = board_outcome_after(b, &undo);
         searched++;
-        w->played[ply]        = m;
-        w->pv_length[ply + 1] = 0;
+        w->played[ply]              = m;
+        w->frames[ply + 1].computed = false;
+        w->pv_length[ply + 1]       = 0;
 
         int score;
         if (outcome != ONGOING) {
@@ -587,6 +624,13 @@ static SearchReport run_search(const Board *root, const u64 *history, int histor
     memcpy(w->keys, history, sizeof(u64) * (size_t)w->key_count);
     set_time_budget(w, limits);
     tt_new_search();
+
+    /* The root never changes during a search, and every frame is carried from it at worst. A
+     * root left to its own evaluation would go unbuilt whenever the table answers for it. */
+    w->frames[0].computed = false;
+    if (nn_ready(w->board.size)) {
+        nn_refresh(&w->board, &w->frames[0]);
+    }
 
     SearchReport report = {MOVE_NONE, 0, 0, 0};
 

@@ -3,6 +3,7 @@
 #define EVAL_H
 
 #include "board.h"
+#include "nn.h"
 
 /* What a position is scored on. A term's count is from the side to move's point of view, so
  * a term both sides have is mine less theirs.
@@ -70,13 +71,24 @@ typedef struct EvalTrace {
 
 /* In hundredths of a flat, from the side to move's point of view. Must stay well inside
  * SCORE_WIN_BOUND. `threats` is board_road_placements() for the side not to move: every
- * caller needs it for its own reasons, and it is the most expensive input there is. */
+ * caller needs it for its own reasons, and it is the most expensive input there is. The
+ * network plays a size that has one, and the hand-written evaluation any other. */
 int evaluate(const Board *b, u64 threats);
 
-/* The same score from one body, which also fills in *trace. */
+/* The network's score with its frame already up to date, for a search that carries frames
+ * from node to node. Only for a size nn_ready() has. */
+int evaluate_frame(const Board *b, u64 threats, const NNFrame *frame);
+
+/* What the network is scored on besides the stacks, read the same way in play and in a fit. */
+void eval_net_inputs(const Board *b, NNInputs *in);
+
+/* The hand-written evaluation, whatever plays this size. */
+int evaluate_hce(const Board *b, u64 threats);
+
+/* The hand-written score from the same body, which also fills in *trace. */
 int evaluate_trace(const Board *b, u64 threats, EvalTrace *trace);
 
-/* The score a trace adds up to. Selftest holds this equal to evaluate(), which is what
+/* The score a trace adds up to. Selftest holds this equal to evaluate_hce(), which is what
  * makes a fit over traces a fit of the evaluation that plays. */
 int eval_from_trace(const EvalTrace *trace);
 

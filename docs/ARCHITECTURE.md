@@ -126,8 +126,48 @@ each term's count, so a fit and the engine cannot read a position differently. S
 two equal.
 
 Scores stay in hundredths of a flat, because the search's margins are written in them. It is a
-stepping stone: networks will replace it, and nothing outside `eval.c` knows what kind of
-evaluation is behind `evaluate()`.
+stepping stone: a size with a network plays that instead, and the hand-written evaluation goes
+once every size has a network that beats it.
+
+## The network
+
+**A stack is one input.** An occupied square is a token: its top stone's type and the colours
+of its top six stones, which are the low bits of the stack's word. Six is the carry limit of
+6x6, and 98.6% of stacks are no taller. Encoding each stone by its depth instead would renumber
+every stone under a stack whenever one lands on it, so a move would touch more rows for less.
+A square's token changes only when a move touches the square, so a move costs at most two rows
+per square, and a placement one.
+
+**One accumulator serves both sides.** Colours are folded so the top stone is white, and a black
+top subtracts its row where a white one adds it. The accumulator is then white's view, and black's
+is its negation, so there is no second one to keep up. The side to move flips the sign before the
+activation.
+
+**The board's symmetries are in the weights.** The 256 hidden units are 32 filters, each seen
+through all eight rotations and reflections of the board, and the output weighs the eight alike.
+Turning a position only permutes each filter's units, so the score cannot change, and selftest
+holds that exactly, for any weights. Training stores each filter once. That is an eighth of the
+weights to fit, with no augmentation, and the engine spreads them over the symmetries as it
+loads them.
+
+**Nothing in make or unmake knows about it.** The search keeps a frame per ply, filled only when
+that node is evaluated. A table hit skips the evaluation, so a frame comes from the nearest
+ancestor that has one, through the squares that the moves on the path since then have changed,
+and the search already records those moves. Selftest checks a frame carried this way against a
+refresh, bit for bit.
+
+**What is not stacks goes around it.** Output weights come in eight buckets by stones left, the
+same buckets as the hand-written LEAD terms. A linear skip adds the flat lead with komi, the
+reserves and komi itself, which are what a game is finally counted on. The two THREAT terms stay
+hand-set: no position a fit reads has a road hanging.
+
+**It is integer.** Activations are clipped to [0, 1] and squared. An activation is 255 and an
+output weight 64, so an activation times its weight fits 16 bits and 256 of those again fit 32.
+Every build scores alike, so bench is the same from clang, gcc and a build with no CPU
+assumptions. `nntrain` fits on the same rounded weights the engine runs, so the fit is what plays.
+
+Every size runs the same code with weights of its own, since a square means something different
+on each board. A size without a `netN.h` plays the hand-written evaluation.
 
 ## Training data
 

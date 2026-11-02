@@ -10,20 +10,20 @@
 #define S(opening, ending) ((i32)((u32)(ending) << 16) + (opening))
 
 static const i32 Weights[TERM_COUNT] = {
-    [T_LEAD_1] = S(4, 101),      [T_LEAD_2] = S(8, 112),        [T_LEAD_3] = S(11, 98),
-    [T_LEAD_4] = S(14, 91),      [T_LEAD_6] = S(12, 83),        [T_LEAD_9] = S(23, 77),
-    [T_LEAD_14] = S(46, 68),     [T_LEAD_MORE] = S(105, 17),    [T_KOMI] = S(-63, 33),
-    [T_RESERVE] = S(-91, -132),  [T_WALL] = S(-12, 30),         [T_CAP] = S(-105, -22),
-    [T_FLAT_INNER] = S(29, -1),  [T_FLAT_CORE] = S(14, 1),      [T_FLAT_CORNER] = S(-44, -1),
-    [T_WALL_INNER] = S(36, 5),   [T_WALL_CORE] = S(1, 0),       [T_CAP_INNER] = S(198, 52),
-    [T_CAP_CORE] = S(84, 39),    [T_FRIEND_FLAT] = S(44, 21),   [T_FRIEND_WALL] = S(76, 98),
-    [T_FRIEND_CAP] = S(82, 138), [T_CAPTIVE_FLAT] = S(-25, -3), [T_CAPTIVE_WALL] = S(82, 38),
-    [T_CAPTIVE_CAP] = S(65, 33), [T_HARD_CAP] = S(46, 61),      [T_GROUP_1] = S(68, 25),
-    [T_GROUP_2] = S(14, 3),      [T_GROUP_3] = S(-32, 2),       [T_GROUP_4] = S(-52, 1),
-    [T_GROUP_5] = S(-63, 3),     [T_ADJACENT] = S(-29, 5),      [T_DIAGONAL] = S(21, 2),
-    [T_LIBERTY] = S(15, -2),     [T_FLAT_CONTACT] = S(10, -15), [T_WALL_CONTACT] = S(57, -4),
-    [T_CAP_CONTACT] = S(60, 8),  [T_THREAT_ONE] = S(-60, -60),  [T_THREAT_MANY] = S(-220, -220),
-    [T_TEMPO] = S(140, 124),
+    [T_LEAD_1] = S(4, 102),      [T_LEAD_2] = S(8, 111),        [T_LEAD_3] = S(11, 99),
+    [T_LEAD_4] = S(14, 92),      [T_LEAD_6] = S(13, 85),        [T_LEAD_9] = S(25, 79),
+    [T_LEAD_14] = S(52, 68),     [T_LEAD_MORE] = S(108, 20),    [T_KOMI] = S(-66, 33),
+    [T_RESERVE] = S(-102, -136), [T_WALL] = S(-15, 30),         [T_CAP] = S(-130, -30),
+    [T_FLAT_INNER] = S(31, -3),  [T_FLAT_CORE] = S(12, 2),      [T_FLAT_CORNER] = S(-45, 3),
+    [T_WALL_INNER] = S(45, 10),  [T_WALL_CORE] = S(5, 2),       [T_CAP_INNER] = S(213, 53),
+    [T_CAP_CORE] = S(100, 41),   [T_FRIEND_FLAT] = S(47, 25),   [T_FRIEND_WALL] = S(89, 99),
+    [T_FRIEND_CAP] = S(96, 144), [T_CAPTIVE_FLAT] = S(-33, -2), [T_CAPTIVE_WALL] = S(84, 39),
+    [T_CAPTIVE_CAP] = S(67, 35), [T_HARD_CAP] = S(57, 74),      [T_GROUP_1] = S(71, 29),
+    [T_GROUP_2] = S(18, 5),      [T_GROUP_3] = S(-35, 1),       [T_GROUP_4] = S(-56, 1),
+    [T_GROUP_5] = S(-69, 1),     [T_ADJACENT] = S(-32, 6),      [T_DIAGONAL] = S(24, 4),
+    [T_LIBERTY] = S(15, 1),      [T_FLAT_CONTACT] = S(10, -13), [T_WALL_CONTACT] = S(50, 0),
+    [T_CAP_CONTACT] = S(62, 11), [T_THREAT_ONE] = S(-60, -60),  [T_THREAT_MANY] = S(-220, -220),
+    [T_TEMPO] = S(150, 128),
 };
 
 #undef S

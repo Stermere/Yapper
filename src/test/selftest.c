@@ -11,6 +11,7 @@
 #include "../board.h"
 #include "../eval.h"
 #include "../movegen.h"
+#include "../nn.h"
 #include "../notation.h"
 #include "../search.h"
 
@@ -203,10 +204,12 @@ static void check_eval(const Board *b) {
     CHECK(abs(score) < SCORE_WIN_BOUND / 2, "eval %d out of range: %s", score, tps);
 
     EvalTrace trace;
-    const int traced = evaluate_trace(b, board_road_placements(b, !board_stm(b)), &trace);
-    CHECK(traced == score, "trace scored %d, play %d: %s", traced, score, tps);
-    CHECK(eval_from_trace(&trace) == score, "trace adds up to %d, play %d: %s",
-          eval_from_trace(&trace), score, tps);
+    const u64 threats = board_road_placements(b, !board_stm(b));
+    const int hce     = evaluate_hce(b, threats);
+    const int traced  = evaluate_trace(b, threats, &trace);
+    CHECK(traced == hce, "trace scored %d, play %d: %s", traced, hce, tps);
+    CHECK(eval_from_trace(&trace) == hce, "trace adds up to %d, play %d: %s",
+          eval_from_trace(&trace), hce, tps);
 
     Board other;
     for (int transform = 1; transform < 8; transform++) {
@@ -258,6 +261,81 @@ static void random_games(int size, int games, int halfkomi) {
             }
         }
     }
+}
+
+/* A frame carried over gaps, as table hits leave them in a search, against one built from
+ * nothing. Any square the carry misses shows up here, and nowhere else: games still play. */
+static void check_frame(const Board *b, NNFrame *frames, const Move *made, int ply) {
+    char tps[TPS_BUFFER];
+    show(b, tps, sizeof(tps));
+
+    NNFrame *frame = &frames[ply];
+    u64 touched    = 0;
+    int base       = ply - 1;
+    while (base >= 0 && ply - base <= 8) {
+        touched |= nn_move_squares(made[base]);
+        if (frames[base].computed) {
+            break;
+        }
+        base--;
+    }
+    if (base >= 0 && ply - base <= 8) {
+        nn_derive(b, frame, &frames[base], touched);
+    } else {
+        nn_refresh(b, frame);
+    }
+    NNFrame fresh;
+    nn_refresh(b, &fresh);
+    CHECK(memcmp(frame->acc, fresh.acc, sizeof(fresh.acc)) == 0, "carried accumulator: %s", tps);
+    CHECK(memcmp(frame->feature, fresh.feature, sizeof(fresh.feature)) == 0, "carried tokens: %s",
+          tps);
+    const u64 threats = board_road_placements(b, !board_stm(b));
+    CHECK(evaluate_frame(b, threats, frame) == evaluate(b, threats), "frame scored apart: %s", tps);
+    frame->computed = rng() % 3 != 0;
+}
+
+/* Random weights on every size, whatever is compiled in, so the network is held to its gates
+ * before one has been trained. Symmetry holds for any weights, by construction. */
+static void network_games(int size, int games, int halfkomi) {
+    static i16 filters[MAX_SIZE * MAX_SIZE * NN_TOKENS * NN_FILTERS];
+    static i16 bias[NN_FILTERS], output[NN_BUCKETS * NN_FILTERS];
+    static i32 skip[NN_BUCKETS * 4];
+    for (int i = 0; i < size * size * NN_TOKENS * NN_FILTERS; i++) {
+        filters[i] = (i16)(rng() % 129) - 64;
+    }
+    for (int i = 0; i < NN_FILTERS; i++) {
+        bias[i] = (i16)(rng() % 201) - 100;
+    }
+    for (int i = 0; i < NN_BUCKETS * NN_FILTERS; i++) {
+        output[i] = (i16)(rng() % 255) - 127;
+    }
+    for (int i = 0; i < NN_BUCKETS * 4; i++) {
+        skip[i] = (i32)(rng() % 2001) - 1000;
+    }
+    const NNWeights random = {filters, bias, output, skip};
+    CHECK(nn_install(size, &random), "installing a network on %d", size);
+
+    static Move list[MAX_MOVES];
+    static NNFrame frames[400];
+    static Move made[400];
+    for (int game = 0; game < games; game++) {
+        Board board;
+        board_clear(&board, size, halfkomi);
+        Undo undo;
+        for (int ply = 0; ply < 400; ply++) {
+            check_frame(&board, frames, made, ply);
+            if (ply >= 2) {
+                check_eval(&board);
+            }
+            const int count = movegen_all(&board, list);
+            made[ply]       = pick_move(list, count);
+            board_make(&board, made[ply], &undo);
+            if (board_outcome_after(&board, &undo) != ONGOING) {
+                break;
+            }
+        }
+    }
+    CHECK(nn_install(size, nn_builtin(size)), "restoring the network on %d", size);
 }
 
 static void expect_outcome(const char *position, int size, int halfkomi, Outcome expected,
@@ -456,6 +534,10 @@ int selftest_run(void) {
         random_games(size, size <= 6 ? 400 : 200, 0);
     }
     random_games(6, 200, 4);
+    for (int size = MIN_SIZE; size <= MAX_SIZE; size++) {
+        network_games(size, 60, 0);
+    }
+    network_games(6, 30, 4);
     printf("selftest: %llu checks, %d failures\n", (unsigned long long)Checks, Failures);
     return Failures;
 }

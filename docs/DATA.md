@@ -112,3 +112,28 @@ won so well by racing stones down that only 3% of its games against itself ended
 fit on those games alone forgot what roads are worth: it fell far behind against an outside
 opponent while its loss looked excellent. Check the outcomes `datacheck` prints before fitting,
 and judge a fit against an engine that does not play like it.
+
+## Training a network
+
+```sh
+yapper nntrain 6 src/net6.h 1 0.5 20 15 external/data/gen6-*.ydg external/data/gen7-*.ydg
+make format && make
+```
+
+The arguments are the board size, the output, the one-in-N positions to keep, `lambda`, the
+epochs and the threads. Each size has its own network and is trained on its own games, since a
+square means something different on each board: `datagen` takes the size. The engine picks up a
+`netN.h` the next time it is built, and a size with none plays the hand-written evaluation.
+
+Positions are kept as `tune` keeps them, and a sixteenth of the games are held out the same way.
+The target is `lambda` times the search's score, through the scale of 310, plus the rest times
+the game's result. The report gives the held-out loss against that target and against results
+alone, which is the one to compare with the hand-written evaluation's on the same games. That
+comparison is only fair on games neither was fitted on.
+
+A network is fitted on the same rounded weights the engine runs, so the last line, the engine
+against the fit on held-out positions, should read within a hundredth or so. Anything more means
+the engine and the trainer read a position differently.
+
+A fit takes every core it is given, so nothing can be timed or matched alongside it. A lower loss
+is not a claim of strength: only an SPRT makes one.

@@ -59,6 +59,14 @@ The test for a road by spread is held to a brute force over every generated move
 position. It rules moves out without playing them, so an error there means a win the search can
 no longer see, and games would go on looking normal. Five deliberate bugs confirmed this fails too.
 
+Then it installs a network of random weights on every size, whatever is compiled in, and plays
+more games through it. At every position a frame carried over gaps from an earlier one, as table
+hits leave them in a search, must equal one built from nothing, bit for bit, and score the same;
+and the score must survive the eight symmetries and a colour swap. That last holds for any
+weights, by construction, so random ones are a fair test. Three deliberate bugs, one per check,
+confirmed each fails: one orientation left untied, a carry that forgot to take black tokens away,
+and colours not folded under a black top.
+
 ## perftdiff
 
 ```sh
@@ -85,6 +93,10 @@ make bench
 Fixed depth on 13 frozen positions, single-threaded, table pinned at 64 MB. The last line is
 `<nodes> nodes <nps> nps`. An unchanged node count proves a patch changed nothing about the
 search; a changed one means it is behavioural and needs an SPRT.
+
+`make release` leaves selftest, datagen and the fitting tools out of the binary, so its gates
+cannot run on it. Its bench must equal the full build's, and that is what says it is the engine
+the gates passed on.
 
 ## speed
 

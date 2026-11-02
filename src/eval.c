@@ -141,19 +141,29 @@ static inline int lead_term(int left) {
     return Buckets[left < 15 ? left : 15];
 }
 
+/* A game ends when a side runs out of stones or the board fills, whichever is first. */
+static inline int stones_left(const Board *b) {
+    const int us         = board_stm(b);
+    const int mine_left  = b->flats[us] + b->capstones[us];
+    const int their_left = b->flats[!us] + b->capstones[!us];
+    const int left       = mine_left < their_left ? mine_left : their_left;
+    const int spaces     = popcount(board_empty(b));
+    return spaces < left ? spaces : left;
+}
+
+static inline int game_phase(const Board *b, int left) {
+    const int start = board_start_flats(b->size) + board_start_capstones(b->size);
+    return (start - (left < start ? left : start)) * PHASE_END / start;
+}
+
 static inline __attribute__((always_inline)) int evaluate_body(const Board *b, u64 threats,
                                                                EvalTrace *trace) {
     const int us         = board_stm(b);
     const int mine_left  = b->flats[us] + b->capstones[us];
     const int their_left = b->flats[!us] + b->capstones[!us];
-    const int start      = board_start_flats(b->size) + board_start_capstones(b->size);
     const u64 empty      = board_empty(b);
-
-    /* A game ends when a side runs out of stones or the board fills, whichever is first. */
-    int left         = mine_left < their_left ? mine_left : their_left;
-    const int spaces = popcount(empty);
-    left             = spaces < left ? spaces : left;
-    const int phase  = (start - (left < start ? left : start)) * PHASE_END / start;
+    const int left       = stones_left(b);
+    const int phase      = game_phase(b, left);
 
     const u64 edges       = (FILE_A | RANK_1 | b->file_last | b->rank_last) & b->mask;
     const Regions regions = {.inner   = b->mask & ~edges,
@@ -184,7 +194,43 @@ static inline __attribute__((always_inline)) int evaluate_body(const Board *b, u
     return blend(sum.score, phase);
 }
 
-int evaluate(const Board *b, u64 threats) { return evaluate_body(b, threats, NULL); }
+int evaluate_hce(const Board *b, u64 threats) { return evaluate_body(b, threats, NULL); }
+
+void eval_net_inputs(const Board *b, NNInputs *in) {
+    const int us   = board_stm(b);
+    const int komi = us == WHITE ? -b->halfkomi : b->halfkomi;
+    in->stm        = us;
+    in->bucket     = lead_term(stones_left(b)) - T_LEAD_1;
+    in->lead       = (popcount(board_flats(b, us)) - popcount(board_flats(b, !us))) * 2 + komi;
+    in->reserve    = b->flats[us] + b->capstones[us] - b->flats[!us] - b->capstones[!us];
+    in->komi       = komi;
+}
+
+/* Far inside the win bound, which a stand pat must never reach. */
+#define NET_SCORE_LIMIT 12000
+
+int evaluate_frame(const Board *b, u64 threats, const NNFrame *frame) {
+    NNInputs in;
+    eval_net_inputs(b, &in);
+    i64 score = nn_score(b->size, frame, &in) >> 6;
+    /* No position a fit reads has a road hanging, so these two stay hand-set. */
+    if (threats) {
+        const int term = (threats & (threats - 1)) ? T_THREAT_MANY : T_THREAT_ONE;
+        score += blend(Weights[term], game_phase(b, stones_left(b)));
+    }
+    return (int)(score > NET_SCORE_LIMIT    ? NET_SCORE_LIMIT
+                 : score < -NET_SCORE_LIMIT ? -NET_SCORE_LIMIT
+                                            : score);
+}
+
+int evaluate(const Board *b, u64 threats) {
+    if (nn_ready(b->size)) {
+        NNFrame frame;
+        nn_refresh(b, &frame);
+        return evaluate_frame(b, threats, &frame);
+    }
+    return evaluate_body(b, threats, NULL);
+}
 
 int evaluate_trace(const Board *b, u64 threats, EvalTrace *trace) {
     *trace = (EvalTrace){0};

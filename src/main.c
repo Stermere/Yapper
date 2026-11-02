@@ -6,14 +6,21 @@
 
 #include "bench.h"
 #include "board.h"
-#include "datagen.h"
 #include "movegen.h"
+#include "nn.h"
 #include "notation.h"
 #include "perft.h"
 #include "search.h"
 #include "tei.h"
+
+/* A release build is the engine alone: what writes data, fits weights or tests the board is
+ * left out. It plays the same as the full build, and bench is how that is checked. */
+#ifndef YAPPER_RELEASE
+#include "datagen.h"
+#include "nntrain.h"
 #include "test/selftest.h"
 #include "tune.h"
+#endif
 
 static double now_seconds(void) {
     struct timespec ts;
@@ -58,6 +65,7 @@ static int cmd_perft(int argc, char **argv) {
 int main(int argc, char **argv) {
     board_init();
     movegen_init();
+    nn_init();
     search_init();
 
     const char *command = argc >= 2 ? argv[1] : "tei";
@@ -68,15 +76,16 @@ int main(int argc, char **argv) {
     if (strcmp(command, "perft") == 0) {
         return cmd_perft(argc, argv);
     }
+    if (strcmp(command, "bench") == 0) {
+        bench_run(argc >= 3 ? atoi(argv[2]) : BENCH_DEFAULT_DEPTH);
+        return 0;
+    }
+#ifndef YAPPER_RELEASE
     if (strcmp(command, "perfttest") == 0 && argc >= 3) {
         return perft_run_suite(argv[2], argc >= 4 ? atoi(argv[3]) : 99) ? 1 : 0;
     }
     if (strcmp(command, "selftest") == 0) {
         return selftest_run() ? 1 : 0;
-    }
-    if (strcmp(command, "bench") == 0) {
-        bench_run(argc >= 3 ? atoi(argv[2]) : BENCH_DEFAULT_DEPTH);
-        return 0;
     }
     if (strcmp(command, "datagen") == 0 && argc >= 6) {
         const DataConfig config = {.path       = argv[2],
@@ -90,10 +99,18 @@ int main(int argc, char **argv) {
     if (strcmp(command, "tune") == 0 && argc >= 6) {
         return tune_run(argv[2], atoi(argv[3]), atof(argv[4]), argv + 5, argc - 5);
     }
-    printf(
-        "usage: yapper [tei | bench [depth] | selftest | perfttest <suite> [max depth] |\n"
-        "               perft <size> <depth> [position] |\n"
-        "               datagen <out> <games> <seed> <nodes> [size] [generation] |\n"
-        "               tune <weights.h> <keep one in> <scale, or 0 to report it> <games>...]\n");
+    if (strcmp(command, "nntrain") == 0 && argc >= 9) {
+        return nntrain_run(atoi(argv[2]), argv[3], atoi(argv[4]), atof(argv[5]), atoi(argv[6]),
+                           atoi(argv[7]), argv + 8, argc - 8);
+    }
+    printf("usage: yapper [tei | bench [depth] | selftest | perfttest <suite> [max depth] |\n"
+           "               perft <size> <depth> [position] |\n"
+           "               datagen <out> <games> <seed> <nodes> [size] [generation] |\n"
+           "               tune <weights.h> <keep one in> <scale, or 0 to report it> <games>... |\n"
+           "               nntrain <size> <netN.h> <keep one in> <lambda> <epochs> <threads> "
+           "<games>...]\n");
+#else
+    printf("usage: yapper [tei | bench [depth] | perft <size> <depth> [position]]\n");
+#endif
     return 2;
 }

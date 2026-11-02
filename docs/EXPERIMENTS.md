@@ -576,6 +576,153 @@ disagreeing by about 2 flats on the same position near ply 30, so this looks lik
 as depth, and neither has been measured apart. Beating Tiltak by 116 does not make Yapper close to
 the top.
 
+## E27: generation 6, and a refit on it
+
+The first data from an engine that sees a road by spread at the leaf: 100,000 games from the build
+of E25, frozen as its own binary, at 5000 nodes a move on 15 jobs. 9.05M positions, 4.18 bytes
+each, 49.6 games/s, and takref replayed 500 games with no failures. Only 24.8% ended by road, from
+37% in gen 5: two sides that see spreads build fewer roads that land.
+
+So the fit used gens 1 to 6 together, at scale 310, and held-out loss went from 0.501065 to
+0.500399. Bench is 9125938.
+
+| Test | Result |
+|---|---|
+| Against E25 at 2+0.02 | **PASSED**, 1236 games, +630 -443 =163, **+53.0 +/- 18.1**, pairs [73, 66, 242, 75, 162] |
+| Against Tiltak at 5+0.05, 400 games | +255 -96 =49, **+146 [+110, +181]** |
+
+Road losses to Tiltak were 9 of 96, so mixing in the older generations kept roads in. This is the
+baseline the first network is gated against.
+
+## E28: the first network against E27
+
+v0 from the `nnue` branch: E27's search, with a net for 6x6 trained on gens 1 to 6. Bench 11032593.
+Against E27 on 6x6 with 2 komi:
+
+| Conditions | Result |
+|---|---|
+| 100,000 nodes a move each | **PASSED**, 1270 games, +693 -499 =78, **+53.5 +/- 18.1**, pairs [90, 27, 294, 47, 177] |
+| 2+0.02 | INCONCLUSIVE, 2000 games, +912 -945 =143, **-5.7 +/- 14.6**, LLR -0.74, pairs [217, 77, 438, 58, 210] |
+
+It judges better and plays level, because it is slower. Timed at the search's two call sites on the
+120 positions of E19 at depth 8, two alternating runs agreeing within 2%:
+
+| | E27 | v0 |
+|---|---|---|
+| Cycles per evaluation | 314 | 530 |
+| Mnps | 4.37 | 3.55 |
+| Nodes to depth 8 | 15.72M | 18.90M |
+| Seconds to depth 8 | 3.60 | 5.30 |
+
+Bench put it at 13% slower, and these put it at 19% in nodes per second, plus a fifth more nodes to
+reach the same depth. At the rate of E19, the 19% alone is worth about -65, which is about what the
+net's judgement gains.
+
+Most of that was a bug, found on the branch: the root's accumulator was cleared every iteration and
+never built again, so 45% of evaluations rebuilt from scratch. Fixed, with bench unchanged, it costs
+289 cycles an evaluation on the same positions and runs at the same nodes per second as E27. Against
+E27 again at 2+0.02: INCONCLUSIVE at the cap, 2000 games, +1003 -843 =154, **+27.9 +/- 14.3**, LLR
++2.38, pairs [165, 66, 454, 74, 241]. Its interval is above zero, but it did not pass.
+
+E29 is left to the data work on master, so these do not collide.
+
+## E30: what a network would cost, measured before building one
+
+An instrumented copy of the E25 search on 120 gen 5 positions at 100,000 nodes each, run on one
+thread at low priority beside a match, so read the times to about 30%. `evaluate()` was called on
+75% of nodes, at 98 ns a call and 23% of the search's time, at 320 ns a node.
+
+A table hit skips the evaluation, so only 57% of evaluations had an evaluated parent, and the rest
+reached 2 to 8 plies back. Rows an accumulator would touch per evaluation, carried from the nearest
+evaluated ancestor:
+
+| Inputs | Rows an evaluation | Rows in a full build |
+|---|---|---|
+| Top stone only, by square | 4.68 | 23.4 |
+| **One token per stack, top 3 or top 6 stones** | **5.27** | 23.4 |
+| Each of the top 6 stones by depth | 8.86 | 34.0 |
+| 12 lines of 6 squares, 4 states | 8.87 | 11.8 |
+| 25 2x2 patches | 14.81 | 24.1 |
+| 20 two-rank bands, a colour each | 16.45 | 19.5 |
+
+A whole stack as one token costs a tenth more than its top stone alone, and less than encoding
+stones by depth, which renumbers a stack whenever a stone lands on it. Patterns over lines change
+so often across a carry that they gain little from being kept up, and are better read afresh.
+
+Over the 26.2M positions on disk, 76% of occupied squares are lone stones, 92.4% are 3 high or
+less and 98.6% 6 or less. Of the 20,736 rows of square and token on 6x6, 17,706 were seen, and 538
+of them serve 90% of reads. A capstone moves on 9.5% of its owner's moves. A canonical rotation by
+the fullest quadrant would change on 18.9% of plies, which is why the symmetries are in the weights
+instead.
+
+The cost of an evaluation in plain loops, rows drawn from those frequencies at random, 5 rows each:
+
+| Hidden units | Accumulators | ns, update and squared activation |
+|---|---|---|
+| 128 | 1 | 35 |
+| 256 | 1 | 77 |
+| 256 | 2 | 140 |
+| 512 | 2 | 309 |
+| 1024 | 2 | 570 |
+
+At about 205 Elo a doubling of nodes, E19, a network costing 300 ns would start about 110 Elo down
+on speed alone, which is why the first one has 256 units and one accumulator.
+
+## E31: the network's machinery, with nothing trained
+
+`src/nn.c`, the search's frames, `yapper nntrain` and `make release`, as ARCHITECTURE.md describes.
+
+With no `netN.h`, bench is exactly 9465377, as before, so the search is unchanged. Selftest passes
+585,968,615 checks, including random networks on every size. One deliberate bug per network check
+confirmed each fails: an orientation left untied failed the transforms, a carry that forgot to take
+black tokens away failed the carried accumulator and its score, and colours not folded under a
+black top failed the colour swap.
+
+The release build is 291,479 bytes against 450,689 and benches 9465377 too.
+
+A smoke test, not a candidate: gens 3-5 at one position in four, 2.8M positions, 3 epochs on 3
+threads beside datagen, in 100 seconds. Held out against results it reached 0.5083 to the
+hand-written evaluation's 0.5034, which was fitted on these same games.
+
+Fitted on floating point weights, the engine read 12.6 hundredths from its fit on average and 67
+at worst, which is the rounding of 16-bit weights adding up over 256 squared units. Fitted on the
+rounded weights themselves it reads 0.49 on average and 1 at worst, and the held-out loss did not
+move. Built with that network, bench is 9956630 from clang native, gcc and a build with no CPU
+assumptions alike.
+
+clang sized the output loop by its 32-bit sum, so it ran 128-bit vectors where gcc ran 256: 32
+multiply-adds where 16 do. A clang-only pragma takes it to 16, and gcc never sees it. The speed
+against the hand-written evaluation could not be measured: datagen had 15 cores, and bench swung
+from 2.2 to 3.6 Mnps between runs of the same binary.
+
+## E32: the first network, v0
+
+Fitted on gens 1-6 together, since gen 6 alone ended only 24.8% of its games by road: 25.9M
+positions, 1.73M held out by game, lambda 0.5, 15 epochs on 15 threads, in 6 minutes. Held out
+against results it reached 0.4950 to hce6's 0.5004, though hce6 was fitted on these games. The
+engine reads 0.48 hundredths from its fit on average and 1 at worst. Built on hce6's weights for
+every other size, so that only the 6x6 evaluation differs; bench 11032593.
+
+Against hce6, E28 on master: at 100,000 nodes a move **PASSED**, 1270 games, **+53.5 +/- 18.1**. At
+2+0.02 **INCONCLUSIVE** at the cap, 2000 games, **-5.7 +/- 14.6**. Better judgement, paid back in
+speed: on 120 gen 5 middlegames to depth 8 it cost 530 cycles an evaluation to hce6's 314, ran 19%
+fewer nodes a second, and searched 20% more nodes to the same depth.
+
+Most of that cost was a mistake. Each iteration cleared the root's frame, and the root is a table
+hit from the second iteration on, so it was never built again. A chain with no evaluated node
+above it then went back to the root, found nothing and built from scratch: 45% of evaluations,
+where E30 had counted 0.001%. E30's model never cleared its root, which is why it missed this.
+Building the root's frame once a search, with each make clearing its child's frame instead, took
+an evaluation from 470 cycles to 289 and the search from 3.73 to 4.37 Mnps on the same positions,
+nodes unchanged at 18,902,916 and bench unchanged at 11032593.
+
+Applying all of a carry's rows in one pass over the accumulator, rather than a pass a row, was
+slower: 346 cycles with slices of 128, 372 with 64, against 289. Dropped.
+
+With the fix, against hce6 at 2+0.02: **INCONCLUSIVE** at the cap, 2000 games, +1003 -843 =154,
+**+27.9 +/- 14.3**, LLR +2.38 against a bound of +2.94, pairs [165, 66, 454, 74, 241]. The interval
+is above zero, as gen 5's was in E17 when it was kept. v0 is the teacher for gen 7.
+
 ## Mistakes worth not repeating
 
 - **200 games is a sketch.** A match against Tiltak read +159 and was called the target reached.
@@ -588,6 +735,12 @@ the top.
 - **A low rate of use does not make a move safe to drop.** Moves past the 32nd cut less than 0.1%
   of the time and were two thirds of the work, and cutting them gained nothing: E21.
 - **A better fit is not a stronger engine.** E16 lowered the held-out loss and lost 67 Elo.
+- **A network fitted in floating point is not the one that plays.** Rounding to 16 bits put the
+  engine 12.6 hundredths from its fit on average, E31. Fitting on the rounded weights took that to
+  under one.
+- **A model of the search is only as good as its edge cases.** E30's count of full rebuilds was
+  0.001% because its root never lost its frame; the real search cleared it every iteration and
+  rebuilt 45% of the time, E32. Count the real thing before trusting a cost model.
 - **Copying a file over a source does not rebuild it.** `Copy-Item` keeps the file's old date, so
   `make` saw nothing to do and a second candidate was the first one under another name. Identical
   bench counts from two sets of weights gave it away. Check bench after every swap.

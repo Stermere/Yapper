@@ -30,6 +30,7 @@ make bench          # deterministic node count
 make speed          # race move generation against external/engines
 make datacheck      # training data: readable without the engine, right by takref, repeatable
 make debug          # assertions, plus sanitizers on POSIX
+make release        # the engine alone: no datagen, fitting or selftest
 make format         # apply .clang-format
 ```
 
@@ -82,14 +83,24 @@ than a bug: it makes every later result untrustworthy.
     a compiler from deleting them as dead code. Without it a build once reported 517 Mnps for
     an empty loop.
 
-12. **A trace must add up to `evaluate()`, from the same body.** A fit reads traces, so if the
-    two differ it tunes something that does not play, and nothing in a match would say so.
-    Selftest holds them equal and holds the score unchanged under the board's symmetries.
+12. **What is fitted must be what plays.** A hand-written trace must add up to
+    `evaluate_hce()`, from the same body, and a network is fitted on the fixed point the engine
+    runs, so `nntrain` must report the engine within a hundredth or so of its fit. If the two
+    differ, a fit tunes something that does not play, and nothing in a match would say so.
+    Selftest holds every evaluation unchanged under the board's symmetries and a colour swap.
 
 13. **Training data is games, never features, and its format is a contract.** It has to outlive
     every evaluation trained on it, networks included. Any change to `docs/DATA.md`'s format
     needs a new magic. Datagen must stay deterministic for a seed and build, and take nothing
     from the clock.
+
+14. **A network frame carried from an ancestor must equal a refresh, bit for bit.** The search
+    only updates the squares its moves touched, so a square missed there leaves a wrong
+    accumulator that still plays. Selftest holds it on random weights for every size, whether or
+    not a network is compiled in.
+
+15. **`make release` must bench the same as `make`.** It leaves the tools out, and the matching
+    node count is what ties the binary that ships to the one the gates passed on.
 
 ## Testing discipline
 
@@ -117,6 +128,7 @@ pass.
 - Mark unfinished work `TODO(engine):` with enough context to act on.
 - Keep `src/` flat. `src/test/` is the one exception: gates compiled into the binary but
   never reached in play, so a gate cannot pass on a different build than the one that plays.
+  `make release` leaves them out, and invariant 15 is what keeps it the same build.
 - No dependencies. The engine links libc, libm and the platform threads, and that is what
   lets it build for anything. No x86 intrinsics in the core: use compiler builtins and let
   them lower to POPCNT or NEON, or keep any faster path behind a portable fallback.
@@ -127,6 +139,7 @@ pass.
 | Path | Contents |
 |---|---|
 | `src/` | the engine, flat |
+| `src/netN.h` | the network for NxN, written by `yapper nntrain`; a size without one plays the hand-written evaluation |
 | `src/test/` | selftest, in the binary on purpose |
 | `tests/perft/` | `published.perft` from other engines, `sealed.perft` from takref |
 | `tests/books/` | opening books, built by `tools/mkbook.py` |

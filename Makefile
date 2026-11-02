@@ -5,6 +5,7 @@
 #    make                 optimised build for THIS machine (-march=native)
 #    make ARCH=generic    no CPU assumptions, runs anywhere the compiler targets
 #    make ARCH=popcnt     x86-64 with POPCNT, which is what CI uses
+#    make release         the engine alone, with no datagen, fitting or selftest
 #    make debug           unoptimised + assertions (+ sanitizers on POSIX)
 #    make bench           build, then run the deterministic node-count benchmark
 #    make perft           build, then run the sealed perft suites
@@ -78,6 +79,15 @@ else
     CFLAGS := $(CFLAGS_WARN) $(CFLAGS_OPT) $(CFLAGS_ARCH)
 endif
 
+# What ships is the engine alone. It must bench the same as the full build, since that is
+# what ties it to the build the gates passed on.
+TOOL_SRC := src/datagen.c src/nntrain.c src/tune.c $(wildcard src/test/*.c)
+ifneq ($(findstring release,$(MAKECMDGOALS)),)
+    SRC     := $(filter-out $(TOOL_SRC),$(SRC))
+    CFLAGS  += -DYAPPER_RELEASE -ffunction-sections -fdata-sections
+    LDFLAGS += -Wl,--gc-sections
+endif
+
 # A stamp of the flags, so switching ARCH rebuilds instead of handing back the
 # binary built with the other ones.
 FLAGS_NOW := $(CC) $(CFLAGS) $(LDFLAGS)
@@ -86,11 +96,13 @@ ifneq ($(FLAGS_NOW),$(FLAGS_OLD))
     $(shell echo '$(FLAGS_NOW)' > .buildflags)
 endif
 
-.PHONY: all debug bench perft selftest check perftdiff speed datacheck format clean
+.PHONY: all debug release bench perft selftest check perftdiff speed datacheck format clean
 
 all: $(BIN)
 
 debug: $(BIN)
+
+release: $(BIN)
 
 $(BIN): $(SRC) $(HDR) .buildflags
 	printf '#include "%s"\n' $(SRC:src/%=%) | \
