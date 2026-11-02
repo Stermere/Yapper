@@ -548,15 +548,22 @@ Outcome board_outcome(const Board *b) {
     return flat_outcome(b);
 }
 
-u64 board_road_placements(const Board *b, int color) {
+bool board_road_through(const Board *b, u64 area, u64 seeds) {
+    return road_through(b, area, seeds);
+}
+
+void board_road_ends(const Board *b, int color, u64 ends[4]) {
     const u64 area  = board_road_stones(b, color);
     const u64 west  = FILE_A & b->mask;
     const u64 south = RANK_1 & b->mask;
+    ends[0]         = neighbours(flood(west, area)) | west;
+    ends[1]         = neighbours(flood(b->file_last, area)) | b->file_last;
+    ends[2]         = neighbours(flood(south, area)) | south;
+    ends[3]         = neighbours(flood(b->rank_last, area)) | b->rank_last;
+}
 
-    /* A stone completes a road when it touches, or is, both ends of one. */
-    const u64 east_west = (neighbours(flood(west, area)) | west) &
-                          (neighbours(flood(b->file_last, area)) | b->file_last);
-    const u64 south_north = (neighbours(flood(south, area)) | south) &
-                            (neighbours(flood(b->rank_last, area)) | b->rank_last);
-    return (east_west | south_north) & board_empty(b);
+u64 board_road_placements(const Board *b, int color) {
+    u64 ends[4];
+    board_road_ends(b, color, ends);
+    return board_road_gaps(ends) & board_empty(b);
 }

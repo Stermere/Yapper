@@ -55,6 +55,10 @@ with no komi, swapping the colours. Nothing else would catch an evaluation that 
 or a colour differently, since games still play. Three deliberate bugs were put in to confirm
 each of these fails.
 
+The test for a road by spread is held to a brute force over every generated move, at every
+position. It rules moves out without playing them, so an error there means a win the search can
+no longer see, and games would go on looking normal. Five deliberate bugs confirmed this fails too.
+
 ## perftdiff
 
 ```sh

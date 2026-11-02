@@ -141,6 +141,19 @@ u64 board_key(const Board *b);
 /* Empty squares where placing a flat or capstone completes a road for `color`. */
 u64 board_road_placements(const Board *b, int color);
 
+/* Is any square of `seeds` part of a road through `area`? */
+bool board_road_through(const Board *b, u64 area, u64 seeds);
+
+/* What it takes to finish a road for `color`: west, east, south, north, each the side of the
+ * board itself and everything touching a group of `color` that runs to it. A road's first new
+ * square is in one of a pair and its last in the other, however it was made. */
+void board_road_ends(const Board *b, int color, u64 ends[4]);
+
+/* The squares in both of a pair, where a single stone of `color` finishes a road. */
+static inline u64 board_road_gaps(const u64 ends[4]) {
+    return (ends[0] & ends[1]) | (ends[2] & ends[3]);
+}
+
 /* Rebuilds everything derived from the stacks after they are written directly. Parsing a
  * position is the only thing that does. */
 void board_refresh(Board *b);

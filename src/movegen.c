@@ -263,6 +263,104 @@ int movegen_count(const Board *b) {
     return count;
 }
 
+/* A stack's square and the next `hops` squares of a direction, all known to be on the board. */
+static inline u64 line_from(int sq, int dir, int hops) {
+    const u64 across = (2ULL << hops) - 1;
+    const u64 along  = FILE_A & (~0ULL >> (56 - 8 * hops));
+    switch (dir) {
+    case NORTH: return along << sq;
+    case EAST: return across << sq;
+    case SOUTH: return along << (sq - 8 * hops);
+    default: return across << (sq - hops);
+    }
+}
+
+/* A road's first new square touches one end of it and its last touches the other. */
+static inline bool line_joins(u64 line, const u64 ends[4]) {
+    return ((line & ends[0]) && (line & ends[1])) || ((line & ends[2]) && (line & ends[3]));
+}
+
+/* Would this spread finish a road through `area`, the road stones of `us`? A tall stack has
+ * dozens of patterns on a line that gets this far, nearly all for nothing, so what each one
+ * leaves on top is read off the stack's bits rather than played. A stone a pattern ends a hop
+ * on is the top of that square. */
+static inline bool spread_wins(const Board *b, Move m, u64 area, int us) {
+    const int sq    = move_square(m);
+    const int step  = DirectionStep[move_direction(m)];
+    const int carry = move_carry(m);
+    const u64 word  = b->stones[sq];
+
+    u64 after = area & ~(1ULL << sq);
+    if (board_short_height(b, sq) > carry && ((word >> carry) & 1) == (u64)us) {
+        after |= 1ULL << sq;
+    }
+    int to = sq;
+    for (int hops = move_pattern(m); hops; hops &= hops - 1) {
+        to += step;
+        after &= ~(1ULL << to);
+        after |= (u64)(((word >> (carry - 1 - __builtin_ctz(hops))) & 1) == (u64)us) << to;
+    }
+    if ((b->walls >> sq) & 1) {
+        after &= ~(1ULL << to);
+    }
+    return board_road_through(b, after, after & ~area);
+}
+
+bool movegen_road_spread(const Board *b, int us, const u64 ends[4]) {
+    const u64 area   = board_road_stones(b, us);
+    const u64 tops   = b->walls | b->caps;
+    const u64 stacks = b->owned[us] & (b->tall | b->caps);
+
+    /* A lone stone adds one square to a road, so it has to land on a gap. A lone wall adds
+     * nothing at all. */
+    const u64 singles   = b->owned[us] & ~(stacks | b->walls);
+    const u64 gaps      = board_road_gaps(ends) & b->mask & ~tops;
+    const u64 moving[4] = {singles & gaps >> 8, singles & shift_west(gaps), singles & gaps << 8,
+                           singles & shift_east(gaps)};
+    for (int dir = 0; dir < 4; dir++) {
+        u64 stones = moving[dir];
+        while (stones) {
+            if (spread_wins(b, move_spread(pop_lsb(&stones), (Direction)dir, 1), area, us)) {
+                return true;
+            }
+        }
+    }
+
+    /* Anything else has to cover a line touching both ends of a road, which all but a few
+     * of its directions do not. */
+    const u64 blockers = tops | ~b->mask;
+    u64 rest           = stacks;
+    while (rest) {
+        const int sq    = pop_lsb(&rest);
+        const int carry = carry_limit(b, sq);
+        int reach[4];
+        stack_reaches(blockers, sq, reach);
+        for (int dir = 0; dir < 4; dir++) {
+            const bool crush = ((b->caps >> sq) & 1) && wall_past(b, sq, dir, reach[dir]);
+            const int open   = reach[dir] + crush;
+            const int hops   = open < carry ? open : carry;
+            if (hops == 0) {
+                continue;
+            }
+            if (!line_joins(line_from(sq, dir, hops), ends)) {
+                continue;
+            }
+            Move list[2 * 255 + LANE_MOVES];
+            const u16 base = (u16)(sq | dir << 6);
+            Move *end      = emit_run(list, Spreads[carry][reach[dir]], base);
+            if (crush) {
+                end = emit_run(end, Crushes[carry][reach[dir]], base);
+            }
+            for (const Move *m = list; m < end; m++) {
+                if (spread_wins(b, *m, area, us)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 bool movegen_is_legal(const Board *b, Move m) {
     const int sq = move_square(m);
     const int us = board_stm(b);

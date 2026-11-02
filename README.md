@@ -5,7 +5,8 @@ desktop to an ARM board. It plays 3x3 through 8x8 under the
 [USTAK rules](https://ustak.org/play-beautiful-game-tak/), with komi as an option.
 
 The board and move generation are complete and verified. The evaluation is fitted to self-play,
-and the search is still a working skeleton: see [docs/STATUS.md](docs/STATUS.md).
+and the search has had its first pass, which puts it ahead of Tiltak at 5+0.05: see
+[docs/STATUS.md](docs/STATUS.md).
 
 ## Build
 

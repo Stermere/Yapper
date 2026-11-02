@@ -46,6 +46,9 @@ typedef struct Worker {
     Move killers[MAX_PLY][2];
     /* By side, then square plus kind: a placement of a type, or a spread in a direction. */
     i32 history[2][256];
+    /* The same again, for what answered what: by the move before this one as well. */
+    i32 replies[2][256][256];
+    Move played[MAX_PLY + 1];
 
     /* Positions on the way here, for repetition. */
     u64 keys[MAX_GAME_PLIES + MAX_PLY];
@@ -85,6 +88,7 @@ void search_clear(void) {
     tt_clear();
     memset(Search.killers, 0, sizeof(Search.killers));
     memset(Search.history, 0, sizeof(Search.history));
+    memset(Search.replies, 0, sizeof(Search.replies));
 }
 
 static inline int score_to_tt(int score, int ply) {
@@ -147,6 +151,13 @@ static inline bool answers_threat(Move m, u64 threats) {
     return !move_is_place(m) || (threats >> move_square(m)) & 1;
 }
 
+/* With the last stones going in, the flat count can end the game before the road comes, and
+ * the reasoning in answers_threat() no longer holds. */
+static inline bool last_stones(const Board *b, int us) {
+    return (b->flats[us] + b->capstones[us] <= 1) || (b->flats[!us] + b->capstones[!us] <= 1) ||
+           (board_empty(b) & (board_empty(b) - 1)) == 0;
+}
+
 /* The evaluation trusts a quiet position, and a position with a road hanging is not one.
  * So a leaf only stands pat if there is nothing forcing; otherwise it plays out the
  * replies that stop the road. */
@@ -164,18 +175,26 @@ static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *move
     if (b->ply < 2) {
         return evaluate(b, 0);
     }
-    if (board_road_placements(b, us)) {
+
+    /* A win on the spot needs no search, and most of Tak's tactics hang off this test. */
+    u64 ends[4];
+    board_road_ends(b, us, ends);
+    if (board_road_gaps(ends) & board_empty(b)) {
         return SCORE_WIN - ply - 1;
     }
 
+    /* Looking for a spread is the dearest thing a node does, and a stand pat that already
+     * fails high can only be confirmed by what it finds. */
     const u64 threats   = board_road_placements(b, !us);
     const int stand_pat = evaluate(b, threats);
-    /* With the last stones going in, the flat count can end the game before the road
-     * comes, and the reasoning in answers_threat() no longer holds. */
-    const bool endgame = (b->flats[us] + b->capstones[us] <= 1) ||
-                         (b->flats[!us] + b->capstones[!us] <= 1) ||
-                         (board_empty(b) & (board_empty(b) - 1)) == 0;
-    if (!threats || endgame || qply >= MAX_QUIESCE || ply >= MAX_PLY - 1) {
+    if (!threats && stand_pat >= beta) {
+        return stand_pat;
+    }
+    if (movegen_road_spread(b, us, ends)) {
+        return SCORE_WIN - ply - 1;
+    }
+
+    if (!threats || last_stones(b, us) || qply >= MAX_QUIESCE || ply >= MAX_PLY - 1) {
         return stand_pat;
     }
 
@@ -225,10 +244,11 @@ static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Mo
     const Move killer_a = w->killers[ply][0];
     const Move killer_b = w->killers[ply][1];
     const u64 near_mine = neighbours(board_road_stones(b, us));
+    const i32 *replies  = w->replies[us][ply ? w->played[ply - 1] & 0xFF : 0];
 
     for (int i = 0; i < count; i++) {
         const Move m = moves[i];
-        i32 score    = w->history[us][m & 0xFF];
+        i32 score    = w->history[us][m & 0xFF] + replies[m & 0xFF];
         if (m == tt_move) {
             score += 1 << 28;
         } else if (m == killer_a) {
@@ -252,12 +272,17 @@ static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Mo
     }
 }
 
+/* Two passes, because a compiler can vectorise finding the highest score and not a loop that
+ * keeps its index. A tie must go to the earlier move: the generator lists placements first, and
+ * an order among ties that loses that costs real nodes. */
 static inline Move pick_next(Move *moves, i32 *scores, int from, int count) {
-    int best = from;
+    i32 top = scores[from];
     for (int i = from + 1; i < count; i++) {
-        if (scores[i] > scores[best]) {
-            best = i;
-        }
+        top = scores[i] > top ? scores[i] : top;
+    }
+    int best = from;
+    while (scores[best] != top) {
+        best++;
     }
     const Move m = moves[best];
     const i32 s  = scores[best];
@@ -314,22 +339,32 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
         }
     }
 
-    /* A win on the spot needs no search, and most of Tak's tactics hang off this test. */
-    if (!root && b->ply >= 2 && board_road_placements(b, us)) {
-        return SCORE_WIN - ply - 1;
+    u64 ends[4];
+    if (!root && b->ply >= 2) {
+        board_road_ends(b, us, ends);
+        if (board_road_gaps(ends) & board_empty(b)) {
+            return SCORE_WIN - ply - 1;
+        }
     }
 
     const u64 threats = b->ply >= 2 ? board_road_placements(b, !us) : 0;
     const int eval    = hit ? entry.eval : evaluate(b, threats);
 
+    if (!pv_node && !threats && !root && depth <= 6 && eval - 90 * depth >= beta &&
+        abs(beta) < SCORE_WIN_BOUND) {
+        return eval;
+    }
+
+    if (!root && b->ply >= 2 && movegen_road_spread(b, us, ends)) {
+        return SCORE_WIN - ply - 1;
+    }
+
     if (!pv_node && !threats && !root) {
-        if (depth <= 6 && eval - 90 * depth >= beta && abs(beta) < SCORE_WIN_BOUND) {
-            return eval;
-        }
         if (depth >= 3 && eval >= beta && b->ply >= 4 && abs(beta) < SCORE_WIN_BOUND) {
             const int reduction = 3 + depth / 4;
             Undo undo;
             board_make_null(b, &undo);
+            w->played[ply]          = MOVE_NONE;
             w->keys[w->key_count++] = b->hash;
             const int score =
                 -search(w, -beta, -beta + 1, depth - 1 - reduction, ply + 1, moves, scores);
@@ -344,21 +379,52 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
         }
     }
 
-    const int count = movegen_all(b, moves);
     if (tt_move != MOVE_NONE && !movegen_is_legal(b, tt_move)) {
         tt_move = MOVE_NONE;
     }
-    score_moves(w, moves, scores, count, tt_move, ply, threats);
 
+    /* Most nodes cut on their first move, and that is nearly always the table's or a killer, so
+     * these are tried before there is a list at all, which is far from free to make and sort. A
+     * road to answer outranks a killer, so a node with one does not try them early. */
+    Move first[3];
+    int first_count = 0;
+    if (tt_move != MOVE_NONE) {
+        first[first_count++] = tt_move;
+    }
+    if (!threats) {
+        for (int k = 0; k < 2; k++) {
+            const Move killer = w->killers[ply][k];
+            if (killer != MOVE_NONE && killer != tt_move && movegen_is_legal(b, killer)) {
+                first[first_count++] = killer;
+            }
+        }
+    }
+
+    /* The other side's road lands unless a reply stops it. */
+    const bool must_answer   = threats && !root && !last_stones(b, us);
     const int original_alpha = alpha;
-    int best_score           = -SCORE_WIN;
+    int best_score           = must_answer ? -SCORE_WIN + ply + 2 : -SCORE_WIN;
     Move best_move           = MOVE_NONE;
     int searched             = 0;
     Undo undo;
     board_save(b, &undo);
 
-    for (int i = 0; i < count; i++) {
-        const Move m = pick_next(moves, scores, i, count);
+    int count = 0;
+    for (int i = 0;; i++) {
+        if (i == first_count) {
+            count = movegen_all(b, moves);
+            score_moves(w, moves, scores, count, tt_move, ply, threats);
+            for (int j = 0; j < first_count; j++) {
+                pick_next(moves, scores, j, count);
+            }
+        }
+        if (i >= first_count && i >= count) {
+            break;
+        }
+        const Move m = i < first_count ? first[i] : pick_next(moves, scores, i, count);
+        if (must_answer && !answers_threat(m, threats)) {
+            continue;
+        }
 
         /* Late move pruning: a shallow node has seen enough once this far down the list. */
         if (!root && !pv_node && !threats && depth <= 4 && searched >= 12 + depth * depth * 8 &&
@@ -367,8 +433,12 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
         }
 
         board_play(b, m, &undo);
+        if (depth > 1) {
+            tt_prefetch(board_key(b));
+        }
         const Outcome outcome = board_outcome_after(b, &undo);
         searched++;
+        w->played[ply]        = m;
         w->pv_length[ply + 1] = 0;
 
         int score;
@@ -426,9 +496,13 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
                         w->killers[ply][0] = m;
                     }
                     const int bonus = depth * depth * 16 < 4000 ? depth * depth * 16 : 4000;
+                    i32 *replies    = w->replies[us][ply ? w->played[ply - 1] & 0xFF : 0];
                     history_update(history_slot(w, us, m), bonus);
+                    history_update(&replies[m & 0xFF], bonus);
+                    const Move *tried = i < first_count ? first : moves;
                     for (int j = 0; j < i; j++) {
-                        history_update(history_slot(w, us, moves[j]), -bonus);
+                        history_update(history_slot(w, us, tried[j]), -bonus);
+                        history_update(&replies[tried[j] & 0xFF], -bonus);
                     }
                     break;
                 }
@@ -478,8 +552,15 @@ static void set_time_budget(Worker *w, const SearchLimits *limits) {
         const i64 left   = limits->time[board_stm(&w->board)] - MOVE_OVERHEAD_MS;
         const i64 usable = left > 0 ? left : 0;
         const i64 inc    = limits->inc[board_stm(&w->board)];
-        w->soft_ms       = usable / 30 + inc * 3 / 4;
-        w->hard_ms       = w->soft_ms * 3;
+
+        /* A game lasts about as long as the shorter reserve, at three moves for every two
+         * stones, so that says how far the clock has to go. */
+        const Board *b  = &w->board;
+        const int white = b->flats[WHITE] + b->capstones[WHITE];
+        const int black = b->flats[BLACK] + b->capstones[BLACK];
+        const int moves = 4 + (white < black ? white : black) * 3 / 2;
+        w->soft_ms      = usable / (moves > 10 ? moves : 10) + inc * 3 / 4;
+        w->hard_ms      = w->soft_ms * 3;
         if (w->hard_ms > usable / 2) {
             w->hard_ms = usable / 2;
         }

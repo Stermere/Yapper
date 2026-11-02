@@ -112,6 +112,7 @@ static void check_moves(Board *b) {
     const Board before = *b;
     const u64 winning  = b->ply >= 2 ? board_road_placements(b, board_stm(b)) : 0;
     u64 found          = 0;
+    bool spread_road   = false;
 
     for (int i = 0; i < count; i++) {
         const Move m = list[i];
@@ -135,6 +136,7 @@ static void check_moves(Board *b) {
         if (move_is_place(m) && move_stone(m) != WALL && slow == win) {
             found |= 1ULL << move_square(m);
         }
+        spread_road |= !move_is_place(m) && slow == win;
         board_unmake(b, m, &undo);
         CHECK(memcmp(b, &before, sizeof(Board)) == 0, "unmake of %s: %s", move_format(m, text),
               tps);
@@ -143,6 +145,13 @@ static void check_moves(Board *b) {
     if (b->ply >= 2 && (b->flats[board_stm(b)] || b->capstones[board_stm(b)])) {
         CHECK(found == winning, "road placements %llx vs %llx: %s", (unsigned long long)winning,
               (unsigned long long)found, tps);
+    }
+    if (b->ply >= 2) {
+        u64 ends[4];
+        board_road_ends(b, board_stm(b), ends);
+        CHECK(movegen_road_spread(b, board_stm(b), ends) == spread_road,
+              "road by a spread, expected %d: %s", spread_road, tps);
+        CHECK(memcmp(b, &before, sizeof(Board)) == 0, "looking for a road spread: %s", tps);
     }
 
     /* Random words catch legality claims the generator would never produce. */

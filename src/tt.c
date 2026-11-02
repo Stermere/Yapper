@@ -51,6 +51,8 @@ static inline u64 tt_key(u64 hash) { return (hash ^ hash >> 32) * 0x9E3779B97F4A
 static inline Bucket *bucket_of(u64 key) { return &Table[key & BucketMask]; }
 static inline u16 check_of(u64 key) { return (u16)(key >> 48); }
 
+void tt_prefetch(u64 hash) { __builtin_prefetch(bucket_of(tt_key(hash))); }
+
 bool tt_probe(u64 hash, TTEntry *out) {
     const u64 key        = tt_key(hash);
     const Bucket *bucket = bucket_of(key);

@@ -4,9 +4,9 @@ Every measurement goes here, with the conditions that produced it. Machine unles
 Ryzen 7 5800X, Windows 11, one thread. Up to E6 that is gcc 12.2 `-O3 -flto -march=native`, and
 from E7 clang 15.0.7 `-O3 -march=native` as one translation unit.
 
-Bench signature now: **10797140 nodes**, identical from clang native, clang generic and gcc
-`popcnt`. It was 49104542 at the end of the skeleton, E9 and E10 moved it to 44927798, and the
-fitted evaluation of E15 and E17 is what moved it here.
+Bench signature now: **9465377 nodes**, identical from clang native, clang generic and gcc
+`popcnt`. It was 49104542 at the end of the skeleton, E9 and E10 moved it to 44927798, the fitted
+evaluation of E15 and E17 to 10797140, and the search work of E20 to E25 moved it here.
 
 ## Speed
 
@@ -405,8 +405,188 @@ touched for this evaluation.
 three builds tried. The cost of the harder pruning noted in E15 is still unmeasured, and the two
 `THREAT` weights are still hand-set, since no position a fit reads has them.
 
+## E19: what the search was doing
+
+An instrumented copy, 120 self-play positions from gen 5 at 300,000 nodes each, before any change:
+
+| Measure | |
+|---|---|
+| Leaves standing pat with a road by spread on the board for the side to move | **18.9%** |
+| The same for the other side | 12.8% |
+| Interior nodes cut by reverse futility | 60% |
+| Null move tried, and cutting when tried | 1.25%, 16% |
+| Beta cutoffs on the first move, and on a killer | 86%, 71% |
+| Reductions needing a search again | 0.33% |
+| Aspiration fails, each way | 19% |
+
+Doubling the nodes, 200,000 against 100,000 a move, 400 games: **+205.0 +/- 35.0**, and **+218.6 +/-
+38.8** on the build of E20.
+
+Reverse futility looked like the fault, since the side to move reads 1.4 flats better. It is not.
+With it and null move taken out, a node at the current margin of 90 a ply really fails beta about
+1% of the time at depths 1 to 5 and 2% at 6, so the drop in bench noted in E15 is sound on this
+measure.
+
+## E20: roads by spread at the leaf
+
+`movegen_road_spread()` answers whether a spread finishes a road without generating or playing
+anything but the few lines that could. A road's first new square has to touch the group at one
+edge and its last the group at the other, and the spread's squares are one line, so a line that
+does not touch both cannot do it. Selftest holds it to a brute force count at every position.
+
+Against E18 at 2+0.02: **PASSED**, 870 games, +488 -294 =88, **+78.8 +/- 22.0**, pairs [47, 27, 179,
+49, 133]. That was with it playing out each pattern, at 4.03 Mnps against 4.80, and reading the top
+stones off the stack's bits instead then made 4.29 Mnps with bench unchanged at 9409521.
+
+The real racetrack against Tiltak at 5+0.05, 200 games: **+92 -85 =23, +12 [-34, +58]**, the first
+result ahead of it, from -38. Road losses fell from 40 to 14 and those by spread from 37 to 12. What
+is left is flats, 71 of the 85 losses by a median of one flat. Those are not lost late: Tiltak's own
+score is at its final level 40 plies from the end, while Yapper's reads about -0.5 and only falls
+past -1 in the last 16.
+
+## E21: late move pruning, a failed direction
+
+With it taken out, how often a move still cuts at a non-PV node at depth 3:
+
+| Move | 1 | 2-3 | 4-7 | 8-15 | 16-31 | 32-63 | 64+ |
+|---|---|---|---|---|---|---|---|
+| Share cutting | 56% | 2.6% | 0.7% | 0.2% | 0.06% | 0.03% | 0.02% |
+
+Moves past the 32nd were two thirds of that depth's work, so a much tighter limit looked free. At
+2+0.02 against E20:
+
+| Limit | Bench | Result |
+|---|---|---|
+| `4 + 4d^2` to depth 6, in place of `12 + 8d^2` to depth 4 | 4587776 | INCONCLUSIVE, 2000 games, **+2.1 +/- 13.8** |
+| The same from depth 2, keeping any move that makes a threat | 5589263 | **FAILED**, 1358 games, **-42.9 +/- 17.1** |
+
+Half the nodes for nothing. Past the 8th move, moves that make a threat are 3.7% of the moves and
+34% of the cutoffs, and walls 12.6% and 0.9%, which is what suggested keeping the first. It did not
+save it, and asking after every late move took the speed down to 2.96 Mnps. Both dropped.
+
+## E22: a longer clock
+
+Yapper spends 5.46 of about 7.25 seconds a game at 5+0.05, and Tiltak 6.67, with 1.65 times as long
+on its first ten moves. Budgeting on 20 moves left instead of 30 at 2+0.02 against E20: INCONCLUSIVE,
+2000 games, **+10.8 +/- 13.7**, LLR +0.85. Not kept. It moved time from the end of the game to the
+start as well as adding some, and E25, which went the other way, passed.
+
+## E23: three that did nothing
+
+Treating a road by spread like a road by placement at interior nodes, so that nothing is pruned or
+reduced under one, reached **-25.9 +/- 14.0** over 2000 games at the cap, with an LLR of -2.79
+against a bound of -2.94. Counted as a failure. It cost 9% of the speed and made those nodes full
+width, which is more than it gave back.
+
+Refitting without the positions where a spread wins on the spot changed nothing, not one weight.
+Those positions were never in the fit: the search finds the win at the root, so their score is
+forced, and the fit already leaves those out.
+
+Storing leaf stand pats and reverse futility exits in the table left the node count exactly the
+same and took 3% longer, so the probes cost whatever they saved.
+
+## E24: where a node's time goes
+
+Cycle counts by part of a node, on the 120 positions of E19 at depth 8. These are real middlegames
+with tall stacks, and bench is not: it put the road check at 21% of the time, where these put it at
+38%. Its 570 cycles a call at an interior node also carry the stall of the table probe before it,
+since the counter does not wait for memory. Times here are the search alone.
+
+| Change | Nodes | Seconds |
+|---|---|---|
+| E20 | 16481834 | 5.03 |
+| History of what answered what | 15890198 | 4.80 |
+| Table move and killers tried before a list exists, and a prefetch of the child's table bucket | 16116606 | 4.78 |
+| Looking for a road by spread only once pruning has passed the node by | 15505248 | 3.68 |
+| Lone stones counted without a flood | 15505248 | 3.56 |
+
+Everything down to the deferred road check, at 2+0.02 against E20: **PASSED**, 802 games, +456 -259
+=87, **+87.1 +/- 23.1**, pairs [41, 25, 159, 48, 128]. Deferring the check is the row that mattered,
+and it is sound: a position already failing high can only be confirmed by finding a win. Lone stones
+left bench unchanged, so they are a pure speedup. A filter on how few hops a pattern can have moved
+nothing and was dropped.
+
+That 27% cut in time reads as about +99 at the rate of E19, which is close to the +87 measured.
+
+## E25: the rest of the pass, and where it leaves us
+
+At 2+0.02 against the last best:
+
+| Change | Result |
+|---|---|
+| A node answering a road skips the placements that cannot stop it, as `quiesce` did | **PASSED** a non-regression test at [-20, 5], 836 games, +6.2 +/- 20.6, with 6.8% fewer nodes and 2.5% less time |
+| A win on flats by the last stone or square, seen at a leaf | INCONCLUSIVE, 2000 games, +1.9 +/- 13.6. Dropped |
+| The clock shared out over the moves left, from the shorter reserve | **PASSED**, 1498 games, +750 -571 =177, **+41.7 +/- 15.9**, pairs [90, 77, 326, 76, 180] |
+| A shell sort of a list past its fourth pick | 7.4% more nodes, because ties lost the generator's order. Dropped |
+| `pick_next()` in two passes, the first of them vectorised | Bench unchanged, 6.3% faster |
+| Reductions a quarter stronger, `/ 2.0` for `/ 2.5` | INCONCLUSIVE, 2000 games, +930 -775 =295, **+27.0 +/- 13.9**, LLR +2.42, bench 5392249. Not kept |
+
+The last one stopped at the cap with its interval above zero, and work stopped before it could play
+Tiltak. It is left out so that every result below describes the code as it stands. It is the first
+thing to try next.
+
+The real racetrack against Tiltak at 5+0.05:
+
+| Build | Score | Elo |
+|---|---|---|
+| E18 | +79 -101 =20 | -38 [-85, +9] |
+| E20 | +92 -85 =23 | +12 [-34, +58] |
+| E24 and the answer filter | +111 -75 =14 | +63 [+14, +111] |
+| Final, 200 games | +132 -46 =22 | +159 [+107, +210] |
+| Final, 800 games | **+487 -228 =85** | **+116 [+92, +140]** |
+
+The 800 games are the number: the 200 ran high. That is about +154 on E18, against an aim of +200.
+
+The final build against E18's, with no illegal moves or forfeits:
+
+| Conditions | Result |
+|---|---|
+| 6x6, 10+0.1 | **PASSED**, 424 games, +336 -48 =40, **+287.6 +/- 39.4**, pairs [2, 2, 43, 36, 129] |
+| 5x5, 2+0.02, no komi | 200 games, +129 -55 =16, +135.0 +/- 38.7 |
+| 8x8, 2+0.02, 2 komi | 120 games, +109 -10 =1, +407.3 +/- 114.3 |
+
+`make check` and `make datacheck` pass, with takref replaying 100 of 100 games. Bench is 9465377
+from all three builds at about 6.3 Mnps. Five deliberate bugs in the road check each failed selftest
+with hundreds of failures or more. `make perftdiff` passed, 101,986 positions with 0 differences in
+44 minutes. The board and generator only gained the road check, and `board_road_placements()` moved
+onto it.
+
+What is left of the 228 losses is flats: 196 of them, and 32 by road, 28 of those on a spread. In
+every one of the 196 Tiltak ran out of stones first, while Yapper held a median of 3, and in 138 of
+Yapper's 143 flat wins it was Yapper that ran out first. Whoever gets there chooses when the game
+ends. In the 200 games, flats on the board are level through ply 60 and Yapper leads slightly at ply
+80, but with 6.2 stones in hand to Tiltak's 4.7 and 10.3 enemy stones under its tops to 7.3. Whether
+that is the evaluation or the search has not been settled.
+
+One game of the 5242 played on this clock was lost on time, in the reductions test at 2+0.02, by a
+side already reading -18 at move 48. It is the only one this work has seen. The clock now runs lower
+late in a game by design, so this is a real if small risk, and it has not been looked into further.
+Yapper spends 5.93 seconds a game at 5+0.05 to Tiltak's 6.52, so some of the clock still goes unused.
+
+## E26: the first match against syntaks
+
+The build of E25 through the real racetrack at 5+0.05, as for Tiltak, 100 games: **+1 -99, -798
+[-1266, -453]**, with no time losses or illegal moves. syntaks takes one thread and 64 MB by default,
+so the conditions match, and it spent 5.76 seconds a game to Yapper's 5.52.
+
+51 games were lost by road, 50 of those on a spread, and 48 on flats. It reports depth 14 to Yapper's
+10 in the opening and 12 to 10 in the middlegame, though two engines need not count depth alike. It
+reads itself 3 flats ahead by a median of ply 35, on its own scale. One sampled game has the two
+disagreeing by about 2 flats on the same position near ply 30, so this looks like judgement as well
+as depth, and neither has been measured apart. Beating Tiltak by 116 does not make Yapper close to
+the top.
+
 ## Mistakes worth not repeating
 
+- **200 games is a sketch.** A match against Tiltak read +159 and was called the target reached.
+  800 games on the same build read +116. Both intervals held the truth, and only one was narrow
+  enough to report as a result.
+- **One timing run proves nothing.** The same binary read 3.90 and 3.25 seconds minutes apart.
+  Repeat a timing, alternating the builds, before reading anything into it.
+- **Bench is not a profile of a game.** Its 13 positions put the road check at under half its real
+  share, and only cycle counts on positions from real games showed what the search spends.
+- **A low rate of use does not make a move safe to drop.** Moves past the 32nd cut less than 0.1%
+  of the time and were two thirds of the work, and cutting them gained nothing: E21.
 - **A better fit is not a stronger engine.** E16 lowered the held-out loss and lost 67 Elo.
 - **Copying a file over a source does not rebuild it.** `Copy-Item` keeps the file's old date, so
   `make` saw nothing to do and a second candidate was the first one under another name. Identical

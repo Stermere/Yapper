@@ -32,6 +32,10 @@ void tt_new_search(void);
 /* True on a hit, which fills *out. */
 bool tt_probe(u64 key, TTEntry *out);
 
+/* A probe is a trip to memory, and otherwise the slowest thing a node does. Worth asking for as
+ * soon as the key is known. */
+void tt_prefetch(u64 key);
+
 void tt_store(u64 key, Move move, int score, int eval, int depth, Bound bound);
 
 /* Permille of a sample of the table written by the current search. */

@@ -46,6 +46,14 @@ static inline int ranks_spanned(u64 group) {
 static inline __attribute__((always_inline)) void group_terms(Sum *sum, const Board *b, int color,
                                                               int side) {
     u64 left = board_road_stones(b, color);
+
+    /* A stone on its own spans one line, and these are most of the groups a flood would visit. */
+    const u64 alone = left & ~neighbours(left);
+    if (b->size <= 6) {
+        add(sum, T_GROUP_1 + b->size - 2, side * popcount(alone));
+    }
+    left ^= alone;
+
     while (left) {
         const u64 group = flood(left & -left, left);
         left &= ~group;

@@ -88,13 +88,30 @@ of a crossing wins. The search uses it as a win-in-one test at every node, and a
 detector the leaf search follows: a leaf with a road hanging is not quiet, so it plays out the
 replies that stop the road instead of standing pat.
 
+`movegen_road_spread()` answers the same question for a spread, which is how most roads are
+finished. A road's first new square has to touch the group at one edge and its last the group at
+the other, and a spread's squares are one line, so the floods above rule out every line that does
+not touch both. For what survives, the stones each pattern leaves on top are read off the stack's
+bits, with nothing played. It is still the dearest test a node has, so it comes after the prunes:
+a position already failing high can only be confirmed by finding a win.
+
 ## The search
 
 Iterative deepening PVS with aspiration windows, a bucketed transposition table, null move,
-reverse futility, late move reductions and pruning, killers and history. All of it is the
-textbook skeleton and none of its margins have been measured. It runs on one worker thread, and
-every piece of per-search state lives in `Worker`, so Lazy SMP is a matter of having more of
-them.
+reverse futility, late move reductions and pruning. The table move and the killers are tried
+before a move list exists, because most nodes cut on one of them. The rest go by history, overall
+and by what answered the move before. A node answering a road skips the placements that cannot
+stop it.
+
+The clock is shared out over the moves the game has left, worked out from the shorter reserve, so
+it runs down towards the end of the game rather than being spent early and left over. Moving time
+towards the end passed where moving it towards the opening did not: EXPERIMENTS.md E22 and E25.
+
+The tree's shape is still the textbook one. Tighter late move pruning and treating spreads as
+threats were tested and dropped, E21 and E23, and reverse futility was measured and left alone,
+E19. Stronger reductions were tested and left unfinished, E25, and the aspiration window has not
+been measured. It runs on one worker thread, and every piece of per-search state lives in `Worker`,
+so Lazy SMP is a matter of having more of them.
 
 ## The evaluation
 

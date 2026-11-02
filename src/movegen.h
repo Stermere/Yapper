@@ -15,6 +15,11 @@ int movegen_all(const Board *b, Move *list);
 /* What movegen_all() would return, without writing the moves. */
 int movegen_count(const Board *b);
 
+/* Could `color` finish a road with a spread, were it their move? `ends` is board_road_ends()
+ * for that side. Cheap enough for a leaf: most stacks are ruled out by their lines, and nothing
+ * is played. */
+bool movegen_road_spread(const Board *b, int color, const u64 ends[4]);
+
 /* Is `m` legal here? For moves that did not come from the generator: a transposition
  * table entry can be stale or collided, and making one unchecked corrupts the board. */
 bool movegen_is_legal(const Board *b, Move m);
