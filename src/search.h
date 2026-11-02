@@ -15,11 +15,12 @@
 #define MAX_GAME_PLIES 4096
 
 typedef struct SearchLimits {
-    int depth;    /* 0 for none */
-    u64 nodes;    /* 0 for none */
-    i64 movetime; /* milliseconds, 0 for none */
-    bool clock;   /* time[] and inc[] are set */
-    i64 time[2];  /* milliseconds left */
+    int depth;      /* 0 for none */
+    u64 nodes;      /* 0 for none */
+    u64 soft_nodes; /* begin no iteration past this, 0 for none */
+    i64 movetime;   /* milliseconds, 0 for none */
+    bool clock;     /* time[] and inc[] are set */
+    i64 time[2];    /* milliseconds left */
     i64 inc[2];
     bool infinite;
 } SearchLimits;

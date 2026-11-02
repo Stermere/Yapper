@@ -7,6 +7,7 @@
 | **perftdiff** | Does an implementation sharing nothing with this one agree? | Any board change |
 | **bench** | Did the search change, and how fast is it? | Every build |
 | **speed** | Are we still ahead of the baselines? | Any change to the hot path |
+| **datacheck** | Is training data right, and repeatable? | Any change to datagen |
 | **SPRT** | Does this actually gain Elo? | Every behavioural change |
 
 ## Three independent opinions on the rules
@@ -47,6 +48,12 @@ against a full recompute; unmake against a byte compare of the whole board; the 
 check against the slow one; PTN and TPS round trips; and legality of 400 random 16-bit words
 against the generated list. The random words are what caught a stale-table bug in the first
 build, and they are not optional.
+
+From the third ply on it also checks the evaluation: that a trace gives the same score as play
+and adds up to it, and that the score survives every rotation and reflection of the board and,
+with no komi, swapping the colours. Nothing else would catch an evaluation that treats a square
+or a colour differently, since games still play. Three deliberate bugs were put in to confirm
+each of these fails.
 
 ## perftdiff
 

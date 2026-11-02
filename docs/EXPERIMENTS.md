@@ -4,8 +4,9 @@ Every measurement goes here, with the conditions that produced it. Machine unles
 Ryzen 7 5800X, Windows 11, one thread. Up to E6 that is gcc 12.2 `-O3 -flto -march=native`, and
 from E7 clang 15.0.7 `-O3 -march=native` as one translation unit.
 
-Bench signature now: **44927798 nodes**, identical from clang and gcc, native, `popcnt` and
-generic. It was 49104542 at the end of the skeleton, and E9 and E10 are what moved it.
+Bench signature now: **10797140 nodes**, identical from clang native, clang generic and gcc
+`popcnt`. It was 49104542 at the end of the skeleton, E9 and E10 moved it to 44927798, and the
+fitted evaluation of E15 and E17 is what moved it here.
 
 ## Speed
 
@@ -293,8 +294,123 @@ reading its source.
 This is about speed alone: no match has been played against either, so nothing here ranks them
 or says which is strongest.
 
+## E14: how the placeholder lost
+
+The 39 losses of E12 replayed through `tools/gamestats.py`, from the game records alone:
+
+| Measure | Yapper | Tiltak |
+|---|---|---|
+| First capstone, median ply | 29 | 9 |
+| Stones in reserve at ply 80 (25 games got there) | 13.4 | 3.3 |
+| Spreads a game | 22.6 | 14.2 |
+| Under own tops at ply 80, own / enemy stones | 1.3 / 11.8 | 6.2 / 6.0 |
+
+24 were lost on flats, by a median of 2 with komi, and 15 by road, 12 of those on a spread that
+the threat term and `quiesce` cannot see. Yapper read above +3 at some point in 16 of the lost
+games, and its score moved a median 0.69 flats from one of its moves to the next. Tiltak's own
+score passed 0.7 for good by a median of ply 17. That is its opinion on a scale not confirmed
+here, but it says the games were decided long before the endgame.
+
+Scores in PTN comments read from white's side. A first version of this analysis took them as
+the mover's own, and had Yapper ahead in lost games it knew it was losing. Worth checking in any
+tool that reads them.
+
+## E15: a fitted evaluation
+
+The evaluation was split into terms and weights first, with no change in behaviour: bench stayed
+exactly 44927798. Three deliberate bugs confirmed the new selftest gates fail when they should.
+
+A hand-set capstone value, tested alone at 2+0.02 against that build, reached **+21.5 +/- 25.2**
+over 648 games with an LLR of +0.58. It was stopped there, inconclusive, because datagen cannot
+share the machine with a match and a fit was about to replace the value anyway. It makes no claim.
+
+Then the 40 terms of `eval.h`, fitted to 60,000 games of self-play at 5000 nodes a move: 4.7M
+positions kept, 33.1 games/s on 15 jobs, 92 seconds to fit. Held-out loss fell from 0.620 to
+0.560.
+
+At 2+0.02 against the original evaluation: **PASSED**, 418 games, +371 -44 =3, **+365.2 +/- 52.1**,
+pairs [1, 0, 42, 3, 163]. Bench is 8932865 at 4.77M nps, a fifth of the nodes at the same depth.
+That is the search pruning far harder, since a side to move now reads about a flat better than
+its opponent. It has not been checked for what it costs.
+
+The real racetrack against Tiltak at 5+0.05, 100 games: **+32 -66 =2, -123 Elo [-197, -47]**, from
++1 -39 in E6 and E12, with no illegal moves or time losses. It now loses on flats, 58 of the 66,
+trailing by about 3 flats through the middlegame, and plays 6.0 walls a game to Tiltak's 1.3.
+
+The scale matters less than expected. Fitted at 620, the best fit for the hand-set weights, a
+flat came out near 228. Refitting at 310 put it back near 100 and bench barely moved, from 7881622
+to 8932865, so the size of the side-to-move term is the likelier cause of the drop in nodes. The
+scale stays at 310.
+
+## E16: road distance, a failed test
+
+Fewest stones to finish a road for each side, out to three, split by who moves next. It cost 20%
+of the search's speed, from 4.85 to 3.9 Mnps, and held-out loss improved by only 0.0006.
+
+Against E15 at 2+0.02: **FAILED**, 698 games, +206 -340 =152, **-67.5 +/- 20.2**, pairs [63, 81, 154,
+29, 22]. Dropped, and bench went back to exactly 8932865. This was expected to be the largest
+gain of the plan, and it is the clearest loss.
+
+## E17: generations of data
+
+Each round plays 60,000 games with the best engine so far, at 5000 nodes a move and 15 jobs, then
+fits again. All at scale 310, and SPRTs at 2+0.02 with [0, 5] against the previous best. Tiltak
+is the real racetrack at 5+0.05, as in E6.
+
+| Fit on | Games ended by road | Against the last best | Against Tiltak |
+|---|---|---|---|
+| Gen 1 (E15) | 61% | **PASSED** +365.2 +/- 52.1 | +32 -66 =2, -123 [-197, -47] |
+| Gen 2 alone | 3% | not run | +21 -174 =5 |
+| Gens 1-2 | | **PASSED** +171.0 +/- 33.3 | +26 -67 =7 |
+| Gens 1-3 | 52% | **PASSED** +397.5 +/- 55.8 | +69 -114 =17, -79 [-128, -30] |
+| Gens 1-4 | 39% | **PASSED** +89.7 +/- 23.2 | +73 -105 =22, -56 [-103, -8] |
+| Gens 1-5 | 37% | INCONCLUSIVE +32.4 +/- 14.4 | +79 -101 =20, -38 [-85, +9] |
+
+The last SPRT hit the 2000-game cap at an LLR of +2.75 against a bound of +2.94, so the cap ended
+it rather than the test. Gen 5 was kept: nothing says it is worse, and it is the best result
+against Tiltak. The loop stopped there because it has converged. Gens 4 and 5 ended almost
+identically, White scoring 49.7% and 49.5%, and the last fit moved held-out loss by 0.0004. More of
+the same data will not move these terms, so any further gain needs new terms or the search.
+
+The road share is of the games that generation played, which is what the next fit reads. Gen 2
+shows the danger: the gen 1 engine won by racing stones down, so against itself it barely built a
+road, and a fit on those games alone forgot them. Mixing in gen 1 kept the correction it brought
+to walls, 6.0 a game down to 2.2, and gen 3 then came out balanced by itself.
+
+Self-play overstates all of this: gens 1-2 read +171 against gen 1 and level with it against
+Tiltak. Gen 3's top flats and walls are now level with Tiltak's at every ply checked, and flat
+losses are down to a median of one flat. It still differs in two ways: at ply 80 it has 7.1 stones
+in reserve to Tiltak's 4.1, and holds 11.2 enemy stones under its tops to Tiltak's 6.8. What
+remains is mostly roads: 50 of the 114 losses, 48 of them on a spread.
+
+## E18: the evaluation base, all of it together
+
+The final build, gens 1-5, against the evaluation it started from: **PASSED**, 414 games at 10+0.1
+on 6x6, **+414 -0**. Sizes share weights fitted on 6x6 alone, and held up at 2+0.02: **+100 -0** on
+5x5 with no komi, and **+60 -0** on 8x8 with 2 komi. No game in any of the three ended on a forfeit.
+A perfect score has no Elo, so the +2400 the runner prints is its cap and means nothing.
+
+Against Tiltak the same day, at 5+0.05 through the real racetrack:
+
+| Build | Score | Elo |
+|---|---|---|
+| Placeholder, E12 | +1 -39 | about -636 |
+| Final, 200 games | +79 -101 =20 | **-38 [-85, +9]** |
+
+This is the first result whose interval includes level, and Tiltak is still ahead on the point
+estimate. 40 of the 101 losses were by road, 37 of those on a spread, and the search has not been
+touched for this evaluation.
+
+300,000 games made 26.2M positions in 105 MB. `make check` passes, and bench is 10797140 from all
+three builds tried. The cost of the harder pruning noted in E15 is still unmeasured, and the two
+`THREAT` weights are still hand-set, since no position a fit reads has them.
+
 ## Mistakes worth not repeating
 
+- **A better fit is not a stronger engine.** E16 lowered the held-out loss and lost 67 Elo.
+- **Copying a file over a source does not rebuild it.** `Copy-Item` keeps the file's old date, so
+  `make` saw nothing to do and a second candidate was the first one under another name. Identical
+  bench counts from two sets of weights gave it away. Check bench after every swap.
 - **perftdiff is not background work.** It takes every core, which was forgotten once: a duel
   run beside it read 35 Mnps on a position that runs at 145, and bench read 612k nps.
 

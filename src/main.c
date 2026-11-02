@@ -6,12 +6,14 @@
 
 #include "bench.h"
 #include "board.h"
+#include "datagen.h"
 #include "movegen.h"
 #include "notation.h"
 #include "perft.h"
 #include "search.h"
 #include "tei.h"
 #include "test/selftest.h"
+#include "tune.h"
 
 static double now_seconds(void) {
     struct timespec ts;
@@ -76,7 +78,22 @@ int main(int argc, char **argv) {
         bench_run(argc >= 3 ? atoi(argv[2]) : BENCH_DEFAULT_DEPTH);
         return 0;
     }
-    printf("usage: yapper [tei | bench [depth] | selftest | perfttest <suite> [max depth] |\n"
-           "               perft <size> <depth> [position]]\n");
+    if (strcmp(command, "datagen") == 0 && argc >= 6) {
+        const DataConfig config = {.path       = argv[2],
+                                   .games      = strtoull(argv[3], NULL, 10),
+                                   .seed       = strtoull(argv[4], NULL, 10),
+                                   .nodes      = strtoull(argv[5], NULL, 10),
+                                   .size       = argc > 6 ? atoi(argv[6]) : 6,
+                                   .generation = argc > 7 ? atoi(argv[7]) : 0};
+        return datagen_run(&config);
+    }
+    if (strcmp(command, "tune") == 0 && argc >= 6) {
+        return tune_run(argv[2], atoi(argv[3]), atof(argv[4]), argv + 5, argc - 5);
+    }
+    printf(
+        "usage: yapper [tei | bench [depth] | selftest | perfttest <suite> [max depth] |\n"
+        "               perft <size> <depth> [position] |\n"
+        "               datagen <out> <games> <seed> <nodes> [size] [generation] |\n"
+        "               tune <weights.h> <keep one in> <scale, or 0 to report it> <games>...]\n");
     return 2;
 }

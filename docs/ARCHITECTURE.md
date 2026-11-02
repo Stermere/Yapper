@@ -96,5 +96,24 @@ textbook skeleton and none of its margins have been measured. It runs on one wor
 every piece of per-search state lives in `Worker`, so Lazy SMP is a matter of having more of
 them.
 
-`evaluate()` is a handful of hand-set terms: flats, walls, capstones, stack contents, group
-spans, road threats. It exists so games can be played and is expected to be replaced.
+## The evaluation
+
+`evaluate()` is linear: how much of each term a position has, times what that term is worth. The
+terms are in `eval.h` and the weights in `weights.h`, which a fit writes. Each weight has a value
+for the opening and for the end of the game, packed into one word so a term costs one add, and
+the two are blended once at the end by how many stones the game has left. That is the smaller of
+what either side has left and the empty squares, since a game ends on whichever comes first.
+
+There is one body, built twice like `spread()`. Play adds up the score, and a trace also records
+each term's count, so a fit and the engine cannot read a position differently. Selftest holds the
+two equal.
+
+Scores stay in hundredths of a flat, because the search's margins are written in them. It is a
+stepping stone: networks will replace it, and nothing outside `eval.c` knows what kind of
+evaluation is behind `evaluate()`.
+
+## Training data
+
+`docs/DATA.md` has the format and the tools. A game on disk is its moves and the search's scores,
+at four bytes a ply, and replay gives every position back, so data never depends on the evaluation
+that is being fitted to it.

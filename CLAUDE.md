@@ -9,10 +9,11 @@ from a desktop to an ARM board. Rules are the USTAK ones:
 https://ustak.org/play-beautiful-game-tak/. It speaks **TEI**, the protocol the Tak engine
 world uses, so racetrack and PTN Ninja work with it unchanged.
 
-**The current goal is move generation speed.** The board, move generation and harness are
-finished and verified, and Yapper already leads the baselines. The search is a
-single-threaded PVS and the evaluation is a hand-written placeholder: both are skeletons, and
-strength work waits until the basics are settled. See [docs/STATUS.md](docs/STATUS.md).
+**The current goal is to beat Tiltak.** The board, move generation and harness are finished and
+verified, and Yapper leads the baselines on speed. Strength work goes in order: a stronger
+evaluation base, then the search, then long overnight runs on the evaluation. The hand-written
+evaluation is a stepping stone: networks will replace it, so training data is kept in a form
+that does not depend on it. See [docs/STATUS.md](docs/STATUS.md).
 
 **Never read the source of a rival Tak engine**, not to explain a result and not to see how
 something is done. Yapper's ideas stay its own. `external/engines/` holds black-box binaries.
@@ -27,6 +28,7 @@ make check          # perft + selftest + bench: the gate for any board change
 make perftdiff      # fuzz against tools/takref.py, the independent oracle
 make bench          # deterministic node count
 make speed          # race move generation against external/engines
+make datacheck      # training data: readable without the engine, right by takref, repeatable
 make debug          # assertions, plus sanitizers on POSIX
 make format         # apply .clang-format
 ```
@@ -80,6 +82,15 @@ than a bug: it makes every later result untrustworthy.
     a compiler from deleting them as dead code. Without it a build once reported 517 Mnps for
     an empty loop.
 
+12. **A trace must add up to `evaluate()`, from the same body.** A fit reads traces, so if the
+    two differ it tunes something that does not play, and nothing in a match would say so.
+    Selftest holds them equal and holds the score unchanged under the board's symmetries.
+
+13. **Training data is games, never features, and its format is a contract.** It has to outlive
+    every evaluation trained on it, networks included. Any change to `docs/DATA.md`'s format
+    needs a new magic. Datagen must stay deterministic for a seed and build, and take nothing
+    from the clock.
+
 ## Testing discipline
 
 Read [docs/TESTING.md](docs/TESTING.md). Record every result in
@@ -125,7 +136,10 @@ pass.
 | `tools/ptnlink.py` | a ptn.ninja link for a game |
 | `tools/play.py` | play the engine in a terminal |
 | `tools/speedcmp.py` | race move generation against the baselines |
-| `docs/` | status, architecture, testing, TEI, experiments |
-| `external/` | **gitignored**: baseline binaries, match output |
+| `tools/gamestats.py` | how a match went, side by side, from its PTN |
+| `tools/datagen.py` | self-play for training, on every core |
+| `tools/datacheck.py` | read training data without the engine, and check it against takref |
+| `docs/` | status, architecture, testing, TEI, data, experiments |
+| `external/` | **gitignored**: baseline binaries, match output, training data |
 
 Never commit anything under `external/`, and never commit binaries.

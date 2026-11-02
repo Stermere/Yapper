@@ -568,6 +568,9 @@ static SearchReport run_search(const Board *root, const u64 *history, int histor
         if (w->soft_ms && (now_ms() - w->start_ms) * 2 >= w->soft_ms) {
             break;
         }
+        if (limits->soft_nodes && w->nodes >= limits->soft_nodes) {
+            break;
+        }
     }
 
     report.nodes = w->nodes;

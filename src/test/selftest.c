@@ -9,8 +9,10 @@
 
 #include "../bitboard.h"
 #include "../board.h"
+#include "../eval.h"
 #include "../movegen.h"
 #include "../notation.h"
+#include "../search.h"
 
 static int Failures;
 static u64 Checks;
@@ -152,6 +154,62 @@ static void check_moves(Board *b) {
     }
 }
 
+/* `b` turned or reflected, one of eight ways, and with the colours exchanged if asked. */
+static void board_transformed(const Board *b, Board *out, int transform, bool swap) {
+    board_clear(out, b->size, b->halfkomi);
+    const int last = b->size - 1;
+    u64 squares    = b->owned[WHITE] | b->owned[BLACK];
+    while (squares) {
+        const int sq     = pop_lsb(&squares);
+        const int height = board_height(b, sq);
+        u8 colors[MAX_STONES];
+        for (int i = 0; i < height; i++) {
+            colors[height - 1 - i] = (u8)(board_stone(b, sq, i) ^ swap);
+        }
+        int rank = sq >> 3, file = sq & 7;
+        rank = transform & 1 ? last - rank : rank;
+        file = transform & 2 ? last - file : file;
+        if (transform & 4) {
+            const int held = rank;
+            rank           = file;
+            file           = held;
+        }
+        board_set_stack(out, rank * 8 + file, colors, height, board_top(b, sq));
+    }
+    out->ply = b->ply + swap;
+    board_refresh(out);
+}
+
+static int evaluate_here(const Board *b) {
+    return evaluate(b, board_road_placements(b, !board_stm(b)));
+}
+
+/* An evaluation that treats a square or a colour differently is a bug nothing else finds:
+ * games still play, and every test but this one still passes. */
+static void check_eval(const Board *b) {
+    char tps[TPS_BUFFER];
+    show(b, tps, sizeof(tps));
+
+    const int score = evaluate_here(b);
+    CHECK(abs(score) < SCORE_WIN_BOUND / 2, "eval %d out of range: %s", score, tps);
+
+    EvalTrace trace;
+    const int traced = evaluate_trace(b, board_road_placements(b, !board_stm(b)), &trace);
+    CHECK(traced == score, "trace scored %d, play %d: %s", traced, score, tps);
+    CHECK(eval_from_trace(&trace) == score, "trace adds up to %d, play %d: %s",
+          eval_from_trace(&trace), score, tps);
+
+    Board other;
+    for (int transform = 1; transform < 8; transform++) {
+        board_transformed(b, &other, transform, false);
+        CHECK(evaluate_here(&other) == score, "transform %d changed the eval: %s", transform, tps);
+    }
+    if (b->halfkomi == 0) {
+        board_transformed(b, &other, 0, true);
+        CHECK(evaluate_here(&other) == score, "swapping colours changed the eval: %s", tps);
+    }
+}
+
 /* Mostly spreads once there are any, or the stacks that make the rules hard never form. */
 static Move pick_move(const Move *list, int count) {
     if (rng() % 4) {
@@ -181,6 +239,9 @@ static void random_games(int size, int games, int halfkomi) {
             check_consistent(&board);
             check_tps_round_trip(&board);
             check_moves(&board);
+            if (ply >= 2) {
+                check_eval(&board);
+            }
             const int count = movegen_all(&board, list);
             board_make(&board, pick_move(list, count), &undo);
             if (board_outcome_after(&board, &undo) != ONGOING) {

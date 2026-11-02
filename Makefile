@@ -12,6 +12,7 @@
 #    make check           perft + selftest + bench, the gate for any board change
 #    make perftdiff       fuzz the engine against tools/takref.py, the slow oracle
 #    make speed           race move generation against external/engines
+#    make datacheck       training data: read by takref, and the same twice
 #    make format          apply .clang-format
 #    make clean
 #
@@ -85,7 +86,7 @@ ifneq ($(FLAGS_NOW),$(FLAGS_OLD))
     $(shell echo '$(FLAGS_NOW)' > .buildflags)
 endif
 
-.PHONY: all debug bench perft selftest check perftdiff speed format clean
+.PHONY: all debug bench perft selftest check perftdiff speed datacheck format clean
 
 all: $(BIN)
 
@@ -112,6 +113,14 @@ perftdiff: $(BIN)
 
 speed: $(BIN)
 	python tools/speedcmp.py --engine ./$(BIN)
+
+datacheck: $(BIN)
+	rm -f external/data/check-*.ydg
+	./$(BIN) datagen external/data/check-a.ydg 100 7 2000
+	./$(BIN) datagen external/data/check-b.ydg 100 7 2000
+	python tools/datacheck.py external/data/check-a.ydg --check-every 1 \
+		--same-as external/data/check-b.ydg
+	rm -f external/data/check-*.ydg
 
 format:
 	clang-format -i src/*.c src/*.h src/test/*.c src/test/*.h
