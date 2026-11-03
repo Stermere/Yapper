@@ -7,7 +7,9 @@ Replays each game through tools/takref.py and compares the two sides by how they
 what they do with their stones, and what stands on the board at fixed plies. These are symptoms
 to read, not targets: only an SPRT says a change is good.
 
-Scores in PTN comments read from white's side, as racetrack writes them.
+Scores in PTN comments read from white's side, as racetrack writes them. racetrack drops mate
+scores, so a search that proves the result leaves the score of an iteration before the proof,
+shallow and in no measurable time. Those are skipped.
 
 Stdlib only.
 """
@@ -24,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import takref
 
 RESULTS = ("R-0", "0-R", "F-0", "0-F", "1/2-1/2", "1-0", "0-1")
-SCORE_RE = re.compile(r"\{([+-]?\d+\.\d+)/(\d+)")
+SCORE_RE = re.compile(r"\{([+-]?\d+\.\d+)/(\d+)(?:\s+(\d+\.\d+)s)?")
 SNAPSHOTS = (16, 30, 44, 60, 80)
 COLUMNS = ("flats", "walls", "caps", "tall", "friends", "enemies", "biggest", "reserve")
 
@@ -115,7 +117,8 @@ def main() -> int:
                 caps_seen.add(who)
                 first_cap[who].append(game.ply)
             match = SCORE_RE.match(comment or "")
-            if match and who == "us":
+            proven = match and (int(match.group(2)) < 3 or match.group(3) == "0.00")
+            if match and who == "us" and not proven:
                 value = float(match.group(1))
                 our_scores.append(value if our_color == takref.WHITE else -value)
             game.play(move)

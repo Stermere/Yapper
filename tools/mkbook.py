@@ -2,6 +2,7 @@
 mkbook.py - build an opening book of four-ply positions the engine sees as typical.
 
     python tools/mkbook.py --size 6 --halfkomi 4 --out tests/books/6s_4ply.txt
+    python tools/mkbook.py --size 3 --plies 2 --out tests/books/3s_2ply.txt
 
 An opening is only fair if it does not hand one side the game, and match.py plays each one
 with both colours, so what is left of any bias cancels. The filter is the engine's own
@@ -13,6 +14,7 @@ Stdlib only.
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import random
 import sys
@@ -43,6 +45,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--engine", default=default_engine)
     parser.add_argument("--size", type=int, default=6)
+    parser.add_argument("--plies", type=int, default=4)
     parser.add_argument("--halfkomi", type=int, default=4)
     parser.add_argument("--count", type=int, default=1000)
     parser.add_argument("--depth", type=int, default=6)
@@ -57,9 +60,12 @@ def main() -> int:
     engine.send(f"teinewgame {args.size}")
 
     squares = [takref.square_name(r, f) for r in range(args.size) for f in range(args.size)]
+    # A small board has fewer openings than were asked for; then every one of them is kept.
+    wanted = min(args.count * args.sample, math.perm(len(squares), args.plies))
+    count = min(args.count, wanted)
     scored: dict[str, int] = {}
-    while len(scored) < args.count * args.sample:
-        opening = " ".join(rng.sample(squares, 4))
+    while len(scored) < wanted:
+        opening = " ".join(rng.sample(squares, args.plies))
         if opening not in scored:
             scored[opening] = search_score(engine, opening, args.depth)
     engine.close()
@@ -67,7 +73,7 @@ def main() -> int:
     # The engine's opinion of an even position drifts with komi and with the evaluation, so
     # a fixed window around zero can reject nearly everything. The median follows it.
     median = sorted(scored.values())[len(scored) // 2]
-    even = sorted(scored, key=lambda opening: abs(scored[opening] - median))[:args.count]
+    even = sorted(scored, key=lambda opening: abs(scored[opening] - median))[:count]
     rng.shuffle(even)
     book = {opening: None for opening in even}
     spread = [scored[opening] for opening in even]

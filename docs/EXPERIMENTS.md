@@ -624,7 +624,23 @@ never built again, so 45% of evaluations rebuilt from scratch. Fixed, with bench
 E27 again at 2+0.02: INCONCLUSIVE at the cap, 2000 games, +1003 -843 =154, **+27.9 +/- 14.3**, LLR
 +2.38, pairs [165, 66, 454, 74, 241]. Its interval is above zero, but it did not pass.
 
-E29 is left to the data work on master, so these do not collide.
+## E29: generation 7, a million games from the network
+
+1,000,000 games from v0 with E32's fix, at 5000 nodes a move on 15 jobs, seed 7000: 86.7M
+positions, 4.18 bytes each, 362.7 MB, in 5.75 hours. 48.3 games/s against gen 6's 49.6, so a
+network teacher costs next to nothing at this depth. takref replayed 5000 games with no failures.
+
+| | Gen 6 | Gen 7 |
+|---|---|---|
+| Games | 100,000 | 1,000,000 |
+| Ended by road | 24.8% | **16.7%**, white 10.0%, black 6.7% |
+| Ended by flats | | 75.7%, white 35.2%, black 40.5% |
+| Draws | | 7.6% |
+| White scored | | 49.0% |
+| Median plies | | 88, longest 181 |
+
+Roads fell again, as from gen 5 to gen 6. Gen 7 is 77% of the positions in gens 1 to 7, so a fit
+on all of them sees fewer roads land than v0's did.
 
 ## E30: what a network would cost, measured before building one
 
@@ -723,6 +739,114 @@ With the fix, against hce6 at 2+0.02: **INCONCLUSIVE** at the cap, 2000 games, +
 **+27.9 +/- 14.3**, LLR +2.38 against a bound of +2.94, pairs [165, 66, 454, 74, 241]. The interval
 is above zero, as gen 5's was in E17 when it was kept. v0 is the teacher for gen 7.
 
+## E33: v1, the same network fitted with gen 7
+
+v0's settings unchanged, on gens 1 to 7: 91.1M positions, 6.07M held out by game, lambda 0.5, 15
+epochs, in 22 minutes. Held out against results, v1 reached 0.4654 to the hand-written
+evaluation's 0.4782; the held-out games now include gen 7, so these do not compare with E32's. The
+engine reads 0.49 hundredths from its fit on average and 1 at worst. Only `src/net6.h` differs
+from 29c3c14. Bench 10745633, and `make release` the same.
+
+Against v0 as committed in 29c3c14, on 6x6 with 2 komi:
+
+| Conditions | Result |
+|---|---|
+| 100,000 nodes a move each | **PASSED**, 424 games, +362 -44 =18, **+338.0 +/- 47.4**, pairs [2, 1, 39, 17, 153] |
+| 2+0.02 | **PASSED**, 424 games, +364 -37 =23, **+355.5 +/- 48.5**, pairs [2, 0, 34, 21, 155] |
+| Tiltak at 5+0.05, 800 games | +724 -49 =27, **+428 [+384, +471]**, against hce6's +146 in E27 |
+| syntaks at 5+0.05, 100 games | +1 -99, as in E26 |
+
+No game in either SPRT was lost on time. The only change is more data, from a better teacher, and
+it is the largest gain of any experiment here. Tiltak, which shares nothing with the self-play,
+moved by about as much.
+
+Gen 7's fewer roads did not cost roads. v1 won 583 games against Tiltak by road and lost 1 that
+way, where hce6 lost 9 of its 96. Of the 49 losses, 48 were on flats, and in 34 of the 49 v1 had
+been above +1 in the last third of the game. Against syntaks, 30 losses were by road, 28 of them by
+spread, and 69 on flats, and v1 was above +1 late in 9 of 99.
+
+These first read 36 and 12. racetrack drops mate scores, so a search that proved the result left
+the score of an iteration before the proof: every v1 score recorded in 0.00s at depth 5 or less
+fell within 7 plies of the end. `tools/gamestats.py` now skips scores below depth 3 or in no
+measurable time.
+
+On E19's 120 positions to depth 8, three runs each, alternating:
+
+| | v0 | v1 |
+|---|---|---|
+| Cycles per evaluation | 294 | 290 |
+| Nodes to depth 8 | 18.90M | 16.07M |
+| Seconds to depth 8 | 4.39 | 3.60 |
+
+One v1 run of four read 4.27 seconds with the same nodes; the others agreed within 0.3%. The
+evaluation costs what v0's did, but the tree to the same depth is 15% smaller, close to hce6's
+15.72M in E28. The larger tree in E28 belonged to v0's judgement, not to having a network.
+
+## E34: generation 8, and v2
+
+1,000,007 games from v1 at 5000 nodes a move on 15 jobs. Seeds 8000-8014 were stopped at 636,257
+games when the plan changed, then 363,750 more came from seeds 8015-8029, so no game repeats.
+88.7M positions, 4.18 bytes each, and takref replayed 5,001 games with no failures. 48.7 games/s,
+and 45.1 for the second part, which shared the machine with a stray fit; datagen counts nodes, so
+the games are the same either way.
+
+| | Gen 7 | Gen 8 |
+|---|---|---|
+| Ended by road | 16.7% | 16.8%, white 10.7%, black 6.1% |
+| Ended by flats | 75.7% | 73.8%, white 33.1%, black 40.7% |
+| Draws | 7.6% | 9.3% |
+| White scored | 49.0% | 48.5% |
+| Median plies | 88 | 91 |
+
+v2 is v1's network fitted on gens 1 to 8: 157.7M positions, 10.5M held out by game, lambda 0.5,
+15 epochs. Held out against results it reached 0.4658 to the hand-written evaluation's 0.4840; the
+held-out games now include gen 8, so these do not compare with E33's. The engine reads 0.50
+hundredths from its fit on average and 1 at worst. Bench 11191478.
+
+| Conditions | Result |
+|---|---|
+| Against v1, 100,000 nodes a move | **PASSED**, 662 games, +383 -192 =87, **+103.2 +/- 24.9**, pairs [25, 23, 126, 50, 107] |
+| Against v1, 2+0.02 | **PASSED**, 576 games, +355 -139 =82, **+137.0 +/- 28.4**, pairs [19, 20, 83, 58, 108] |
+| syntaks at 5+0.05, 400 games | +9 -381 =10, **-576 [-665, -481]** |
+
+The first match against syntaks long enough to read: E26 and E33 lost 99 of 100, which says only
+that the gap is wider than about 450. The aim for the day was -300 by 18:00, and it was missed.
+Of the 381 losses, 110 were by road, 106 of them by spread, and 271 on flats by a median of 2
+flats with komi. v2 was above +1 late in 61 of them.
+
+On one position at 2 seconds on one thread, syntaks searched 824k nodes a second and reached depth
+18 at 1.65M nodes, where v1 searched 3.0M a second and reached depth 13 at 3.6M. The gap is in how
+selective the search is, not in speed.
+
+## E35: each side's stones left, as an input to the network, a failed test
+
+v1 lost 48 of its 49 games against Tiltak on flats, E33. At its last score above +1 searched to
+depth 3 or more, it was usually behind on the board, in 21 of 33 by 2 to 14 half flats with komi.
+Tiltak usually had fewer stones left, v1 had 5 to 11 of its own stones buried under its tops
+against Tiltak's 1 to 3, and all 47 games that ended with empty squares ended with Tiltak placing
+its last stone. v1 counted buried stones as flats to come when the other side could end the game
+first. Its hidden layer never saw the reserves: they reached the output only through the bucket,
+which takes the smaller reserve and so cannot say who is short, and through one linear term.
+
+v3, 75fb3a9 on the `nnue` branch, gives the hidden layer each side's stones left, 0 to 14 exactly
+and 15 or more as one, the way shogi networks see pieces in hand. v1 with its hand weights at zero
+benches 10745633, unchanged. Selftest passes 586,084,324 checks, and two planted bugs, a carry that
+skipped the hands and black's hand added rather than subtracted, failed it 137k and 102k times.
+
+Fitted beside v2 on the same data and settings: 0.4654 against results to v2's 0.4658, and 0.4979
+against the targets to 0.4984. The engine reads 0.49 hundredths from its fit on average and 1 at
+worst. Bench 9877540. Against v2:
+
+| Conditions | Result |
+|---|---|
+| 100,000 nodes a move | INCONCLUSIVE at the cap, 2000 games, +771 -917 =312, **-25.4 +/- 13.9**, pairs [204, 151, 375, 127, 143] |
+| 2+0.02 | **FAILED**, 1766 games, +670 -835 =261, **-32.6 +/- 15.0**, pairs [196, 131, 321, 112, 123] |
+| syntaks at 5+0.05, 400 games | +14 -383 =3, -557 [-648, -464], against v2's -576 |
+
+It judged its lost games better, above +1 late in 31 of 383 losses to syntaks against v2's 61 of
+381, and played worse. One of its 14 wins against syntaks was syntaks losing on time while v3 read
+-19. Not kept: v2 is the network.
+
 ## Mistakes worth not repeating
 
 - **200 games is a sketch.** A match against Tiltak read +159 and was called the target reached.
@@ -730,6 +854,8 @@ is above zero, as gen 5's was in E17 when it was kept. v0 is the teacher for gen
   enough to report as a result.
 - **One timing run proves nothing.** The same binary read 3.90 and 3.25 seconds minutes apart.
   Repeat a timing, alternating the builds, before reading anything into it.
+- **A score in racetrack's PTN is not always the search's last.** It drops mate scores, so a proven
+  loss can be recorded as +2.56 from depth 1. Read the depth and time beside every score.
 - **Bench is not a profile of a game.** Its 13 positions put the road check at under half its real
   share, and only cycle counts on positions from real games showed what the search spends.
 - **A low rate of use does not make a move safe to drop.** Moves past the 32nd cut less than 0.1%
