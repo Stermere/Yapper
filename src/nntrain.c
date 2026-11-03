@@ -1,7 +1,12 @@
 /* nntrain.c - fits a network to self-play games. It lives in the binary for the reason tune.c
  * does, and it reads a position the way play does, through nn_feature() and eval_net_inputs(),
  * so the two cannot drift apart. It trains in floating point with each filter stored once, as
- * the engine is given it, and writes the fixed point the engine runs. */
+ * the engine is given it, and writes the fixed point the engine runs.
+ *
+ * A GPU, if the machine has one, does the passes and the steps. Its kernels are forward(),
+ * backward() and update_job() again, and must stay them: the CPU still reads the positions,
+ * scores the held-out ones and checks the engine against the fit, so a kernel that drifted
+ * would show there. */
 #include "nntrain.h"
 
 #include <math.h>
@@ -13,12 +18,14 @@
 #include "board.h"
 #include "datagen.h"
 #include "eval.h"
+#include "gpu.h"
 #include "nn.h"
 #include "search.h"
 #include "thread.h"
 
 #define NT_MAX_THREADS 64
 #define NT_BATCH       16384
+#define NT_GROUP       16 /* batches the GPU is given at once, so threads start once a group */
 #define NT_HOLD_OUT    16 /* one game in this many is kept out of the fit, as in tune.c */
 #define NT_RATE        0.002
 #define NT_RATE_END    0.02 /* of NT_RATE, reached on a cosine by the last batch */
@@ -326,10 +333,11 @@ static void update_job(void *argument) {
     }
 }
 
-static void run_jobs(NTJob *jobs, int threads, ThreadEntry entry) {
+/* `jobs` is an array of `threads` jobs of `size` bytes each. */
+static void run_jobs(void *jobs, size_t size, int threads, ThreadEntry entry) {
     ThreadHandle handles[NT_MAX_THREADS];
     for (int t = 0; t < threads; t++) {
-        if (!thread_create(&handles[t], entry, &jobs[t])) {
+        if (!thread_create(&handles[t], entry, (char *)jobs + size * (size_t)t)) {
             printf("cannot start a thread\n");
             exit(1);
         }
@@ -350,7 +358,7 @@ static void score_set(const NTModel *model, const NTSet *set, double lambda, int
                           .to     = set->count * (u64)(t + 1) / (u64)threads,
                           .lambda = lambda};
     }
-    run_jobs(jobs, threads, pass_job);
+    run_jobs(jobs, sizeof(NTJob), threads, pass_job);
     *loss = *result_loss = 0.0;
     for (int t = 0; t < threads; t++) {
         *loss += jobs[t].loss;
@@ -487,8 +495,377 @@ static void check_engine(const NTModel *model, const NTLoader *loader) {
            loader->check_count, total / (loader->check_count ? loader->check_count : 1), worst);
 }
 
+/* Each epoch sees the positions in a new order, the same one on every run and every device. */
+static void shuffle_order(u32 *order, u64 count, u64 *state) {
+    for (u64 i = count - 1; i > 0; i--) {
+        *state      = *state * 0xD1342543DE82EF95ULL + 1;
+        const u64 j = (*state >> 16) % (i + 1);
+        const u32 t = order[i];
+        order[i]    = order[j];
+        order[j]    = t;
+    }
+}
+
+static double rate_at(u64 step, u64 steps) {
+    const double progress = (double)step / (double)steps;
+    return NT_RATE * (NT_RATE_END + (1.0 - NT_RATE_END) * 0.5 * (1.0 + cos(NT_PI * progress)));
+}
+
+static void report_epoch(const NTModel *model, const NTSet *held, double lambda, int threads,
+                         int epoch, double fit) {
+    double held_loss, held_result;
+    score_set(model, held, lambda, threads, &held_loss, &held_result);
+    printf("epoch %3d: fit %.6f, held out %.6f, against results %.6f\n", epoch, fit, held_loss,
+           held_result);
+    fflush(stdout);
+}
+
+static bool train_cpu(NTModel *model, const NTSet *train, const NTSet *held, double lambda,
+                      int epochs, int threads, u32 *order) {
+    float *gradients[NT_MAX_THREADS];
+    for (int t = 0; t < threads; t++) {
+        gradients[t] = calloc(model->count, sizeof(float));
+        if (!gradients[t]) {
+            return false;
+        }
+    }
+    const u64 batches = (train->count + NT_BATCH - 1) / NT_BATCH;
+    const u64 steps   = batches * (u64)epochs;
+    u64 step          = 0;
+    u64 shuffle       = 0x853C49E6748FEA9BULL;
+    NTJob jobs[NT_MAX_THREADS];
+    for (int epoch = 1; epoch <= epochs; epoch++) {
+        shuffle_order(order, train->count, &shuffle);
+        double loss = 0.0;
+        for (u64 batch = 0; batch < batches; batch++, step++) {
+            const u64 from = batch * NT_BATCH;
+            const u64 to   = from + NT_BATCH < train->count ? from + NT_BATCH : train->count;
+            for (int t = 0; t < threads; t++) {
+                jobs[t] = (NTJob){.model    = model,
+                                  .set      = train,
+                                  .order    = order,
+                                  .from     = from + (to - from) * (u64)t / (u64)threads,
+                                  .to       = from + (to - from) * (u64)(t + 1) / (u64)threads,
+                                  .lambda   = lambda,
+                                  .gradient = gradients[t],
+                                  .scale    = 1.0f / (float)(to - from)};
+            }
+            run_jobs(jobs, sizeof(NTJob), threads, pass_job);
+            for (int t = 0; t < threads; t++) {
+                loss += jobs[t].loss;
+            }
+            for (int t = 0; t < threads; t++) {
+                jobs[t] = (NTJob){.model          = model,
+                                  .from           = model->count * (u64)t / (u64)threads,
+                                  .to             = model->count * (u64)(t + 1) / (u64)threads,
+                                  .gradients      = gradients,
+                                  .gradient_count = threads,
+                                  .p              = model->p,
+                                  .m              = model->m,
+                                  .v              = model->v,
+                                  .q              = model->q,
+                                  .rate           = rate_at(step, steps),
+                                  .kept           = 1.0 - pow(NT_BETA1, (double)(step + 1)),
+                                  .seen           = 1.0 - pow(NT_BETA2, (double)(step + 1))};
+            }
+            run_jobs(jobs, sizeof(NTJob), threads, update_job);
+        }
+        report_epoch(model, held, lambda, threads, epoch, loss / (double)train->count);
+    }
+    return true;
+}
+
+/* The kernels. A block is one position and a thread one hidden unit, so a thread's sum over the
+ * stacks runs in the order forward() runs it; the output is then added up by one warp, a filter a
+ * lane, in a fixed tree. Gradients are added in fixed point, where the order of the adds cannot
+ * change the total, so a fit is the same on every run. A filter's are 32-bit, at 2^28: a batch
+ * moves one by at most 4, and 64-bit adds cost the card four times as much. The rest, which a
+ * batch can move by 8, stay 64-bit at 2^48. */
+static const char KernelBody[] =
+    "#define F NN_FILTERS\n"
+    "#define G NN_ORIENTATIONS\n"
+    "#define FIXED 281474976710656.0\n"
+    "#define FIXED32 268435456.0f\n"
+    "struct Packed {\n"
+    "    unsigned char count, stm, bucket, unused;\n"
+    "    signed char lead, reserve, komi, spare;\n"
+    "    float target;\n"
+    "};\n"
+    "__device__ static unsigned long long fixed_of(float x) {\n"
+    "    return (unsigned long long)__double2ll_rn((double)x * FIXED);\n"
+    "}\n"
+    "__device__ static int fixed32_of(float x) { return __float2int_rn(x * FIXED32); }\n"
+    "__device__ static int row_of(const int *image, int g, unsigned short feature) {\n"
+    "    const int code = feature & 0x7FFF;\n"
+    "    return image[g * IMAGE_STRIDE + code / NN_TOKENS] * NN_TOKENS + code % NN_TOKENS;\n"
+    "}\n"
+    "extern \"C\" __global__ void train_step(const Packed *packed, const unsigned short *stacks,\n"
+    "        const float *q, const int *image, int *grad_filters, unsigned long long *grad,\n"
+    "        unsigned long long *loss, int squares, int bias_at, int output_at, int skip_at,\n"
+    "        float scale) {\n"
+    "    __shared__ unsigned short feature[MAX_SQUARES];\n"
+    "    __shared__ float squared[G][F];\n"
+    "    __shared__ float delta[G][F];\n"
+    "    __shared__ float shared_slope;\n"
+    "    const Packed s = packed[blockIdx.x];\n"
+    "    const int g = threadIdx.x / F, f = threadIdx.x % F;\n"
+    "    if (threadIdx.x < s.count) {\n"
+    "        feature[threadIdx.x] = stacks[(size_t)blockIdx.x * squares + threadIdx.x];\n"
+    "    }\n"
+    "    __syncthreads();\n"
+    "    float acc = 0.0f;\n"
+    "    for (int i = 0; i < s.count; i++) {\n"
+    "        const float sign = feature[i] >> 15 ? -1.0f : 1.0f;\n"
+    "        acc += sign * q[row_of(image, g, feature[i]) * F + f];\n"
+    "    }\n"
+    "    const float side = s.stm ? -1.0f : 1.0f;\n"
+    "    const float pre = side * acc + q[bias_at + f];\n"
+    "    const float x = pre < 0.0f ? 0.0f : pre > 1.0f ? 1.0f : pre;\n"
+    "    squared[g][f] = x * x;\n"
+    "    __syncthreads();\n"
+    "    if (g == 0) {\n"
+    "        float sum = 0.0f;\n"
+    "        for (int h = 0; h < G; h++) sum += squared[h][f];\n"
+    "        float out = q[output_at + s.bucket * F + f] * sum;\n"
+    "        for (int width = F / 2; width > 0; width /= 2) {\n"
+    "            out += __shfl_down_sync(0xFFFFFFFFu, out, width);\n"
+    "        }\n"
+    "        if (f == 0) {\n"
+    "            const float *skip = q + skip_at + s.bucket * 4;\n"
+    "            out += skip[0] * (float)s.lead / LEAD_UNIT +\n"
+    "                   skip[1] * (float)s.reserve / RESERVE_UNIT +\n"
+    "                   skip[2] * (float)s.komi / KOMI_UNIT + skip[3];\n"
+    "            const float p = 1.0f / (1.0f + expf(-out));\n"
+    "            const float slope = (p - s.target) * scale;\n"
+    "            shared_slope = slope;\n"
+    "            const float c = p < 1e-7f ? 1e-7f : p > 1.0f - 1e-7f ? 1.0f - 1e-7f : p;\n"
+    "            const float t = s.target;\n"
+    "            const float l = -(t * logf(c) + (1.0f - t) * logf(1.0f - c));\n"
+    "            atomicAdd(loss, (unsigned long long)__float2ll_rn(l * 4294967296.0f));\n"
+    "        unsigned long long *gskip = grad + skip_at + s.bucket * 4;\n"
+    "        atomicAdd(gskip + 0, fixed_of(slope * (float)s.lead / LEAD_UNIT));\n"
+    "        atomicAdd(gskip + 1, fixed_of(slope * (float)s.reserve / RESERVE_UNIT));\n"
+    "        atomicAdd(gskip + 2, fixed_of(slope * (float)s.komi / KOMI_UNIT));\n"
+    "        atomicAdd(gskip + 3, fixed_of(slope));\n"
+    "        }\n"
+    "    }\n"
+    "    __syncthreads();\n"
+    "    const float slope = shared_slope;\n"
+    "    const float wout = q[output_at + s.bucket * F + f];\n"
+    "    const float d = pre > 0.0f && pre < 1.0f ? slope * wout * 2.0f * pre : 0.0f;\n"
+    "    delta[g][f] = d;\n"
+    "    __syncthreads();\n"
+    "    if (g == 0) {\n"
+    "        float sum = 0.0f, bias = 0.0f;\n"
+    "        for (int h = 0; h < G; h++) {\n"
+    "            sum += squared[h][f];\n"
+    "            bias += delta[h][f];\n"
+    "        }\n"
+    "        atomicAdd(grad + output_at + s.bucket * F + f, fixed_of(slope * sum));\n"
+    "        atomicAdd(grad + bias_at + f, fixed_of(bias));\n"
+    "    }\n"
+    "    const float da = side * d;\n"
+    "    if (da != 0.0f) {\n"
+    "        for (int i = 0; i < s.count; i++) {\n"
+    "            const float sign = feature[i] >> 15 ? -1.0f : 1.0f;\n"
+    "            atomicAdd(grad_filters + row_of(image, g, feature[i]) * F + f, fixed32_of(sign * "
+    "da));\n"
+    "        }\n"
+    "    }\n"
+    "}\n"
+    "extern \"C\" __global__ void adam(float *p, float *m, float *v, float *q,\n"
+    "        int *grad_filters, unsigned long long *grad, int count, int bias_at, int output_at,\n"
+    "        int skip_at, double rate, double kept, double seen) {\n"
+    "    const int i = blockIdx.x * blockDim.x + threadIdx.x;\n"
+    "    if (i >= count) return;\n"
+    "    float g;\n"
+    "    if (i < bias_at) {\n"
+    "        g = (float)((double)grad_filters[i] / (double)FIXED32);\n"
+    "        grad_filters[i] = 0;\n"
+    "    } else {\n"
+    "        g = (float)((double)(long long)grad[i] / FIXED);\n"
+    "        grad[i] = 0;\n"
+    "    }\n"
+    "    m[i] = (float)(BETA1 * m[i] + (1.0 - BETA1) * g);\n"
+    "    v[i] = (float)(BETA2 * v[i] + (1.0 - BETA2) * g * g);\n"
+    "    const float w = p[i] - (float)(rate * (m[i] / kept) / (sqrt(v[i] / seen) + 1e-8));\n"
+    "    const float limit = i < bias_at ? FILTER_LIMIT : i < output_at ? BIAS_LIMIT\n"
+    "                      : i < skip_at ? OUTPUT_LIMIT : 1e9f;\n"
+    "    p[i] = w > limit ? limit : w < -limit ? -limit : w;\n"
+    "    const int k = (i - skip_at) % 4;\n"
+    "    const double skip_unit = k == 0 ? LEAD_UNIT : k == 1 ? RESERVE_UNIT\n"
+    "                           : k == 2 ? KOMI_UNIT : 1.0f;\n"
+    "    const double unit = i < output_at ? QA : i < skip_at ? QB : SCALE * 64.0 / skip_unit;\n"
+    "    q[i] = (float)((double)llround((double)p[i] * unit) / unit);\n"
+    "}\n";
+
+/* The kernels with this build's constants, so the two sides cannot disagree on one. */
+static const char *kernel_source(void) {
+    static char source[sizeof(KernelBody) + 1024];
+    snprintf(source, sizeof(source),
+             "#define NN_TOKENS %d\n#define NN_FILTERS %d\n#define NN_ORIENTATIONS %d\n"
+             "#define IMAGE_STRIDE %d\n#define MAX_SQUARES %d\n"
+             "#define QA %.17g\n#define QB %.17g\n#define SCALE %.17g\n"
+             "#define LEAD_UNIT ((float)%.9g)\n#define RESERVE_UNIT ((float)%.9g)\n"
+             "#define KOMI_UNIT ((float)%.9g)\n#define BETA1 %.17g\n#define BETA2 %.17g\n"
+             "#define FILTER_LIMIT ((float)%.9g)\n#define BIAS_LIMIT ((float)%.9g)\n"
+             "#define OUTPUT_LIMIT ((float)%.9g)\n%s",
+             NN_TOKENS, NN_FILTERS, NN_ORIENTATIONS, MAX_SIZE * MAX_SIZE, SQUARE_COUNT,
+             (double)NN_QA, (double)NN_QB, (double)NN_SCALE, (double)NT_LEAD_UNIT,
+             (double)NT_RESERVE_UNIT, (double)NT_KOMI_UNIT, NT_BETA1, NT_BETA2,
+             (double)NT_FILTER_LIMIT, (double)NT_BIAS_LIMIT, (double)NT_OUTPUT_LIMIT, KernelBody);
+    return source;
+}
+
+/* One position as the kernels read it. Its stacks follow in a slot of one entry per square. */
+typedef struct NTPacked {
+    u8 count, stm, bucket, unused;
+    i8 lead, reserve, komi, spare;
+    float target;
+} NTPacked;
+
+_Static_assert(sizeof(NTPacked) == 12, "the kernels read this layout");
+
+typedef struct NTPackJob {
+    const NTSet *set;
+    const u32 *order;
+    u64 from, to, first;
+    double lambda;
+    u64 slot;
+    NTPacked *packed;
+    u16 *stacks;
+} NTPackJob;
+
+static void pack_job(void *argument) {
+    const NTPackJob *job = argument;
+    for (u64 i = job->from; i < job->to; i++) {
+        const NTSample *s = &job->set->samples[job->order[i]];
+        const u64 at      = i - job->first;
+        job->packed[at]   = (NTPacked){.count   = s->count,
+                                       .stm     = s->stm,
+                                       .bucket  = s->bucket,
+                                       .lead    = s->lead,
+                                       .reserve = s->reserve,
+                                       .komi    = s->komi,
+                                       .target  = target_of(s, job->lambda)};
+        memcpy(job->stacks + at * job->slot, job->set->features + s->first, s->count * sizeof(u16));
+    }
+}
+
+/* Positions `from` to `to` of `order`, laid out for the kernels. */
+static void pack_batch(NTPackJob *jobs, int threads, const NTSet *set, const u32 *order, u64 from,
+                       u64 to, double lambda, u64 slot, NTPacked *packed, u16 *stacks) {
+    for (int t = 0; t < threads; t++) {
+        jobs[t] = (NTPackJob){.set    = set,
+                              .order  = order,
+                              .from   = from + (to - from) * (u64)t / (u64)threads,
+                              .to     = from + (to - from) * (u64)(t + 1) / (u64)threads,
+                              .first  = from,
+                              .lambda = lambda,
+                              .slot   = slot,
+                              .packed = packed,
+                              .stacks = stacks};
+    }
+    run_jobs(jobs, sizeof(NTPackJob), threads, pack_job);
+}
+
+/* The CPU lays out each batch while the card works through the one before it. */
+static bool train_gpu(NTModel *model, const NTSet *train, const NTSet *held, double lambda,
+                      int epochs, int threads, u32 *order) {
+    void *step_kernel = gpu_function("train_step");
+    void *adam_kernel = gpu_function("adam");
+    if (!step_kernel || !adam_kernel) {
+        return false;
+    }
+    const u64 slot      = (u64)model->squares;
+    const u64 group     = (u64)NT_GROUP * NT_BATCH;
+    const size_t floats = model->count * sizeof(float);
+    GpuPtr p, m, v, q, grad_filters, grad, image, loss, packed, stacks;
+    if (!gpu_alloc(&p, floats) || !gpu_alloc(&m, floats) || !gpu_alloc(&v, floats) ||
+        !gpu_alloc(&q, floats) || !gpu_alloc(&grad_filters, model->bias_at * sizeof(i32)) ||
+        !gpu_alloc(&grad, model->count * sizeof(u64)) || !gpu_alloc(&image, sizeof(model->image)) ||
+        !gpu_alloc(&loss, sizeof(u64)) || !gpu_alloc(&packed, group * sizeof(NTPacked)) ||
+        !gpu_alloc(&stacks, group * slot * sizeof(u16)) || !gpu_upload(p, model->p, floats) ||
+        !gpu_upload(q, model->q, floats) || !gpu_zero(m, floats) || !gpu_zero(v, floats) ||
+        !gpu_zero(grad_filters, model->bias_at * sizeof(i32)) ||
+        !gpu_zero(grad, model->count * sizeof(u64)) ||
+        !gpu_upload(image, model->image, sizeof(model->image))) {
+        return false;
+    }
+    NTPacked *host_packed[2];
+    u16 *host_stacks[2];
+    for (int b = 0; b < 2; b++) {
+        host_packed[b] = gpu_host_alloc(group * sizeof(NTPacked));
+        host_stacks[b] = gpu_host_alloc(group * slot * sizeof(u16));
+        if (!host_packed[b] || !host_stacks[b]) {
+            return false;
+        }
+    }
+
+    int count = (int)model->count, squares = model->squares;
+    int bias_at = (int)model->bias_at, output_at = (int)model->output_at;
+    int skip_at       = (int)model->skip_at;
+    const u64 total   = train->count;
+    const u64 batches = (total + NT_BATCH - 1) / NT_BATCH;
+    const u64 groups  = (total + group - 1) / group;
+    const u64 steps   = batches * (u64)epochs;
+    u64 step          = 0;
+    u64 shuffle       = 0x853C49E6748FEA9BULL;
+    NTPackJob jobs[NT_MAX_THREADS];
+    for (int epoch = 1; epoch <= epochs; epoch++) {
+        shuffle_order(order, total, &shuffle);
+        if (!gpu_zero(loss, sizeof(u64))) {
+            return false;
+        }
+        pack_batch(jobs, threads, train, order, 0, group < total ? group : total, lambda, slot,
+                   host_packed[0], host_stacks[0]);
+        for (u64 g = 0; g < groups; g++) {
+            const u64 from   = g * group;
+            const u64 to     = from + group < total ? from + group : total;
+            const int buffer = (int)(g & 1);
+            if (!gpu_upload_async(packed, host_packed[buffer], (to - from) * sizeof(NTPacked)) ||
+                !gpu_upload_async(stacks, host_stacks[buffer], (to - from) * slot * sizeof(u16))) {
+                return false;
+            }
+            for (u64 at = from; at < to; at += NT_BATCH, step++) {
+                const unsigned n       = (unsigned)(at + NT_BATCH < to ? NT_BATCH : to - at);
+                GpuPtr batch_packed    = packed + (at - from) * sizeof(NTPacked);
+                GpuPtr batch_stacks    = stacks + (at - from) * slot * sizeof(u16);
+                float scale            = 1.0f / (float)n;
+                double rate            = rate_at(step, steps);
+                double kept            = 1.0 - pow(NT_BETA1, (double)(step + 1));
+                double seen            = 1.0 - pow(NT_BETA2, (double)(step + 1));
+                void *step_arguments[] = {&batch_packed, &batch_stacks, &q,       &image,
+                                          &grad_filters, &grad,         &loss,    &squares,
+                                          &bias_at,      &output_at,    &skip_at, &scale};
+                void *adam_arguments[] = {&p,    &m,     &v,       &q,         &grad_filters,
+                                          &grad, &count, &bias_at, &output_at, &skip_at,
+                                          &rate, &kept,  &seen};
+                if (!gpu_launch(step_kernel, n, NN_HIDDEN, step_arguments) ||
+                    !gpu_launch(adam_kernel, (unsigned)(count + 255) / 256, 256, adam_arguments)) {
+                    return false;
+                }
+            }
+            if (g + 1 < groups) {
+                pack_batch(jobs, threads, train, order, to, to + group < total ? to + group : total,
+                           lambda, slot, host_packed[buffer ^ 1], host_stacks[buffer ^ 1]);
+            }
+            if (!gpu_wait()) {
+                return false;
+            }
+        }
+        u64 sum = 0;
+        if (!gpu_download(&sum, loss, sizeof(u64)) || !gpu_download(model->q, q, floats)) {
+            return false;
+        }
+        report_epoch(model, held, lambda, threads, epoch,
+                     (double)sum / 4294967296.0 / (double)total);
+    }
+    return gpu_download(model->p, p, floats) && gpu_download(model->q, q, floats);
+}
+
 int nntrain_run(int size, const char *out, int keep, double lambda, int epochs, int threads,
-                char **paths, int path_count) {
+                bool gpu, char **paths, int path_count) {
     if (size < MIN_SIZE || size > MAX_SIZE || keep < 1 || epochs < 1 || threads < 1 ||
         threads > NT_MAX_THREADS) {
         printf("bad arguments\n");
@@ -533,14 +910,6 @@ int nntrain_run(int size, const char *out, int keep, double lambda, int epochs, 
         printf("out of memory\n");
         return 1;
     }
-    float *gradients[NT_MAX_THREADS];
-    for (int t = 0; t < threads; t++) {
-        gradients[t] = calloc(model.count, sizeof(float));
-        if (!gradients[t]) {
-            printf("out of memory\n");
-            return 1;
-        }
-    }
     u32 *order = malloc(train->count * sizeof(u32));
     if (!order) {
         printf("out of memory\n");
@@ -550,62 +919,19 @@ int nntrain_run(int size, const char *out, int keep, double lambda, int epochs, 
         order[i] = (u32)i;
     }
 
-    const u64 batches = (train->count + NT_BATCH - 1) / NT_BATCH;
-    const u64 steps   = batches * (u64)epochs;
-    u64 step          = 0;
-    u64 shuffle       = 0x853C49E6748FEA9BULL;
-    NTJob jobs[NT_MAX_THREADS];
-    for (int epoch = 1; epoch <= epochs; epoch++) {
-        for (u64 i = train->count - 1; i > 0; i--) {
-            shuffle     = shuffle * 0xD1342543DE82EF95ULL + 1;
-            const u64 j = (shuffle >> 16) % (i + 1);
-            const u32 t = order[i];
-            order[i]    = order[j];
-            order[j]    = t;
+    char why[4096] = "not asked for";
+    if (gpu && gpu_open(kernel_source(), why, sizeof(why))) {
+        printf("training on %s\n", gpu_name());
+        if (!train_gpu(&model, train, held, lambda, epochs, threads, order)) {
+            printf("%s\n", gpu_error());
+            return 1;
         }
-        double loss = 0.0;
-        for (u64 batch = 0; batch < batches; batch++, step++) {
-            const u64 from = batch * NT_BATCH;
-            const u64 to   = from + NT_BATCH < train->count ? from + NT_BATCH : train->count;
-            for (int t = 0; t < threads; t++) {
-                jobs[t] = (NTJob){.model    = &model,
-                                  .set      = train,
-                                  .order    = order,
-                                  .from     = from + (to - from) * (u64)t / (u64)threads,
-                                  .to       = from + (to - from) * (u64)(t + 1) / (u64)threads,
-                                  .lambda   = lambda,
-                                  .gradient = gradients[t],
-                                  .scale    = 1.0f / (float)(to - from)};
-            }
-            run_jobs(jobs, threads, pass_job);
-            for (int t = 0; t < threads; t++) {
-                loss += jobs[t].loss;
-            }
-
-            const double progress = (double)step / (double)steps;
-            const double rate =
-                NT_RATE * (NT_RATE_END + (1.0 - NT_RATE_END) * 0.5 * (1.0 + cos(NT_PI * progress)));
-            for (int t = 0; t < threads; t++) {
-                jobs[t] = (NTJob){.model          = &model,
-                                  .from           = model.count * (u64)t / (u64)threads,
-                                  .to             = model.count * (u64)(t + 1) / (u64)threads,
-                                  .gradients      = gradients,
-                                  .gradient_count = threads,
-                                  .p              = model.p,
-                                  .m              = model.m,
-                                  .v              = model.v,
-                                  .q              = model.q,
-                                  .rate           = rate,
-                                  .kept           = 1.0 - pow(NT_BETA1, (double)(step + 1)),
-                                  .seen           = 1.0 - pow(NT_BETA2, (double)(step + 1))};
-            }
-            run_jobs(jobs, threads, update_job);
+    } else {
+        printf("training on %d CPU threads, with no GPU: %s\n", threads, why);
+        if (!train_cpu(&model, train, held, lambda, epochs, threads, order)) {
+            printf("out of memory\n");
+            return 1;
         }
-        double held_loss, held_result;
-        score_set(&model, held, lambda, threads, &held_loss, &held_result);
-        printf("epoch %3d: fit %.6f, held out %.6f, against results %.6f\n", epoch,
-               loss / (double)train->count, held_loss, held_result);
-        fflush(stdout);
     }
 
     NTQuantised q;

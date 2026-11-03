@@ -121,6 +121,7 @@ def main() -> int:
     komi: Counter[int] = Counter()
     plies: list[int] = []
     random_plies: list[int] = []
+    deviations = 0
     white_score = 0.0
     bytes_total = 0
     games = checked = 0
@@ -134,6 +135,7 @@ def main() -> int:
             komi[game.halfkomi] += 1
             plies.append(len(game.moves))
             random_plies.append(game.random_plies)
+            deviations += sum(s == NO_SCORE for s in game.scores[game.random_plies:])
             white_score += {WHITE_ROAD: 1.0, WHITE_FLATS: 1.0, DRAW: 0.5}.get(game.outcome, 0.0)
             if games % args.check_every == 0:
                 checked += 1
@@ -151,6 +153,9 @@ def main() -> int:
     print(f"{games} games, {sum(plies)} positions, {bytes_total / sum(plies):.2f} bytes a position")
     print(f"plies: median {statistics.median(plies)}, longest {max(plies)}, "
           f"random {min(random_plies)}-{max(random_plies)}")
+    searched = sum(plies) - sum(random_plies)
+    print(f"deviations: {deviations}, one in {searched / deviations:.0f} searched plies"
+          if deviations else "deviations: none")
     print("outcomes: " + ", ".join(f"{names[k]} {100 * v / games:.1f}%"
                                    for k, v in sorted(outcomes.items())))
     print("endings: " + ", ".join(f"{ENDINGS[k]} {100 * v / games:.1f}%"

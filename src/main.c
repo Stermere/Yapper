@@ -100,15 +100,16 @@ int main(int argc, char **argv) {
         return tune_run(argv[2], atoi(argv[3]), atof(argv[4]), argv + 5, argc - 5);
     }
     if (strcmp(command, "nntrain") == 0 && argc >= 9) {
+        const bool cpu = strcmp(argv[8], "--cpu") == 0;
         return nntrain_run(atoi(argv[2]), argv[3], atoi(argv[4]), atof(argv[5]), atoi(argv[6]),
-                           atoi(argv[7]), argv + 8, argc - 8);
+                           atoi(argv[7]), !cpu, argv + 8 + cpu, argc - 8 - cpu);
     }
     printf("usage: yapper [tei | bench [depth] | selftest | perfttest <suite> [max depth] |\n"
            "               perft <size> <depth> [position] |\n"
            "               datagen <out> <games> <seed> <nodes> [size] [generation] |\n"
            "               tune <weights.h> <keep one in> <scale, or 0 to report it> <games>... |\n"
            "               nntrain <size> <netN.h> <keep one in> <lambda> <epochs> <threads> "
-           "<games>...]\n");
+           "[--cpu] <games>...]\n");
 #else
     printf("usage: yapper [tei | bench [depth] | perft <size> <depth> [position]]\n");
 #endif

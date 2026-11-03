@@ -19,13 +19,20 @@
 /* A game's search fits in this, and clearing it costs under 1% of the game. */
 #define DATA_HASH_MB 16
 
-/* Enough random plies that games differ, few enough that they still look like Tak. */
+/* Enough random plies that games differ, and the longer openings leave structures on the board
+ * that a network's own play would never build. */
 #define OPENING_MIN_PLIES 4
-#define OPENING_MAX_PLIES 9
+#define OPENING_MAX_PLIES 16
 
-/* An opening the search already calls decided teaches nothing. */
-#define OPENING_CHECK_NODES 2000
+/* An opening the search already calls decided teaches nothing. The game's first search judges it,
+ * so no search is spent only on asking. */
 #define OPENING_SCORE_LIMIT 500
+
+/* Now and then a move the search did not choose, so games leave the lines one network keeps to.
+ * It is played only if a search of it comes within the margin of the best: a different move,
+ * never a blunder that would make the game's result a lie about the positions before it. */
+#define DEVIATION_ONE_IN 10
+#define DEVIATION_MARGIN 40
 
 /* A budget stops between iterations, so a score comes from a whole search. The next iteration
  * can be far larger, and this is how much of one is allowed before it is cut off. */
@@ -37,6 +44,9 @@
 static const i8 HalfKomiDraws[] = {4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 5, 2, 6, 0};
 
 static u64 DataRngState;
+
+/* How often a deviation was searched and how often it was played, for the progress line. */
+static u64 DeviationsTried, DeviationsPlayed;
 
 /* xorshift64*. The seed goes through a multiply so that seeds 1, 2, 3 start far apart. */
 static u64 data_rng(void) {
@@ -83,6 +93,30 @@ static bool third_repetition(const Board *b, const u64 *keys, int count) {
     return seen >= 2;
 }
 
+/* A random move to play in place of the search's choice, or MOVE_NONE. `keys` holds the game up
+ * to and including this position. */
+static Move deviation(Board *b, const u64 *keys, int plies, const SearchLimits *limits,
+                      const SearchReport *chosen) {
+    if (data_rng() % DEVIATION_ONE_IN || abs(chosen->score) >= SCORE_WIN_BOUND) {
+        return MOVE_NONE;
+    }
+    const Move m = random_move(b);
+    if (m == chosen->best) {
+        return MOVE_NONE;
+    }
+    Undo undo;
+    bool close = false;
+    board_make(b, m, &undo);
+    if (board_outcome_after(b, &undo) == ONGOING && !third_repetition(b, keys, plies + 1)) {
+        const SearchReport reply = search_run(b, keys, plies + 1, limits, false);
+        close                    = -reply.score >= chosen->score - DEVIATION_MARGIN;
+        DeviationsTried++;
+        DeviationsPlayed += close;
+    }
+    board_unmake(b, m, &undo);
+    return close ? m : MOVE_NONE;
+}
+
 /* False if the opening was rejected, which leaves `game` unused. */
 static bool play_game(DataGame *game, const DataConfig *config) {
     static u64 keys[DATA_MAX_PLIES + 1];
@@ -110,22 +144,22 @@ static bool play_game(DataGame *game, const DataConfig *config) {
 
     SearchLimits limits;
     memset(&limits, 0, sizeof(limits));
-    limits.soft_nodes = OPENING_CHECK_NODES;
-    limits.nodes      = OPENING_CHECK_NODES * HARD_NODES_FACTOR;
-    if (abs(search_run(&board, keys, plies, &limits, false).score) >= OPENING_SCORE_LIMIT) {
-        return false;
-    }
-
     limits.soft_nodes = config->nodes;
     limits.nodes      = config->nodes * HARD_NODES_FACTOR;
     Outcome outcome   = ONGOING;
     int ending        = ENDING_RULES;
     while (outcome == ONGOING) {
         const SearchReport report = search_run(&board, keys, plies, &limits, false);
-        game->plies[plies]        = (DataPly){report.best, (i16)report.score};
-        keys[plies]               = board.hash;
+        if (plies == random_plies && abs(report.score) >= OPENING_SCORE_LIMIT) {
+            return false;
+        }
+        keys[plies] = board.hash;
+        /* A deviation carries no score, so a scored ply's move is always the search's own. */
+        const Move other = deviation(&board, keys, plies, &limits, &report);
+        game->plies[plies] =
+            other ? (DataPly){other, DATA_NO_SCORE} : (DataPly){report.best, (i16)report.score};
+        board_make(&board, game->plies[plies].move, &undo);
         plies++;
-        board_make(&board, report.best, &undo);
         outcome = board_outcome_after(&board, &undo);
         if (outcome != ONGOING) {
             break;
@@ -183,9 +217,11 @@ int datagen_run(const DataConfig *config) {
             timespec_get(&now, TIME_UTC);
             const double seconds =
                 (double)(now.tv_sec - start.tv_sec) + (double)(now.tv_nsec - start.tv_nsec) / 1e9;
-            printf("%llu games %llu positions %llu rejected %.1f seconds\n",
+            printf("%llu games %llu positions %llu rejected %llu of %llu deviations played "
+                   "%.1f seconds\n",
                    (unsigned long long)played, (unsigned long long)positions,
-                   (unsigned long long)rejected, seconds);
+                   (unsigned long long)rejected, (unsigned long long)DeviationsPlayed,
+                   (unsigned long long)DeviationsTried, seconds);
             fflush(stdout);
         }
     }

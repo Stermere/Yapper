@@ -176,3 +176,8 @@ on each board. A size without a `netN.h` plays the hand-written evaluation.
 `docs/DATA.md` has the format and the tools. A game on disk is its moves and the search's scores,
 at four bytes a ply, and replay gives every position back, so data never depends on the evaluation
 that is being fitted to it.
+
+A network is fitted on an NVIDIA GPU when the machine has one. `src/gpu.c` finds the driver and
+its runtime compiler when the tool runs, so no build depends on CUDA, and the kernels are the CPU
+fit's own loops, one hidden unit a thread. Gradients are added in fixed point, which makes a fit
+repeatable to the byte however the card orders its adds.

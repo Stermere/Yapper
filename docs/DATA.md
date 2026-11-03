@@ -18,8 +18,15 @@ shares nothing. The budget is in nodes, so a busy machine changes the speed and 
 the same seed and build give the same bytes. `external/` is gitignored, so data is never
 committed.
 
-Each game starts from 4 to 9 random plies, chosen by kind so that capstones turn up at every
-point of the opening, and is thrown away if a short search already calls it decided. Komi is
+Each game starts from 4 to 16 random plies, chosen by kind so that capstones turn up at every
+point of the opening. The longer openings leave structures on the board that the engine's own
+play would never build. A game is thrown away if its first search already calls it decided, which
+costs no search of its own: that search's move is the game's first.
+
+On about one ply in ten, a random move is searched as well, and played in place of the search's
+choice if it comes within 0.4 of a flat of it. That is about one such deviation in 110 plies, for
+8% more search. It takes games off the lines one network keeps to, and the margin keeps it from
+being a blunder that the game's result would then pin on the positions before it. Komi is
 mostly 2, with enough of 0, 1, 1.5, 2.5 and 3 for a fit or a network to learn what it does. Games
 are played to the end under the rules, with a threefold repetition or 512 plies as a draw, the
 same convention matches use. There is no adjudication: a game costs little once it is decided,
@@ -51,7 +58,7 @@ Then for each ply, starting from the empty board:
 | Offset | Type | Field |
 |---|---|---|
 | 0 | u16 | the move, encoded as in `src/types.h` |
-| 2 | i16 | the search's score, for the side to move, or `0x7FFF` for a random ply |
+| 2 | i16 | the search's score, for the side to move, or `0x7FFF` for a move the search did not choose: a random ply or a deviation |
 
 A score at or beyond 29872 in size is a forced win or loss in `30000 - |score|` plies. Any change
 to any of this needs a new magic. A file that ends part way through a game came from a killed
@@ -70,7 +77,7 @@ What a position gives a trainer, with nothing regenerated:
 | The whole position, stacks, reserves and side to move | Replay |
 | Game result, and whether it was a road or the flats | The header's outcome |
 | A search score, as a second value target | The ply |
-| The best move, as a policy target | The ply: every move after the random ones is the search's choice |
+| The best move, as a policy target | The ply: every scored ply's move is the search's choice |
 | Komi and board size, as inputs | The header |
 | A split by game, so positions of one game never land on both sides | The file's structure |
 | The eight symmetries, for augmentation | Worked out at training time, so not stored |
@@ -134,6 +141,18 @@ comparison is only fair on games neither was fitted on.
 A network is fitted on the same rounded weights the engine runs, so the last line, the engine
 against the fit on held-out positions, should read within a hundredth or so. Anything more means
 the engine and the trainer read a position differently.
+
+An NVIDIA GPU does the fitting if the machine has one. Nothing is needed to build for it: the
+tooling build finds the CUDA driver and NVRTC, the toolkit's runtime compiler, when it runs, on
+the path or under `CUDA_PATH`, and compiles its kernels for the card it finds. `make release`
+leaves it out. `--cpu` before the game files fits on the CPU instead, and the first line of the
+report says which was used and why. The threads then only lay out batches and score the held-out
+positions.
+
+The two fit the same network to within the rounding of floats, not bit for bit, and each gives
+the same bytes on every run: the GPU adds gradients in fixed point, where order does not matter.
+The engine is still checked against the fit on the CPU, so a kernel that read a position
+differently would show in the last line.
 
 A fit takes every core it is given, so nothing can be timed or matched alongside it. A lower loss
 is not a claim of strength: only an SPRT makes one.

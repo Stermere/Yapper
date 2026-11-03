@@ -918,6 +918,84 @@ is cut. The improving flag did pay once it only decided how many moves to search
 failed `diff` ended the shell chain before the new file was written. Its bench equalled the build
 before it, which gave it away before any game was played.
 
+## E37: more varied data, and fitting on the GPU
+
+Measured on what was there before changing anything.
+
+**Repeats are rare.** Of 300,000 gen 8 games, 0.07% of positions after ply 10 repeat an earlier
+game's line of moves, and 24% do in the first 10 plies. More random openings would not remove
+repeats, since there are almost none. What they can add is structures the network's own play never
+builds.
+
+**What a node budget buys.** On E19's 120 middlegames, from an empty table, one search of 3M
+nodes, reading off each iteration where a soft budget would have stopped it:
+
+| Soft budget | Depth | Nodes used | Win chance off the 3M search, mean |
+|---|---|---|---|
+| 2,500 | 4.4 | 4.2k | 5.9% |
+| 5,000 | 5.3 | 7.7k | 5.6% |
+| 10,000 | 6.2 | 17k | 5.2% |
+| 20,000 | 7.1 | 37k | 4.4% |
+| 50,000 | 8.1 | 82k | 3.7% |
+
+Four times the budget costs 4.8 times the nodes and takes a fifth off the error of a score. This
+cannot say which buys more strength per hour, so Gen-1Big runs both: below.
+
+**The score half of the target is less sure than the results.** On 2.35M gen 8 positions after the
+opening, the scale that best turns the search's score into the game's result is 240, not the 310
+`nntrain` uses: 0.4450 against 0.4537, and 220 to 240 in every third of the game. So
+`sigmoid(score / 310)` pulls the target towards a draw that the results do not. Not changed: the
+search's margins are in the same units, so this needs its own fit and SPRT.
+
+**Datagen.** Openings are 4 to 16 random plies, from 4 to 9. The 2000-node search that judged an
+opening is gone: the game's first search does it, and its move is played. On one ply in ten a
+random move, chosen by kind as in the opening, is searched as well, and played in place of the
+search's choice if it comes within 40 hundredths of it. It is stored with no score, so a scored
+ply's move is still the search's own, and the format and magic are unchanged.
+
+On 6x6 at 5000 nodes from E36's build, 15 jobs: 48.9 games a second, as gen 8's 48.7. 20% of
+openings were thrown away, against 9% with the shorter openings; each costs one search. Of the
+random moves searched, 11 to 13.5% came within the margin, one deviation in 100 to 111 searched
+plies, for 8% more search. At 1 in 16 it was one in 158. `make datacheck` passes, and takref
+replayed 250 games with no failures.
+
+Games a second per job, on 15 jobs: 3x3 21.4, 4x4 9.2, 5x5 4.8, 6x6 3.3, 7x7 2.0, 8x8 1.4. At
+20,000 nodes, 6x6 plays 0.69.
+
+**Fitting on the GPU.** `nntrain` on the CPU fitted 1.05M positions a second on 15 threads, and
+v2's fit took about 40 minutes. On an RTX 3070, through `src/gpu.c`:
+
+| Version | Positions a second |
+|---|---|
+| CPU, 15 threads | 1.05M |
+| GPU, every gradient added in 64-bit fixed point | 5.8M |
+| GPU, a filter's gradients in 32-bit | about 18M |
+
+The 64-bit adds were two thirds of the card's time: without them an epoch took a third as long.
+A filter's gradient moves by at most 4 in a batch, so 2^28 in 32 bits cannot overflow, and the
+fit did not move: 10 epochs on 5.65M positions ended at 0.490104 against 0.490128, and 0.478982
+against 0.479399 held out against results. Laying out a batch was then the limit, because threads
+were started for every batch of 16,384. Laying out 16 batches at a time fixed that.
+
+Against the CPU on the same 5.65M positions, 2 epochs: held out 0.516669 against 0.516719, and
+against results 0.494333 against 0.494421. The engine reads 0.49 hundredths from either fit on
+average and 1 at worst. Two GPU fits gave the same bytes, as did 4 threads and 15, and `--cpu`
+gives exactly the network the trainer gave before. Bench is 5871664 from clang native, clang
+generic, gcc `popcnt` and `make release`.
+
+v2's own fit again, gens 1-8 with its settings, took 4 minutes 4 seconds on the GPU against about
+40 on the CPU. A minute of that was reading 157.7M positions, and an epoch was 13 seconds with the
+10.5M held-out positions scored on the CPU. It reached 0.4979 against the targets and 0.4652
+against results, to v2's 0.4984 and 0.4658, and the engine reads 0.50 hundredths from it on
+average and 1 at worst. The held-out loss moved by up to 0.003 from one epoch to the next, even in
+the last few, so which network a fit ends on is partly luck.
+
+**Gen-1Big**, from 23:25 on 2026-11-02, from E36's search with v2 frozen as
+`external/baselines/gen1big.exe`, into `external/data/gen1big/`. Gen 1 for the other sizes on 15
+jobs at 5000 nodes, one after another: 200,000 games each of 3x3, 4x4 and 5x5, then 150,000 each of
+7x7 and 8x8. Then 6x6, generation 9 in its headers: 600,000 games at 5000 nodes on 10 jobs and
+64,000 at 20,000 on 5, side by side, so that five jobs of each are equal time.
+
 ## Mistakes worth not repeating
 
 - **200 games is a sketch.** A match against Tiltak read +159 and was called the target reached.

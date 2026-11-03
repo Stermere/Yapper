@@ -18,7 +18,8 @@ but 6x6 still plays the hand-written evaluation.
 | Evaluation | A network on 6x6, hand-written elsewhere | v2, fitted on gens 1-8: **+137 +/- 28 on v1 at 2+0.02**, which led Tiltak by +428: E33, E34. Each new generation from the best network has paid. Other sizes play the hand-written evaluation fitted on 6x6 self-play: E27 |
 | Search | Second pass done | **+116 [+92, +140] against Tiltak over 800 games at 5+0.05**, from -38: EXPERIMENTS.md E25. It sees roads by spread, and most of the gain is speed in real middlegames. With the network, stronger reductions, move-count pruning to depth 6 and singular extensions: **+82.5 +/- 31.3 on v2's search at 2+0.02**, E36 |
 | Time management | Done for now | Budgets on the moves left, from the shorter reserve. One time loss in 5242 games, and it does not use the whole clock yet: E25 |
-| Training data | 6x6 only so far | 157.7M positions in gens 1-8, every one recoverable from about four bytes a ply, repeatable, checked by takref: docs/DATA.md, E34. None yet for other sizes |
+| Training data | 6x6 only so far | 157.7M positions in gens 1-8, every one recoverable from about four bytes a ply, repeatable, checked by takref: docs/DATA.md, E34. Openings of up to 16 random plies and margin-checked deviations from E37 on. None yet for other sizes |
+| Fitting a network | On the GPU | An RTX 3070 fits about 18M positions a second to the CPU's 1.05M, the same network to within float rounding and repeatable to the byte; nothing is needed to build it: E37 |
 | Playing it yourself | Done | `python tools/play.py` |
 | Portability | Partly | The hot files compile for AArch64 with NEON; passes every gate with no CPU assumptions on x86-64, at about 80% of native speed, with clang and gcc giving the same bench. **Not yet run on ARM**: CI has a real ARM runner, and it runs on the first push |
 
@@ -56,14 +57,19 @@ dependency, a third-party library and not an engine. pentakle needs `cargo +nigh
    network each side's stones left did not help, E35. E36's search gained on its own but not
    measurably on syntaks, and lost more often to roads by spread. A handicapped syntaks, scoring
    near half, is needed to measure progress against it.
-2. Networks for the other sizes. A first generation for 3x3 to 8x8 is sized, about 4.5 hours, and
-   not started; of the books it needs, only 3x3's is built. One network shared by every size is on
-   the `nnue` branch and has not played.
-3. The search items left: history in the reductions, a two-ply continuation history, null move
+2. Networks for the other sizes. Gen-1Big's first generation for 3x3 to 8x8 started on the night of
+   2026-11-02, E37; of the books their matches need, only 3x3's is built. One network shared by
+   every size is on the `nnue` branch and has not played.
+3. Training, now that a fit takes minutes. Whether 5000 nodes is too few, from Gen-1Big's equal-time
+   halves at 5000 and 20,000. The scale that turns a score into a result: the games say 240 where
+   the fit uses 310, E37. `lambda`, the epochs and the end of the learning rate, since the
+   held-out loss still swings by 0.003 an epoch at the end. A wider network, which the speed lead
+   over syntaks leaves room for.
+4. The search items left: history in the reductions, a two-ply continuation history, null move
    from deeper with a reduction that grows with the margin, the aspiration window and the clock's
    floor. E36 found that sparing moves that threaten a road, and the improving flag outside
    move-count pruning, both lose.
-4. Run on real ARM and measure it, since that is a stated target.
-5. Make and unmake have plateaued at about 3 ns a node on the start position and 8.5 ns on the
+5. Run on real ARM and measure it, since that is a stated target.
+6. Make and unmake have plateaued at about 3 ns a node on the start position and 8.5 ns on the
    endgame: E7 lists what no longer helps. Any further lead has to come from an idea that is not
    on that list. A pure speedup must leave the bench node count unchanged.

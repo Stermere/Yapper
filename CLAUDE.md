@@ -30,7 +30,7 @@ make bench          # deterministic node count
 make speed          # race move generation against external/engines
 make datacheck      # training data: readable without the engine, right by takref, repeatable
 make debug          # assertions, plus sanitizers on POSIX
-make release        # the engine alone: no datagen, fitting or selftest
+make release        # the engine alone: no datagen, fitting, GPU or selftest
 make format         # apply .clang-format
 ```
 
@@ -132,6 +132,9 @@ pass.
 - No dependencies. The engine links libc, libm and the platform threads, and that is what
   lets it build for anything. No x86 intrinsics in the core: use compiler builtins and let
   them lower to POPCNT or NEON, or keep any faster path behind a portable fallback.
+- The tools may use an NVIDIA GPU, through `src/gpu.c`, which finds the driver and NVRTC when
+  it runs. No build may need CUDA, a machine without a GPU must fall back to the CPU, and
+  `make release` leaves all of it out with the other tools.
 - `tools/` is Python, stdlib only.
 
 ## Where things live
