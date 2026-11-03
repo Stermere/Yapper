@@ -49,6 +49,12 @@ typedef struct Worker {
     /* The same again, for what answered what: by the move before this one as well. */
     i32 replies[2][256][256];
     Move played[MAX_PLY + 1];
+    /* The static evaluation of each node on the path. */
+    int evals[MAX_PLY + 1];
+    /* The move a node at this ply leaves out, while it asks whether its table move is the only
+     * good one. MOVE_NONE otherwise. */
+    Move excluded[MAX_PLY + 1];
+    int root_depth;
 
     /* Positions on the way here, for repetition. */
     u64 keys[MAX_GAME_PLIES + MAX_PLY];
@@ -79,7 +85,7 @@ static i64 now_ms(void) {
 void search_init(void) {
     for (int depth = 1; depth < 64; depth++) {
         for (int moves = 1; moves < 64; moves++) {
-            LmrTable[depth][moves] = (int)(0.5 + log((double)depth) * log((double)moves) / 2.5);
+            LmrTable[depth][moves] = (int)(0.5 + log((double)depth) * log((double)moves) / 2.0);
         }
     }
     Search.arena        = malloc(ARENA_MOVES * sizeof(Move));
@@ -328,7 +334,10 @@ static inline Move pick_next(Move *moves, i32 *scores, int from, int count) {
     return m;
 }
 
-static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *moves, i32 *scores) {
+/* `cut_node` is a null window expected to fail high: a late move there is very unlikely to be the
+ * one that does, so it is worth less depth than at a node where every move must be refuted. */
+static int search(Worker *w, int alpha, int beta, int depth, int ply, bool cut_node, Move *moves,
+                  i32 *scores) {
     Board *b           = &w->board;
     const int us       = board_stm(b);
     const bool pv_node = beta - alpha > 1;
@@ -361,11 +370,12 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
         }
     }
 
-    TTEntry entry;
-    const u64 key  = board_key(b);
-    const bool hit = tt_probe(key, &entry);
-    Move tt_move   = hit ? entry.move : MOVE_NONE;
-    if (hit && !pv_node && entry.depth >= depth) {
+    const Move excluded = w->excluded[ply];
+    TTEntry entry       = {0};
+    const u64 key       = board_key(b);
+    const bool hit      = tt_probe(key, &entry);
+    Move tt_move        = hit && !excluded ? entry.move : MOVE_NONE;
+    if (hit && !pv_node && !excluded && entry.depth >= depth) {
         const int score   = score_from_tt(entry.score, ply);
         const Bound bound = tt_bound(&entry);
         if (bound == BOUND_EXACT || (bound == BOUND_LOWER && score >= beta) ||
@@ -385,7 +395,12 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
     const u64 threats = b->ply >= 2 ? board_road_placements(b, !us) : 0;
     const int eval    = hit ? entry.eval : node_eval(w, ply, threats);
 
-    if (!pv_node && !threats && !root && depth <= 6 && eval - 90 * depth >= beta &&
+    /* A side whose position has got better since its last move is more likely to find something
+     * late in its list. */
+    w->evals[ply]        = eval;
+    const bool improving = ply >= 2 && eval > w->evals[ply - 2];
+
+    if (!pv_node && !threats && !root && !excluded && depth <= 6 && eval - 90 * depth >= beta &&
         abs(beta) < SCORE_WIN_BOUND) {
         return eval;
     }
@@ -394,7 +409,7 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
         return SCORE_WIN - ply - 1;
     }
 
-    if (!pv_node && !threats && !root) {
+    if (!pv_node && !threats && !root && !excluded) {
         if (depth >= 3 && eval >= beta && b->ply >= 4 && abs(beta) < SCORE_WIN_BOUND) {
             const int reduction = 3 + depth / 4;
             Undo undo;
@@ -402,8 +417,8 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
             w->played[ply]              = MOVE_NONE;
             w->frames[ply + 1].computed = false;
             w->keys[w->key_count++]     = b->hash;
-            const int score =
-                -search(w, -beta, -beta + 1, depth - 1 - reduction, ply + 1, moves, scores);
+            const int score = -search(w, -beta, -beta + 1, depth - 1 - reduction, ply + 1,
+                                      !cut_node, moves, scores);
             w->key_count--;
             board_unmake_null(b, &undo);
             if (atomic_load_explicit(&StopFlag, memory_order_relaxed)) {
@@ -417,6 +432,29 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
 
     if (tt_move != MOVE_NONE && !movegen_is_legal(b, tt_move)) {
         tt_move = MOVE_NONE;
+    }
+
+    /* A table move that beats every other by a margin is searched a ply deeper: a line that
+     * hangs on one move is where a short horizon misjudges. This node's list does not exist
+     * yet, so the search without that move can have its space. If even the others reach beta,
+     * more than one move cuts and the node is done. */
+    int extension = 0;
+    if (!root && depth >= 6 && tt_move != MOVE_NONE && entry.depth >= depth - 3 &&
+        tt_bound(&entry) != BOUND_UPPER && abs(entry.score) < SCORE_WIN_BOUND &&
+        ply < 2 * w->root_depth) {
+        const int singular_beta = score_from_tt(entry.score, ply) - 2 * depth;
+        w->excluded[ply]        = tt_move;
+        const int value         = search(w, singular_beta - 1, singular_beta, (depth - 1) / 2, ply,
+                                         cut_node, moves, scores);
+        w->excluded[ply]        = MOVE_NONE;
+        if (atomic_load_explicit(&StopFlag, memory_order_relaxed)) {
+            return 0;
+        }
+        if (value < singular_beta) {
+            extension = 1;
+        } else if (singular_beta >= beta) {
+            return singular_beta;
+        }
     }
 
     /* Most nodes cut on their first move, and that is nearly always the table's or a killer, so
@@ -458,12 +496,14 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
             break;
         }
         const Move m = i < first_count ? first[i] : pick_next(moves, scores, i, count);
-        if (must_answer && !answers_threat(m, threats)) {
+        if ((must_answer && !answers_threat(m, threats)) || m == excluded) {
             continue;
         }
 
-        /* Late move pruning: a shallow node has seen enough once this far down the list. */
-        if (!root && !pv_node && !threats && depth <= 4 && searched >= 12 + depth * depth * 8 &&
+        /* Late move pruning: a shallow node has seen enough once this far down the list, and
+         * sooner when its position is getting worse. */
+        if (!root && !pv_node && !threats && depth <= 6 &&
+            searched >= (improving ? 12 + depth * depth * 6 : 6 + depth * depth * 3) &&
             best_score > -SCORE_WIN_BOUND) {
             break;
         }
@@ -486,22 +526,22 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
             int reduction           = 0;
             if (depth >= 3 && searched >= 4 && !threats) {
                 reduction = LmrTable[depth < 63 ? depth : 63][searched < 63 ? searched : 63];
-                reduction -= pv_node;
+                reduction += cut_node - pv_node;
                 reduction = reduction < 0 ? 0 : reduction > depth - 2 ? depth - 2 : reduction;
             }
 
             if (searched == 1) {
-                score =
-                    -search(w, -beta, -alpha, depth - 1, ply + 1, moves + count, scores + count);
+                score = -search(w, -beta, -alpha, depth - 1 + (m == tt_move) * extension, ply + 1,
+                                !pv_node && !cut_node, moves + count, scores + count);
             } else {
-                score = -search(w, -alpha - 1, -alpha, depth - 1 - reduction, ply + 1,
+                score = -search(w, -alpha - 1, -alpha, depth - 1 - reduction, ply + 1, true,
                                 moves + count, scores + count);
                 if (score > alpha && reduction) {
-                    score = -search(w, -alpha - 1, -alpha, depth - 1, ply + 1, moves + count,
-                                    scores + count);
+                    score = -search(w, -alpha - 1, -alpha, depth - 1, ply + 1, !cut_node,
+                                    moves + count, scores + count);
                 }
                 if (score > alpha && pv_node) {
-                    score = -search(w, -beta, -alpha, depth - 1, ply + 1, moves + count,
+                    score = -search(w, -beta, -alpha, depth - 1, ply + 1, false, moves + count,
                                     scores + count);
                 }
             }
@@ -538,6 +578,9 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
                     history_update(&replies[m & 0xFF], bonus);
                     const Move *tried = i < first_count ? first : moves;
                     for (int j = 0; j < i; j++) {
+                        if (tried[j] == excluded) {
+                            continue;
+                        }
                         history_update(history_slot(w, us, tried[j]), -bonus);
                         history_update(&replies[tried[j] & 0xFF], -bonus);
                     }
@@ -547,6 +590,10 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, Move *move
         }
     }
 
+    /* Without its best move, a node's score says nothing about the position. */
+    if (excluded) {
+        return best_score;
+    }
     const Bound bound = best_score >= beta            ? BOUND_LOWER
                         : best_score > original_alpha ? BOUND_EXACT
                                                       : BOUND_UPPER;
@@ -646,12 +693,13 @@ static SearchReport run_search(const Board *root, const u64 *history, int histor
     const int depth_limit = limits->depth ? limits->depth : MAX_PLY - 1;
     int score             = 0;
     for (int depth = 1; depth <= depth_limit; depth++) {
-        int window = 40;
-        int alpha  = depth >= 4 ? score - window : -SCORE_WIN;
-        int beta   = depth >= 4 ? score + window : SCORE_WIN;
+        w->root_depth = depth;
+        int window    = 40;
+        int alpha     = depth >= 4 ? score - window : -SCORE_WIN;
+        int beta      = depth >= 4 ? score + window : SCORE_WIN;
         int value;
         for (;;) {
-            value = search(w, alpha, beta, depth, 0, w->arena, w->arena_scores);
+            value = search(w, alpha, beta, depth, 0, false, w->arena, w->arena_scores);
             if (atomic_load_explicit(&StopFlag, memory_order_relaxed)) {
                 break;
             }

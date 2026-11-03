@@ -98,7 +98,9 @@ a position already failing high can only be confirmed by finding a win.
 ## The search
 
 Iterative deepening PVS with aspiration windows, a bucketed transposition table, null move,
-reverse futility, late move reductions and pruning. The table move and the killers are tried
+reverse futility, late move reductions and pruning, and singular extensions. Reductions are a ply
+stronger at a node expected to cut, and move-count pruning comes sooner when the side to move's
+evaluation has fallen since its last move. The table move and the killers are tried
 before a move list exists, because most nodes cut on one of them. The rest go by history, overall
 and by what answered the move before. A node answering a road skips the placements that cannot
 stop it.
@@ -107,11 +109,11 @@ The clock is shared out over the moves the game has left, worked out from the sh
 it runs down towards the end of the game rather than being spent early and left over. Moving time
 towards the end passed where moving it towards the opening did not: EXPERIMENTS.md E22 and E25.
 
-The tree's shape is still the textbook one. Tighter late move pruning and treating spreads as
-threats were tested and dropped, E21 and E23, and reverse futility was measured and left alone,
-E19. Stronger reductions were tested and left unfinished, E25, and the aspiration window has not
-been measured. It runs on one worker thread, and every piece of per-search state lives in `Worker`,
-so Lazy SMP is a matter of having more of them.
+The tree's shape is still the textbook one. Treating spreads as threats, sparing moves that
+threaten a road from reductions, and the improving flag in reverse futility and reductions were
+tested and dropped, E23 and E36, and reverse futility's margin was measured and left alone, E19.
+The aspiration window has not been measured. It runs on one worker thread, and every piece of
+per-search state lives in `Worker`, so Lazy SMP is a matter of having more of them.
 
 ## The evaluation
 

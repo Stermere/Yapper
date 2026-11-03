@@ -4,9 +4,10 @@ Every measurement goes here, with the conditions that produced it. Machine unles
 Ryzen 7 5800X, Windows 11, one thread. Up to E6 that is gcc 12.2 `-O3 -flto -march=native`, and
 from E7 clang 15.0.7 `-O3 -march=native` as one translation unit.
 
-Bench signature now: **9465377 nodes**, identical from clang native, clang generic and gcc
+Bench signature now: **5871664 nodes**, identical from clang native, clang generic and gcc
 `popcnt`. It was 49104542 at the end of the skeleton, E9 and E10 moved it to 44927798, the fitted
-evaluation of E15 and E17 to 10797140, and the search work of E20 to E25 moved it here.
+evaluation of E15 and E17 to 10797140, the search work of E20 to E25 to 9465377, the network of E34
+to 11191478, and the search work of E36 moved it here.
 
 ## Speed
 
@@ -846,6 +847,76 @@ worst. Bench 9877540. Against v2:
 It judged its lost games better, above +1 late in 31 of 383 losses to syntaks against v2's 61 of
 381, and played worse. One of its 14 wins against syntaks was syntaks losing on time while v3 read
 -19. Not kept: v2 is the network.
+
+## E36: a more selective search for the network
+
+E34 left Yapper reaching depth 13 where syntaks reaches 18 on fewer nodes. On 40 positions from the
+v2-syntaks games at 1 second each, Yapper finished depth 12.85 on 2.82M nodes, with each iteration
+costing about 2.0 times the last from depth 6 on. syntaks finished 19.5 on 1.22M, at 1.7 times
+falling to 1.5. It needed a sixth of the nodes at depth 5, though the two need not count depth
+alike. They chose the same move in 16 of 40.
+
+An instrumented copy of v2's search on 60 of those positions at 2M nodes each:
+
+| Depth left | 1 | 2 | 3 | 4 | 5 | 6 | 8 | 10 |
+|---|---|---|---|---|---|---|---|---|
+| Share of interior nodes | 79% | 12% | 4.9% | 2.1% | 0.8% | 0.4% | 0.07% | 0.01% |
+| Cut by reverse futility | 82.8% | 52.1% | 37.2% | 25.0% | 14.0% | 7.2% | | |
+| Null move cutting when tried | | | 1.3% | 4.4% | 10.6% | 17.2% | 27.3% | 32.6% |
+| Moves searched at an all-node | 25 | 45 | 71 | 76 | 76 | 76 | 76 | 79 |
+| Cutoffs on the first move | 77% | 80% | 87% | 91% | 92% | 94% | 95% | 96% |
+| Reduced moves searched again | | | 0.35% | 0.21% | 0.24% | 0.16% | 0.13% | 0.15% |
+
+Interior nodes were 80M of the 117M counted, the rest leaf searches. Late moves were nearly always reduced
+and almost never needed a second look. Move-count pruning stopped at depth 4 and bound only at depths
+1 and 2, so an all-node deeper than that searched about 75 of its moves.
+
+Each change was tested against the last one kept, at 2+0.02 on 6x6 with 2 komi. The first used
+[0, 5] with the usual cap of 2000 games. The rest used [0, 10] with a cap of 3000: that settles a
+gain of 25 in about half the games, and a smaller one was not worth the time in this session.
+
+| | Change | Bench | Result |
+|---|---|---|---|
+| ns1 | Reductions `/ 2.0` for `/ 2.5`, E25's last item | 5466538 | INCONCLUSIVE at the cap, 2000 games, +841 -704 =455, **+23.8 +/- 13.0**, pairs [112, 161, 372, 188, 167]. Kept, with E25's +27.0 +/- 13.9 for the same change |
+| ns2 | One more ply of reduction at a node expected to cut | 5673872 | INCONCLUSIVE at the cap, 3000 games, +1194 -1094 =712, **+11.6 +/- 10.6**, pairs [183, 267, 545, 277, 228]. Kept |
+| ns3 | No reduction for a late move that leaves a road to answer, found once and passed to the child | 5475681 | **FAILED**, 838 games, +296 -360 =182, **-26.6 +/- 20.2**, pairs [73, 76, 159, 64, 47] |
+| ns4 | Improving, the evaluation above its own two plies up: reverse futility a ply looser, reductions a ply stronger without it | 2785363 | **FAILED**, 2144 games, +802 -843 =499, **-6.6 +/- 12.2**, pairs [138, 212, 411, 175, 136] |
+| ns5 | Move-count pruning to depth 6, after `12 + 6d^2` moves when improving and `6 + 3d^2` when not, for `12 + 8d^2` to depth 4 | 3744360 | **PASSED**, 2592 games, +1047 -935 =610, **+15.0 +/- 11.4**, pairs [157, 224, 461, 258, 196] |
+| ns6 | Singular extensions: from depth 6, a table move whose others all fall `2d` below its score is searched a ply deeper, and a node whose others still reach beta is cut | 5871664 | **PASSED**, 2140 games, +850 -747 =543, **+16.7 +/- 12.4**, pairs [114, 197, 396, 198, 165] |
+
+ns1 and ns2 stopped at the cap with their intervals above zero, so the build as a whole was tested
+against v2's search, and that settles them too:
+
+| Conditions | Result |
+|---|---|
+| Against E34's v2, 2+0.02, [0, 10] | **PASSED**, 386 games, +198 -108 =80, **+82.5 +/- 31.3**, pairs [14, 22, 69, 36, 52] |
+| syntaks at 5+0.05, 400 games | +6 -389 =5, **-665 [-784, -541]**, against v2's -576 [-665, -481] |
+
+Against syntaks it did not show. The two intervals overlap almost entirely, and at this gap 400 games
+hold only a few points, 8 here to v2's 14, so the match cannot tell the builds apart in either
+direction. How the games were lost did move:
+
+| | v2, E34 | E36 |
+|---|---|---|
+| Lost by road, by spread | 110, 106 | **133, 129** |
+| Lost on flats, median margin in half flats | 271, 4 | 256, 4 |
+| Above +1 late in a lost game | 61 of 381 | 61 of 389 |
+
+The more selective search loses more often to a road by spread, 34% of its losses against 29%.
+That is about 1.6 standard errors, so it is a lead and not a finding. Self-play would not see it,
+because both sides share the blind spot. A match against syntaks will not settle which build is
+better until it is close enough to score: a handicap, such as less time for syntaks, would put the
+score where a few hundred games can measure it.
+
+Two of the failures say the same as E21 and E23: in Tak, a search that spares the moves that
+threaten a road loses more to the cost than it gains in what it sees. ns3 spared the moves that E21
+found to be 3.7% of late moves and a third of their cutoffs, and it lost 27. ns4 halved bench
+and lost. A smaller tree is not a stronger one, and how the cut is made matters more than how much
+is cut. The improving flag did pay once it only decided how many moves to search.
+
+`make release` benches 5871664 as well. One candidate was first built from stale source, because a
+failed `diff` ended the shell chain before the new file was written. Its bench equalled the build
+before it, which gave it away before any game was played.
 
 ## Mistakes worth not repeating
 
