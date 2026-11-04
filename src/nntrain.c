@@ -548,6 +548,7 @@ static bool write_header(const char *path, const NTModel *model, const NTQuantis
             "/* net.h - the network every size shares. Written by `yapper nntrain`: docs/DATA.md "
             "says how. */\n");
     fprintf(out, "// clang-format off\n#ifndef NET_H\n#define NET_H\n\n#include \"nn.h\"\n\n");
+    fprintf(out, "#define NET_FILTERS %d\n\n", NN_FILTERS);
     bool ok = write_array(out, "i16", "NetFilters", "NN_GRID * NN_GRID * NN_TOKENS * NN_FILTERS",
                           q->filters, model->bias_at, false);
     ok      = ok && write_array(out, "i16", "NetBias", "(MAX_SIZE + 1) * NN_FILTERS", q->bias,
@@ -741,11 +742,11 @@ static bool train_cpu(NTModel *model, const NTLoader *loader, const double *lamb
 }
 
 /* The kernels. A block is one position and a thread one hidden unit, so a thread's sum over the
- * stacks runs in the order forward() runs it; the output is then added up by one warp, a filter a
- * lane, in a fixed tree. Gradients are added in fixed point, where the order of the adds cannot
- * change the total, so a fit is the same on every run. A filter's are 32-bit, at 2^28: a batch
- * moves one by at most 4, and 64-bit adds cost the card four times as much. The rest, which a
- * batch can move by 8, stay 64-bit at 2^48. */
+ * stacks runs in the order forward() runs it; the output is then added up a warp of filters at a
+ * time, a filter a lane, in a fixed tree, and the warps in order. Gradients are added in fixed
+ * point, where the order of the adds cannot change the total, so a fit is the same on every run. A
+ * filter's are 32-bit, at 2^28: a batch moves one by at most 4, and 64-bit adds cost the card four
+ * times as much. The rest, which a batch can move by 8, stay 64-bit at 2^48. */
 static const char KernelBody[] =
     "#define F NN_FILTERS\n"
     "#define G NN_ORIENTATIONS\n"
@@ -772,6 +773,7 @@ static const char KernelBody[] =
     "    __shared__ unsigned short feature[MAX_SQUARES];\n"
     "    __shared__ float squared[G][F];\n"
     "    __shared__ float delta[G][F];\n"
+    "    __shared__ float warp_out[F / 32];\n"
     "    __shared__ float shared_slope;\n"
     "    const Packed s = packed[blockIdx.x];\n"
     "    const int g = threadIdx.x / F, f = threadIdx.x % F;\n"
@@ -796,27 +798,31 @@ static const char KernelBody[] =
     "        float sum = 0.0f;\n"
     "        for (int h = 0; h < G; h++) sum += squared[h][f];\n"
     "        float out = q[wout + f] * sum;\n"
-    "        for (int width = F / 2; width > 0; width /= 2) {\n"
+    "        for (int width = 16; width > 0; width /= 2) {\n"
     "            out += __shfl_down_sync(0xFFFFFFFFu, out, width);\n"
     "        }\n"
-    "        if (f == 0) {\n"
-    "            const float *skip = q + skip_from;\n"
-    "            out += skip[0] * (float)s.lead / LEAD_UNIT +\n"
-    "                   skip[1] * (float)s.reserve / RESERVE_UNIT +\n"
-    "                   skip[2] * (float)s.komi / KOMI_UNIT + skip[3];\n"
-    "            const float p = 1.0f / (1.0f + expf(-out));\n"
-    "            const float slope = (p - s.target) * scale;\n"
-    "            shared_slope = slope;\n"
-    "            const float c = p < 1e-7f ? 1e-7f : p > 1.0f - 1e-7f ? 1.0f - 1e-7f : p;\n"
-    "            const float t = s.target;\n"
-    "            const float l = -(t * logf(c) + (1.0f - t) * logf(1.0f - c));\n"
-    "            atomicAdd(loss, (unsigned long long)__float2ll_rn(l * 4294967296.0f));\n"
+    "        if (f % 32 == 0) warp_out[f / 32] = out;\n"
+    "    }\n"
+    "    __syncthreads();\n"
+    "    if (threadIdx.x == 0) {\n"
+    "        float out = warp_out[0];\n"
+    "        for (int k = 1; k < F / 32; k++) out += warp_out[k];\n"
+    "        const float *skip = q + skip_from;\n"
+    "        out += skip[0] * (float)s.lead / LEAD_UNIT +\n"
+    "               skip[1] * (float)s.reserve / RESERVE_UNIT +\n"
+    "               skip[2] * (float)s.komi / KOMI_UNIT + skip[3];\n"
+    "        const float p = 1.0f / (1.0f + expf(-out));\n"
+    "        const float slope = (p - s.target) * scale;\n"
+    "        shared_slope = slope;\n"
+    "        const float c = p < 1e-7f ? 1e-7f : p > 1.0f - 1e-7f ? 1.0f - 1e-7f : p;\n"
+    "        const float t = s.target;\n"
+    "        const float l = -(t * logf(c) + (1.0f - t) * logf(1.0f - c));\n"
+    "        atomicAdd(loss, (unsigned long long)__float2ll_rn(l * 4294967296.0f));\n"
     "        unsigned long long *gskip = grad + skip_from;\n"
     "        atomicAdd(gskip + 0, fixed_of(slope * (float)s.lead / LEAD_UNIT));\n"
     "        atomicAdd(gskip + 1, fixed_of(slope * (float)s.reserve / RESERVE_UNIT));\n"
     "        atomicAdd(gskip + 2, fixed_of(slope * (float)s.komi / KOMI_UNIT));\n"
     "        atomicAdd(gskip + 3, fixed_of(slope));\n"
-    "        }\n"
     "    }\n"
     "    __syncthreads();\n"
     "    const float slope = shared_slope;\n"
@@ -895,6 +901,7 @@ typedef struct NTPacked {
 } NTPacked;
 
 _Static_assert(sizeof(NTPacked) == 12, "the kernels read this layout");
+_Static_assert(NN_FILTERS % 32 == 0, "the kernels add the output up a warp of filters at a time");
 
 typedef struct NTPackJob {
     const NTSet *set;

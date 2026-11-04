@@ -8,8 +8,9 @@ evaluation went on to teach every network after it.
 ## Making data
 
 ```sh
-python tools/datagen.py --out external/data/gen1 --games 60000 --nodes 5000 --generation 1
-python tools/datacheck.py external/data/gen1-*.ydg
+python tools/datagen.py --out external/data/gen11/6s/gen11 --games 60000 --nodes 5000 \
+    --generation 11
+python tools/datacheck.py external/data/gen11/6s/gen11-*.ydg
 ```
 
 `yapper datagen` plays the games inside the engine, one process a job, so there is no protocol,
@@ -17,6 +18,11 @@ referee or pipe in the loop, and a run uses every logical core. Each job writes 
 shares nothing. The budget is in nodes, so a busy machine changes the speed and not the games:
 the same seed and build give the same bytes. `external/` is gitignored, so data is never
 committed.
+
+A generation gets a folder, with a folder for each size inside it and the run's log beside them:
+`external/data/gen10/6s/`. Generations before 10 are under `external/data/early/`: gen 1 to 8 of
+6x6 each in its own folder, and `gen1big` for gen 1 of the other sizes along with gen 9 of 6x6.
+`external/data/smoke/` holds the short runs that tried datagen out.
 
 Each game starts from 4 to 16 random plies, chosen by kind so that capstones turn up at every
 point of the opening. The longer openings leave structures on the board that the engine's own
@@ -87,18 +93,25 @@ What a position gives a trainer, with nothing regenerated:
 One network plays every size, so one fit reads every size's games at once:
 
 ```sh
-D=external/data/gen1big
+E=external/data/early
+D=$E/gen1big
 yapper nntrain src/net.h 1 0.7 15 15 --share 7=0.33 --share 8=0.2 --lambda 3=0.5 \
-    --lambda 4=0.5 external/data/gen[78]-*.ydg $D/6s/gen9-20k-*.ydg $D/3s/*.ydg \
-    $D/4s/gen1-*.ydg $D/5s/gen1-*.ydg $D/7s/gen1-*.ydg $D/8s/gen1-*.ydg
+    --lambda 4=0.5 external/data/gen10/6s/gen10-20k-*.ydg $E/gen[78]/6s/gen[78]-*.ydg \
+    $D/6s/gen9-20k-*.ydg $D/3s/*.ydg $D/4s/gen1-*.ydg $D/5s/gen1-*.ydg $D/7s/gen1-*.ydg \
+    $D/8s/gen1-*.ydg
 make format && make
 ```
 
-That is the fit of E39's network. The arguments are the output, the one-in-N positions to keep,
-`lambda`, the epochs and the threads, then the options, then the games. A size is in the network
-when the games have some of it, and a size they do not have counts flats. The engine picks up
-`net.h` the next time it is built. After swapping one in by hand, check that bench changed: a
-copied file can keep an older date, and `make` will then quietly do nothing.
+That is the fit of E42's network, at 128 filters. E40's was the same without gen 10, and E39's
+that at 32 filters. The arguments are the
+output, the one-in-N positions to keep, `lambda`, the epochs and the threads, then the options,
+then the games. A size is in the network when the games have some of it, and a size they do not
+have counts flats. The engine picks up `net.h` the next time it is built. After swapping one in by
+hand, check that bench changed: a copied file can keep an older date, and `make` will then quietly
+do nothing.
+
+The width is `NN_FILTERS` in `src/nn.h`, a multiple of 32. A `net.h` of another width stops the
+build, so to fit a new width, move `net.h` aside, build, which then counts flats, and fit.
 
 `--seed n`, before the game files, picks other first weights and another order of the
 positions, which is how to see how far two fits of the same games play apart. `--share 8=0.2`

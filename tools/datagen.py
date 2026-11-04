@@ -1,7 +1,7 @@
 """
 datagen.py - run self-play on every core, and report how fast it went.
 
-    python tools/datagen.py --out external/data/gen1 --games 100000 --nodes 5000 --generation 1
+    python tools/datagen.py --out external/data/gen11/6s/gen11 --games 100000 --generation 11
 
 The games are played by `yapper datagen`, one process a job, each with its own seed and file, so
 nothing is shared and nothing waits. A file is a list of whole games, so the parts of a run can

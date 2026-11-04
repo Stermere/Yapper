@@ -4,10 +4,12 @@ Every measurement goes here, with the conditions that produced it. Machine unles
 Ryzen 7 5800X, Windows 11, one thread. Up to E6 that is gcc 12.2 `-O3 -flto -march=native`, and
 from E7 clang 15.0.7 `-O3 -march=native` as one translation unit.
 
-Bench signature now: **5871664 nodes**, identical from clang native, clang generic and gcc
+Bench signature now: **1388639 nodes**, identical from clang native, clang generic and gcc
 `popcnt`. It was 49104542 at the end of the skeleton, E9 and E10 moved it to 44927798, the fitted
 evaluation of E15 and E17 to 10797140, the search work of E20 to E25 to 9465377, the network of E34
-to 11191478, and the search work of E36 moved it here.
+to 11191478, the search work of E36 to 5871664, E38's networks to 3204012, E39's one network to
+3378307, E40's wider network and history to 3296722, E42's refit on gen 10 to 2723456, and its
+tighter move-count pruning moved it here.
 
 ## Speed
 
@@ -1261,6 +1263,237 @@ A candidate was once built after the per-size networks were removed, with its we
 old file name: it compiled, played every size on flats, and lost 274 games of 274 before it was
 stopped. Its bench, 3529232, was new and so passed for a different network.
 
+## E40: a handicapped syntaks, a wider network and history by the whole move
+
+The aim is to come within 100 of syntaks at full strength, from E39's -676. At that gap no match
+can tell two builds apart, so the measure is syntaks on a fraction of its clock. Everything against
+syntaks here is through racetrack on 6x6 with 2 komi, from `6s_4ply.txt` shuffled, 7 games at once
+and nothing else running, with Yapper at 5+0.05 and syntaks at 1/k of it.
+
+**The stick.** E39's build against syntaks at 1/k:
+
+| k | syntaks's clock | Games | Result |
+|---|---|---|---|
+| 4 | 1.25+0.0125 | 100 | +17 -77 =6, **-240 [-325, -153]** |
+| 8 | 0.625+0.00625 | 100 | +29 -65 =6, **-130 [-204, -56]** |
+| 16 | 0.3125+0.003125 | 100 | +64 -27 =9, **+134 [+61, +206]** |
+| 32 | 0.156+0.0016 | 100 | +92 -4 =4, **+477 [+329, +625]**, 8 games lost on time |
+| 8 | 0.625+0.00625 | 600 | +233 -327 =40, **-54 [-82, -26]**, score 0.422 |
+
+k=8 is the stick. Three of its 600 games ended on the clock, two of them syntaks's, where k=32
+lost 8 of 100. At 1/4 of the time syntaks reached Yapper's median depth, 10, and still won by 240,
+so the gap is in what a node is worth more than in how deep the search goes. At full time both
+sides use about 6 s of a game's 7.5. Of the base's 95 road losses, 90 were finished by a spread,
+and its 231 losses on flats were by a median of 4 half flats.
+
+**A wider network.** E39's recipe and games, seed 0, with only `NN_FILTERS` changed. The kernels
+had added the output up in one warp, a filter a lane, which only works at exactly 32: they now
+add a warp at a time and then the warps in order, the same arithmetic at 32. The engine sums the
+units 256 at a time, since 1024 activations times weights could overflow 32 bits, and a `net.h`
+now carries its width so that one of another width cannot compile: C fills a short initialiser
+with zeros. Bench was unchanged by all of it, 3378307.
+
+| Fit | 6x6 gen 9, 20k | 4x4 | 7x7 | 8x8 | Speed on bench |
+|---|---|---|---|---|---|
+| F0, 32 filters | 0.4496 | 0.3741 | 0.5361 | 0.5863 | 4.85M nps |
+| 64 filters | 0.4459 | 0.3690 | 0.5356 | 0.5853 | 4.13M, 0.85 times |
+| 128 filters | 0.4437 | 0.3651 | 0.5355 | 0.5873 | 3.30M, 0.68 times |
+
+6x6, 4x4 and 5x5 gained most, and 8x8 not at all at 128. The engine reads within 0.5 hundredths
+of each fit on average and 1 at worst, on every size. A fit takes about a minute an epoch at 64
+filters and 1.3 at 128.
+
+**History by the whole move.** History was kept by square and kind, so every spread from a square
+in one direction shared a slot, and a spread east shared one with a flat placed there. Keyed by
+the whole 16-bit move instead, 512 kB, bench fell from 3378307 to 2492576 nodes.
+
+| Match | Result |
+|---|---|
+| Whole-move history against E39, 100,000 nodes | **PASSED**, 588 games, +343 -145 =100, **+121.7 +/- 26.5**, pairs [18, 23, 92, 65, 96] |
+| 64 filters against E39, 100,000 nodes | **PASSED**, 810 games, +416 -234 =160, **+79.4 +/- 21.8**, pairs [37, 37, 143, 83, 105] |
+| History in the reductions, less by history / 8192, against whole-move history, 100,000 nodes | stopped at 778 games, +315 -297 =166, **+8.0 +/- 21.3** |
+
+Against syntaks at k=8, both with whole-move history:
+
+| Build | Result | Road losses, by spread | Losses on flats |
+|---|---|---|---|
+| E39 | +233 -327 =40, **-54 [-82, -26]**, 0.422 | 90 | 231 |
+| 64 filters | +287 -261 =52, **+15 [-12, +42]**, 0.522 | 68 | 188 |
+| 128 filters | +330 -227 =43, **+60 [+32, +87]**, 0.586 | 56 | 168 |
+
+128 filters is the network: 45 above 64 against syntaks despite running at 0.8 of its speed, and
+about 114 above E39. Fewer road losses by spread came with it, though nothing here looks for them.
+
+At a time control, 128 filters with whole-move history against E39, 2+0.02: **PASSED**, 504
+games, +320 -107 =77, **+156.7 +/- 30.3**, pairs [10, 20, 71, 49, 102].
+
+Bench 3296722 from clang native, clang generic, gcc `popcnt` and `make release`. `make check`
+and `make datacheck` pass, and selftest passes 584,540,980 checks. Without `-march=native` the
+build runs at 0.7 of native speed, where E39's ran at 0.8: the wider loops want the wider
+vectors.
+
+Built and not yet measured: the other side's road by spread looked for before reverse futility
+trusts a node, and in the leaf search before a stand pat above alpha is trusted; a two-ply
+continuation history; internal iterative reduction.
+
+## E41: four search variants on E40, and Topaz
+
+Each against E40 at 2+0.02, 7 games at once:
+
+| Variant | Bench | Result |
+|---|---|---|
+| Reverse futility asks first whether the other side has a road by spread | 3125225 | **INCONCLUSIVE** at the cap, 2000 games, +704 -813 =483, **-19.0 +/- 12.8**, pairs [149, 202, 366, 175, 108] |
+| The leaf search asks the same before trusting a stand pat above alpha, and plays out every reply if so | 3651819 | **FAILED**, 560 games, +138 -303 =119, **-105.5 +/- 24.7**, pairs [74, 67, 103, 22, 14] |
+| A follow-up history, by this side's move before, beside the one by the other side's | 3693396 | **INCONCLUSIVE** at the cap, 2000 games, +733 -795 =472, **-10.8 +/- 13.1**, pairs [149, 187, 379, 147, 138] |
+| Internal iterative reduction: a ply less at a PV or cut node from depth 4 with no table move | 2746378 | **INCONCLUSIVE** at the cap, 2000 games, +729 -763 =508, **-5.9 +/- 13.0**, pairs [142, 184, 372, 170, 132] |
+
+None is kept, and `search.c` is E40's. The four are kept as a diff behind switches in
+`external/build/search-variants-e41.diff`.
+
+Most of E40's road losses to syntaks are still by spread, but looking for the other side's spread
+where the search trusts a quiet position costs more than it finds: a leaf that has to answer one
+must try every move, since any spread or wall might stop it, and that is nearly a ply more of
+search at every such leaf. The reverse futility test costs a spread search at each node it
+would cut, and those are the nodes the search can least afford.
+
+**Topaz, as a second stick.** The perft build kept since E8 is only Topaz's perft example. Its
+main branch, 2989527, needs a network kept outside the repository, and none of those published
+fit it, so the engine is the newer commit dcb8cd2 on its `back` branch, of 2026-10-30, with that
+day's network: built as a black box like syntaks, the source deleted unread. E40 against both
+at full strength, 5+0.05, 200 games each:
+
+| Opponent | Result | Score | Road losses, by spread | Losses on flats, median margin |
+|---|---|---|---|---|
+| Topaz | +55 -111 =34, **-99 [-146, -52]** | 0.360 | 14 of 15 | 96, 2 half flats |
+| syntaks | +10 -181 =9, **-442 [-532, -348]** | 0.072 | 49 of 52 | 129, 4 half flats |
+
+Against syntaks that is up from E39's -676 [-965, -426] over 100 games. Topaz at full strength
+scores near enough to half to measure a change without a handicap, and both sides reach a median
+depth of 10. Most losses to it are close flat games.
+
+## E42: gen 10, its refit, and a second layer that did not pay
+
+**Gen 10.** 120,000 games of 6x6 at 20,000 nodes from E40, seeds 10000 to 10014 on 15 jobs, in 4.9
+hours: 6.8 games a second, where E39's 32 filters made 10.8. 11.0M positions. takref replayed 600
+of them without a failure, and they read like gen 9's 20,000-node games: a median of 93 plies, 9%
+roads and 13% draws.
+
+**F1** is E40's fit with gen 10 added: 190M positions in 13 minutes. It scores better on every 6x6
+group, though gen 10 adds only 6% to the positions:
+
+| Held out, against results | Gen 7 | Gen 8 | Gen 9, 20k | Gen 10 |
+|---|---|---|---|---|
+| E40's network | 0.4507 | 0.4663 | 0.4437 | |
+| F1 | 0.4503 | 0.4655 | 0.4429 | 0.4337 |
+
+| Match | Result |
+|---|---|
+| F1 against E40, 2+0.02 | **INCONCLUSIVE** at the cap, 2000 games, +839 -771 =390, **+11.8 +/- 13.5**, pairs [152, 131, 378, 175, 164] |
+| The same fit at seed 1, against E40 | **INCONCLUSIVE** at the cap, 2000 games, +804 -770 =426, **+5.9 +/- 13.5**, pairs [145, 172, 352, 166, 165] |
+| F1 against syntaks at 1/8 of 5+0.05, 600 games, beside a GPU fit | +355 -187 =58, **+99 [+71, +127]**, score 0.640 |
+| The same, with nothing else running | +298 -250 =52, **+27 [+0, +55]**, score 0.540 |
+| F1 against Topaz at 5+0.05, 200 games, beside a GPU fit | +76 -98 =26, **-38 [-85, +8]**, score 0.445 |
+| The same, with nothing else running | +50 -123 =27, **-132 [-181, -82]**, score 0.318 |
+| F1 against syntaks at 5+0.05, 400 games, nothing else running | +25 -362 =13, **-427 [-488, -362]**, score 0.079 |
+| E40 against syntaks at 1/8, 600 games, nothing else running | +313 -245 =42, **+39 [+11, +67]**, score 0.557 |
+| E40 against Topaz at 5+0.05, 200 games, nothing else running | +64 -116 =20, **-92 [-140, -43]**, score 0.370 |
+
+**A match against another engine depends on the machine being quiet.** The same F1 binary read 72
+higher at an eighth and 94 higher against Topaz while a GPU fit held two of the sixteen threads,
+which is far past chance for either. A busy machine seems to cost the other engine more than
+Yapper, and most of all syntaks on an eighth of the clock, with its 10 ms `MoveOverhead`. E40's
++60 [+32, +87] and -99 [-146, -52] were not taken on a known quiet machine either. Run again alone,
+E40 leads F1 by 12 at an eighth and by 40 against Topaz. Both are inside the noise, but they lean
+the other way from self-play's +11.8.
+
+F1 is kept on its self-play and its fit, as E38 kept D1. Of its 362 losses to syntaks at full
+strength, 264 were on flats by a median of 4 half flats, and 95 of the 98 roads were finished by a
+spread. In 60 of them Yapper scored itself above +1 in the game's last third.
+
+**A second layer.** Each filter's eight units are pooled into one, the sum of their clipped squares.
+Turning the board only permutes the eight, so the pool cannot change. Sixteen units then read the
+128 pools and the skip inputs, clipped to [0, 1], with weights per size and bucket, and the output
+adds them to the straight sum of the pools it had before. The engine cuts each pool to 16 bits,
+`(sum + 16) >> 5`, which the fit reads as `NN_QA^2 / 2^16` of it, so both layers are 16-bit
+products into 32-bit sums. The engine read within 0.50 hundredths of the fit on average and 2 at
+worst. Selftest passed its random networks through the layer on every size, and the GPU and CPU
+fits agreed to float rounding. It fitted better on every 6x6 group, by 0.0012 to 0.0016, about
+three times what one seed moves the loss.
+
+| Second layer | Result |
+|---|---|
+| Against F1, 2+0.02 | **FAILED**, 1436 games, +494 -648 =294, **-37.4 +/- 16.1**, pairs [146, 132, 253, 104, 83] |
+| Against F1, 100,000 nodes each, 600 games | +263 -238 =99, **+14.5 +/- 25.1**, pairs [44, 41, 119, 38, 58] |
+| Against syntaks at 1/8, 600 games, beside F1's rerun on a quiet machine | +300 -249 =51, **+29 [+2, +56]**, F1 +27 |
+| Against Topaz at 5+0.05, 200 games, the same | +51 -123 =26, **-130 [-179, -80]**, F1 -132 |
+
+The fit was worth about 15 at equal nodes, and the speed cost more than that. As first written the
+engine ran at 0.64 of F1's nodes a second. Timed on its own, F1 scores a position in 50 ns and the
+layer took 210. Inlined, clang never stored the pools as 16-bit numbers: it widened all 128 once,
+spilled them, and packed them back for every row with half-width multiply-adds. Pooling in a
+function of its own, four rows a pass, and the full-width pragma on every loop brought it to 158 ns
+and 0.72 of F1's speed, with the bench unchanged. That is about 75 ns for the rows and 35 more
+for pooling than F1's whole score. Two orientations of a filter side by side, so that one
+multiply-add squares both, timed slower. Eight units fitted between, at 0.50460 held out against
+16's 0.50434 and F1's 0.50484, and ran at 0.82 of F1. Neither is kept, and the code is in
+`external/build/l2`.
+
+Across E40 to E42 a fit's gain played at about 10 Elo at equal nodes for each 0.001 of held-out
+loss: the width, gen 10 and the second layer all fall near it. A network that costs speed has to
+buy more loss than that. 256 filters needed the trainer's kernel to take two hidden units a thread,
+since 2048 is over CUDA's 1024 to a block. That kernel is kept in `external/build/w256`, and it
+matches the CPU to float rounding.
+
+**The recipe**, on F1's games and seed:
+
+| Change | Result |
+|---|---|
+| lambda 0.85 on 6x6, for 0.7 | **INCONCLUSIVE** at the cap against F1, 2000 games, +767 -816 =417, **-8.5 +/- 13.5**, pairs [170, 157, 367, 164, 142] |
+| 25 epochs, for 15 | 0.50497 held out against F1's 0.50484, so not played |
+| 256 filters, with the kernel taking two units a thread | 6x6 held out between F1's and the second layer's. On a quiet machine, +285 -273 =42, **+6 [-20, +34]** against syntaks at 1/8, and +39 -128 =33, **-166 [-215, -115]** against Topaz, at about 0.65 of F1's speed |
+
+**The clock**, each against F1 at 2+0.02:
+
+| Change | Result |
+|---|---|
+| Three times the budget at the start, falling to none extra by half the stones down | **INCONCLUSIVE** at the cap, 2000 games, +706 -835 =459, **-22.4 +/- 12.9**, pairs [166, 178, 384, 163, 109] |
+| Half the budget at the start, the same way | **INCONCLUSIVE** at the cap, 2000 games, +718 -770 =512, **-9.0 +/- 12.2**, pairs [121, 204, 385, 186, 104] |
+| No new iteration past 60% of the budget, for 50% | **INCONCLUSIVE** at the cap, 2000 games, +727 -767 =506, **-6.9 +/- 12.4**, pairs [127, 187, 396, 179, 111] |
+
+syntaks spends its clock on the opening, as below, but the same did not help Yapper, and neither
+did the opposite. The budget stays as it was.
+
+**The search**, at 2+0.02:
+
+| Change | Bench | Result |
+|---|---|---|
+| Move-count pruning at half: after `3 + 1.5d^2` moves, `6 + 3d^2` when improving | 1388639 | **INCONCLUSIVE** at the cap against F1, 2000 games, +815 -702 =483, **+19.7 +/- 12.9**, pairs [116, 164, 365, 201, 154]. Kept |
+| Reductions `/ 1.75`, for `/ 2.0` | 1788389 | **INCONCLUSIVE** at the cap against F1, 2000 games, +755 -762 =483, **-1.2 +/- 12.9**, pairs [128, 195, 370, 170, 137] |
+| Pruning at a quarter, `2 + d^2` and `4 + 2d^2`, on the half | 1346183 | **INCONCLUSIVE** at the cap against the half, 2000 games, +758 -744 =498, **+2.4 +/- 12.9**, pairs [131, 188, 348, 202, 131] |
+| The half to depth 8, for 6 | 1399090 | **INCONCLUSIVE** at the cap against the half, 2000 games, +738 -731 =531, **+1.2 +/- 12.7**, pairs [132, 180, 356, 213, 119] |
+
+On a quiet machine the half read +301 -255 =44, **+26 [+0, +54]** against syntaks at 1/8 and +61
+-110 =29, **-86 [-133, -38]** against Topaz, where F1 read +27 and -132. With E36's ns5 that makes
+two steps where tighter move-count pruning gained, and the third did not.
+
+F1's network and the half both stopped at the cap, so the build as a whole was tested against
+E40, as E36 settled ns1 and ns2:
+
+| Conditions | Result |
+|---|---|
+| E42 against E40, 2+0.02 | **PASSED**, 1556 games, +692 -528 =336, **+36.8 +/- 14.8**, pairs [81, 112, 287, 158, 140] |
+
+Against the other engines on a quiet machine, E42 sits within the noise of E40, which 600 and 200
+games cannot resolve at this size. Self-play's +36.8 is the result that settles it.
+
+**Where syntaks spends.** Both engines use about 6.1 to 6.4 s of a 7.5 s game. syntaks spends 0.36
+s a move over the first 15 plies to Yapper's 0.12, and less than Yapper from ply 30 on. It reports
+2 to 3 plies more throughout, even where it spends less. Given one second on a position just after
+the book, syntaks reached depth 17 on 1.48M nodes at 1.52M a second, each ply 1.5 times the last.
+Yapper reached 14 on 1.93M at 3.6M a second, at 1.8 to 2.4 times. That is E34's and E36's gap,
+still there. syntaks's `MoveOverhead` is 10 ms by default, which at 1/8 is more than its 6.25 ms
+increment, so that handicap takes more from it than the clock alone says.
+
 ## Mistakes worth not repeating
 
 - **A build with no network still plays.** One candidate's weights went in under a file name the
@@ -1294,6 +1527,16 @@ stopped. Its bench, 3529232, was new and so passed for a different network.
 - **perftdiff is not background work.** It takes every core, which was forgotten once: a duel
   run beside it read 35 Mnps on a position that runs at 145, and bench read 612k nps.
 
+- **A match against another engine needs a quiet machine.** A GPU fit on two threads lifted the
+  same binary by 72 against syntaks at an eighth and 94 against Topaz, E42. Self-play shares any
+  slowdown between its sides; another engine does not. Run nothing beside a gauntlet, and compare
+  only gauntlets run alike.
+- **A wait on a log line must wait for a line nothing else prints.** A queued gauntlet waited for
+  `exit` in an output that began with an earlier job's `exit 0`, and started at once beside an
+  SPRT, E42.
+- **A compiler can merge two stages into one slower one.** Inlined, the second layer's pooling
+  and its rows became one function that rebuilt the pools for every row: 210 ns a score where the
+  parts apart take 158, E42. Time each part alone before deciding what a design costs.
 - **A compiler can delete the thing being timed.** A PGO build reported 517 Mnps on the start
   position. It had inlined make and unmake together and, with nothing reading the board between
   them, thrown most of both away. `board_touched()` in perft.c now forces the position to exist

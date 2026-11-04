@@ -1,7 +1,7 @@
 """
 datacheck.py - read training games without the engine, and check them against the rules.
 
-    python tools/datacheck.py external/data/gen1-*.ydg
+    python tools/datacheck.py external/data/gen10/6s/gen10-*.ydg
 
 Every game gets its header summed up. A sample is then replayed through tools/takref.py, which
 shares nothing with src/: each move must be legal, and the game must end the way its header says.

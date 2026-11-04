@@ -12,6 +12,10 @@
 /* A size has a network when net.h was fitted on its games. `yapper nntrain` writes it. */
 #if __has_include("net.h")
 #include "net.h"
+/* C fills a short initialiser with zeros, so weights of another width would build and play. */
+#if NET_FILTERS != NN_FILTERS
+#error "net.h was fitted for another NN_FILTERS"
+#endif
 #endif
 
 typedef struct Net {
@@ -200,27 +204,35 @@ void nn_derive(const Board *b, NNFrame *frame, const NNFrame *from, u64 touched)
 #endif
 
 /* Clipped and squared. An activation times its weight fits 16 bits, and 256 of those times the
- * activation again fit 32, which is what NN_QA and NN_QB were chosen for. */
+ * activation again fit 32, which is what NN_QA and NN_QB were chosen for. A wider network is
+ * summed 256 units at a time. */
+#define NN_CHUNK 256
+_Static_assert(NN_HIDDEN % NN_CHUNK == 0, "the units are summed a chunk at a time");
+
 i64 nn_score(int size, const NNFrame *frame, const NNInputs *in) {
     const Net *net             = &Nets[size];
     const i16 *restrict acc    = frame->acc;
     const i16 *restrict bias   = net->bias;
     const i16 *restrict weight = net->output[in->bucket];
-    i32 sum                    = 0;
-    if (in->stm == WHITE) {
-        FULL_WIDTH
-        for (int i = 0; i < NN_HIDDEN; i++) {
-            const i16 z = (i16)(acc[i] + bias[i]);
-            const i16 x = z < 0 ? 0 : z > NN_QA ? NN_QA : z;
-            sum += (i32)(i16)(x * weight[i]) * x;
+    i64 sum                    = 0;
+    for (int from = 0; from < NN_HIDDEN; from += NN_CHUNK) {
+        i32 part = 0;
+        if (in->stm == WHITE) {
+            FULL_WIDTH
+            for (int i = from; i < from + NN_CHUNK; i++) {
+                const i16 z = (i16)(acc[i] + bias[i]);
+                const i16 x = z < 0 ? 0 : z > NN_QA ? NN_QA : z;
+                part += (i32)(i16)(x * weight[i]) * x;
+            }
+        } else {
+            FULL_WIDTH
+            for (int i = from; i < from + NN_CHUNK; i++) {
+                const i16 z = (i16)(bias[i] - acc[i]);
+                const i16 x = z < 0 ? 0 : z > NN_QA ? NN_QA : z;
+                part += (i32)(i16)(x * weight[i]) * x;
+            }
         }
-    } else {
-        FULL_WIDTH
-        for (int i = 0; i < NN_HIDDEN; i++) {
-            const i16 z = (i16)(bias[i] - acc[i]);
-            const i16 x = z < 0 ? 0 : z > NN_QA ? NN_QA : z;
-            sum += (i32)(i16)(x * weight[i]) * x;
-        }
+        sum += part;
     }
     const i32 *skip = net->skip[in->bucket];
     return (i64)sum * NN_SCALE * 64 / ((i64)NN_QA * NN_QA * NN_QB) + (i64)skip[0] * in->lead +

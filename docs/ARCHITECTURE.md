@@ -101,9 +101,9 @@ Iterative deepening PVS with aspiration windows, a bucketed transposition table,
 reverse futility, late move reductions and pruning, and singular extensions. Reductions are a ply
 stronger at a node expected to cut, and move-count pruning comes sooner when the side to move's
 evaluation has fallen since its last move. The table move and the killers are tried
-before a move list exists, because most nodes cut on one of them. The rest go by history, overall
-and by what answered the move before. A node answering a road skips the placements that cannot
-stop it.
+before a move list exists, because most nodes cut on one of them. The rest go by history: of the
+whole move, so each spread a stack can make keeps its own, and of its square and kind by what
+answered the move before. A node answering a road skips the placements that cannot stop it.
 
 The clock is shared out over the moves the game has left, worked out from the shorter reserve, so
 it runs down towards the end of the game rather than being spent early and left over. Moving time
@@ -144,7 +144,7 @@ top subtracts its row where a white one adds it. The accumulator is then white's
 is its negation, so there is no second one to keep up. The side to move flips the sign before the
 activation.
 
-**The board's symmetries are in the weights.** The 256 hidden units are 32 filters, each seen
+**The board's symmetries are in the weights.** The 1024 hidden units are 128 filters, each seen
 through all eight rotations and reflections of the board, and the output weighs the eight alike.
 Turning a position only permutes each filter's units, so the score cannot change, and selftest
 holds that exactly, for any weights. Training stores each filter once. That is an eighth of the
@@ -164,7 +164,10 @@ skip adds the flat lead with komi, the reserves and komi itself, which are what 
 counted on.
 
 **It is integer.** Activations are clipped to [0, 1] and squared. An activation is 255 and an
-output weight 64, so an activation times its weight fits 16 bits and 256 of those again fit 32.
+output weight 64, so an activation times its weight fits 16 bits and 256 of those again fit 32,
+which is why the units are summed 256 at a time. A `net.h` carries the width it was fitted at, and
+a build of another width will not compile with it, since C would fill the missing weights with
+zeros and the engine would play on them.
 Every build scores alike, so bench is the same from clang, gcc and a build with no CPU
 assumptions. `nntrain` fits on the same rounded weights the engine runs, so the fit is what plays.
 
@@ -185,5 +188,6 @@ that is being fitted to it.
 
 A network is fitted on an NVIDIA GPU when the machine has one. `src/gpu.c` finds the driver and
 its runtime compiler when the tool runs, so no build depends on CUDA, and the kernels are the CPU
-fit's own loops, one hidden unit a thread. Gradients are added in fixed point, which makes a fit
+fit's own loops, one hidden unit a thread, with the output added up a warp of 32 filters at a
+time, so the width must be a multiple of 32. Gradients are added in fixed point, which makes a fit
 repeatable to the byte however the card orders its adds.

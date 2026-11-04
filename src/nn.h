@@ -8,7 +8,7 @@
 
 /* A hidden unit is one of the filters seen through one of the board's eight symmetries, and
  * the output weighs all eight alike, so turning the board cannot change the score. */
-#define NN_FILTERS      32
+#define NN_FILTERS      128
 #define NN_ORIENTATIONS 8
 #define NN_HIDDEN       (NN_FILTERS * NN_ORIENTATIONS)
 

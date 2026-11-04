@@ -44,9 +44,11 @@ typedef struct Worker {
     int pv_length[MAX_PLY];
 
     Move killers[MAX_PLY][2];
-    /* By side, then square plus kind: a placement of a type, or a spread in a direction. */
-    i32 history[2][256];
-    /* The same again, for what answered what: by the move before this one as well. */
+    /* By side, then the whole move. Square plus kind put every spread from a square in one
+     * direction in one slot, and a spread east in a flat placement's, whatever it carried. */
+    i32 history[2][65536];
+    /* What answered what, by side, then square plus kind of the move before this one and of
+     * this one. */
     i32 replies[2][256][256];
     Move played[MAX_PLY + 1];
     /* The static evaluation of each node on the path. */
@@ -150,7 +152,7 @@ static inline bool should_stop(Worker *w) {
     return atomic_load_explicit(&StopFlag, memory_order_relaxed);
 }
 
-static inline i32 *history_slot(Worker *w, int us, Move m) { return &w->history[us][m & 0xFF]; }
+static inline i32 *history_slot(Worker *w, int us, Move m) { return &w->history[us][m]; }
 
 static inline void history_update(i32 *slot, int bonus) {
     *slot += bonus - *slot * abs(bonus) / 16384;
@@ -289,7 +291,7 @@ static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Mo
 
     for (int i = 0; i < count; i++) {
         const Move m = moves[i];
-        i32 score    = w->history[us][m & 0xFF] + replies[m & 0xFF];
+        i32 score    = w->history[us][m] + replies[m & 0xFF];
         if (m == tt_move) {
             score += 1 << 28;
         } else if (m == killer_a) {
@@ -503,7 +505,7 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, bool cut_n
         /* Late move pruning: a shallow node has seen enough once this far down the list, and
          * sooner when its position is getting worse. */
         if (!root && !pv_node && !threats && depth <= 6 &&
-            searched >= (improving ? 12 + depth * depth * 6 : 6 + depth * depth * 3) &&
+            searched >= (improving ? 6 + depth * depth * 3 : 3 + depth * depth * 3 / 2) &&
             best_score > -SCORE_WIN_BOUND) {
             break;
         }
