@@ -203,14 +203,6 @@ static void check_eval(const Board *b) {
     const int score = evaluate_here(b);
     CHECK(abs(score) < SCORE_WIN_BOUND / 2, "eval %d out of range: %s", score, tps);
 
-    EvalTrace trace;
-    const u64 threats = board_road_placements(b, !board_stm(b));
-    const int hce     = evaluate_hce(b, threats);
-    const int traced  = evaluate_trace(b, threats, &trace);
-    CHECK(traced == hce, "trace scored %d, play %d: %s", traced, hce, tps);
-    CHECK(eval_from_trace(&trace) == hce, "trace adds up to %d, play %d: %s",
-          eval_from_trace(&trace), hce, tps);
-
     Board other;
     for (int transform = 1; transform < 8; transform++) {
         board_transformed(b, &other, transform, false);
@@ -297,10 +289,10 @@ static void check_frame(const Board *b, NNFrame *frames, const Move *made, int p
 /* Random weights on every size, whatever is compiled in, so the network is held to its gates
  * before one has been trained. Symmetry holds for any weights, by construction. */
 static void network_games(int size, int games, int halfkomi) {
-    static i16 filters[MAX_SIZE * MAX_SIZE * NN_TOKENS * NN_FILTERS];
+    static i16 filters[NN_GRID * NN_GRID * NN_TOKENS * NN_FILTERS];
     static i16 bias[NN_FILTERS], output[NN_BUCKETS * NN_FILTERS];
     static i32 skip[NN_BUCKETS * 4];
-    for (int i = 0; i < size * size * NN_TOKENS * NN_FILTERS; i++) {
+    for (int i = 0; i < NN_GRID * NN_GRID * NN_TOKENS * NN_FILTERS; i++) {
         filters[i] = (i16)(rng() % 129) - 64;
     }
     for (int i = 0; i < NN_FILTERS; i++) {

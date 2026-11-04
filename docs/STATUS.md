@@ -3,8 +3,9 @@
 **Tiltak is beaten, and syntaks is the bar.** A network on 6x6 led Tiltak by +428 over 800 games,
 E33. The aim set for 2026-11-02 was to come within 300 of syntaks that day; the best network, v2,
 read -576 [-665, -481] over 400 games, E34. A more selective search gained +82.5 on v2's own, and
-read -665 [-784, -541] against syntaks, which at this gap cannot tell the two apart: E36. Every size
-but 6x6 still plays the hand-written evaluation.
+read -665 [-784, -541] against syntaks, which at this gap cannot tell the two apart: E36. One
+network now plays every size, at least as well as the networks of their own that replaced the
+hand-written evaluation, and far better on 5x5, 7x7 and 8x8: E38, E39.
 
 ## Done and verified
 
@@ -15,11 +16,11 @@ but 6x6 still plays the hand-written evaluation.
 | Move generation | Done, and leading | 9.9 to 12.6 times the fastest engine on bulk, and 6.0 to 7.5 times on full where only Topaz and Tiltak can be compared, on every position raced: EXPERIMENTS.md E8 and E13 |
 | TEI | Done | 40 games through the real racetrack with no protocol faults |
 | Match runner and SPRT | Done | Known-answer tests, EXPERIMENTS.md E1-E3 |
-| Evaluation | A network on 6x6, hand-written elsewhere | v2, fitted on gens 1-8: **+137 +/- 28 on v1 at 2+0.02**, which led Tiltak by +428: E33, E34. Each new generation from the best network has paid. Other sizes play the hand-written evaluation fitted on 6x6 self-play: E27 |
+| Evaluation | One network for every size | Filters on an 8x8 grid every board shares, and each size's own bias, output and skip. Against E38's networks of each size's own at 100,000 nodes: **8x8 +130, 7x7 +203, 5x5 +64**, passed SPRTs for its lambda 0.5 forerunner, then **+77 and +70 more on 8x8 and 7x7** from lambda 0.7; **4x4 +14.3 +/- 8.8**, passed, and +7.3 +/- 8.2 at 2+0.02; **6x6 +16.9 +/- 13.8 against v2, and +23.7 +/- 13.9 at 2+0.02**, both at the cap with their intervals above zero; 3x3 is decided by who moves first at every budget tried: E39. The hand-written evaluation went in E38 |
 | Search | Second pass done | **+116 [+92, +140] against Tiltak over 800 games at 5+0.05**, from -38: EXPERIMENTS.md E25. It sees roads by spread, and most of the gain is speed in real middlegames. With the network, stronger reductions, move-count pruning to depth 6 and singular extensions: **+82.5 +/- 31.3 on v2's search at 2+0.02**, E36 |
 | Time management | Done for now | Budgets on the moves left, from the shorter reserve. One time loss in 5242 games, and it does not use the whole clock yet: E25 |
-| Training data | 6x6 only so far | 157.7M positions in gens 1-8, every one recoverable from about four bytes a ply, repeatable, checked by takref: docs/DATA.md, E34. Openings of up to 16 random plies and margin-checked deviations from E37 on. None yet for other sizes |
-| Fitting a network | On the GPU | An RTX 3070 fits about 18M positions a second to the CPU's 1.05M, the same network to within float rounding and repeatable to the byte; nothing is needed to build it: E37 |
+| Training data | Every size | 6x6: gens 1-9, 217.8M positions, every one recoverable from about four bytes a ply, repeatable, checked by takref: docs/DATA.md, E34, E38. 150,000 to 400,000 games of each other size from Gen-1Big. Openings of up to 16 random plies and margin-checked deviations from E37 on. At equal time, 20,000 nodes a move taught a 6x6 network far more than 5000, E38. The network is fitted on 6x6's gens 7-8 and gen 9's 20,000-node games: gens 1-6 can go and gen 7 cannot, E39 |
+| Fitting a network | On the GPU | An RTX 3070 fits about 18M positions a second to the CPU's 1.05M, the same network to within float rounding and repeatable to the byte; nothing is needed to build it: E37. Every size in one fit of minutes, the weights averaged over its last tenth. Two fits of the same games that differ only in seed play 15 to 35 apart, so a fit is chosen from several: E39 |
 | Playing it yourself | Done | `python tools/play.py` |
 | Portability | Partly | The hot files compile for AArch64 with NEON; passes every gate with no CPU assumptions on x86-64, at about 80% of native speed, with clang and gcc giving the same bench. **Not yet run on ARM**: CI has a real ARM runner, and it runs on the first push |
 
@@ -57,14 +58,15 @@ dependency, a third-party library and not an engine. pentakle needs `cargo +nigh
    network each side's stones left did not help, E35. E36's search gained on its own but not
    measurably on syntaks, and lost more often to roads by spread. A handicapped syntaks, scoring
    near half, is needed to measure progress against it.
-2. Networks for the other sizes. Gen-1Big's first generation for 3x3 to 8x8 started on the night of
-   2026-11-02, E37; of the books their matches need, only 3x3's is built. One network shared by
-   every size is on the `nnue` branch and has not played.
-3. Training, now that a fit takes minutes. Whether 5000 nodes is too few, from Gen-1Big's equal-time
-   halves at 5000 and 20,000. The scale that turns a score into a result: the games say 240 where
-   the fit uses 310, E37. `lambda`, the epochs and the end of the learning rate, since the
-   held-out loss still swings by 0.003 an epoch at the end. A wider network, which the speed lead
-   over syntaks leaves room for.
+2. The next generation, at 20,000 nodes, from the one network, on every size. The other sizes have
+   only games from the hand-written evaluation, and gained most from sharing 6x6's; 6x6's first
+   generation from a network gave +355, E33. On 6x6, 64,000 games at 20,000 nodes taught more than
+   300,000 at 5000 in the same time, E38, and gens 7-9 hold little more for this network, E39.
+3. Training. Two fits of the same games differ by 15 to 35 in play, as much as most changes, so
+   fewer of them would make every comparison cheaper: E39's lower learning rate fitted marginally
+   better and has not played. The scale that turns a score into a result: the games say 240 where
+   the fit uses 310, E37. A wider network, which the speed lead over syntaks leaves room for, and
+   which the shared filters, fitted on every size at once, may need more than one size's did.
 4. The search items left: history in the reductions, a two-ply continuation history, null move
    from deeper with a reduction that grows with the margin, the aspiration window and the clock's
    floor. E36 found that sparing moves that threaten a road, and the improving flag outside

@@ -49,11 +49,10 @@ check against the slow one; PTN and TPS round trips; and legality of 400 random 
 against the generated list. The random words are what caught a stale-table bug in the first
 build, and they are not optional.
 
-From the third ply on it also checks the evaluation: that a trace gives the same score as play
-and adds up to it, and that the score survives every rotation and reflection of the board and,
-with no komi, swapping the colours. Nothing else would catch an evaluation that treats a square
-or a colour differently, since games still play. Three deliberate bugs were put in to confirm
-each of these fails.
+From the third ply on it also checks the evaluation the build plays: that the score survives
+every rotation and reflection of the board and, with no komi, swapping the colours. Nothing else
+would catch an evaluation that treats a square or a colour differently, since games still play.
+Deliberate bugs were put in to confirm each of these fails.
 
 The test for a road by spread is held to a brute force over every generated move, at every
 position. It rules moves out without playing them, so an error there means a win the search can
@@ -65,7 +64,8 @@ hits leave them in a search, must equal one built from nothing, bit for bit, and
 and the score must survive the eight symmetries and a colour swap. That last holds for any
 weights, by construction, so random ones are a fair test. Three deliberate bugs, one per check,
 confirmed each fails: one orientation left untied, a carry that forgot to take black tokens away,
-and colours not folded under a black top.
+and colours not folded under a black top. A fourth, the grid's transpose dropped for every board
+smaller than it, failed it 155,380 times.
 
 ## perftdiff
 

@@ -117,19 +117,18 @@ per-search state lives in `Worker`, so Lazy SMP is a matter of having more of th
 
 ## The evaluation
 
-`evaluate()` is linear: how much of each term a position has, times what that term is worth. The
-terms are in `eval.h` and the weights in `weights.h`, which a fit writes. Each weight has a value
-for the opening and for the end of the game, packed into one word so a term costs one add, and
-the two are blended once at the end by how many stones the game has left. That is the smaller of
-what either side has left and the empty squares, since a game ends on whichever comes first.
+Every size is played by one network, below, and `evaluate()` adds the one thing a fit cannot read:
+what a road threat is worth, set by hand, since no position a fit reads has a road hanging.
+Scores are in hundredths of a flat, because the search's margins are written in them.
 
-There is one body, built twice like `spread()`. Play adds up the score, and a trace also records
-each term's count, so a fit and the engine cannot read a position differently. Selftest holds the
-two equal.
+A size the network was not fitted on counts flats. Nothing ships like that. It is there so that a
+build whose network has changed shape, and so has no weights that fit it, can still build the
+trainer that fits new ones from the games on disk.
 
-Scores stay in hundredths of a flat, because the search's margins are written in them. It is a
-stepping stone: a size with a network plays that instead, and the hand-written evaluation goes
-once every size has a network that beats it.
+A linear evaluation of 40 hand-picked terms came first, fitted to its own games, and it taught
+the first networks: EXPERIMENTS.md E15 to E32. Every size's network beat it, and it was deleted,
+E38. Those were a network per size, and one network shared by every size then beat them on every
+size it could be measured on, E39.
 
 ## The network
 
@@ -158,18 +157,25 @@ ancestor that has one, through the squares that the moves on the path since then
 and the search already records those moves. Selftest checks a frame carried this way against a
 refresh, bit for bit.
 
-**What is not stacks goes around it.** Output weights come in eight buckets by stones left, the
-same buckets as the hand-written LEAD terms. A linear skip adds the flat lead with komi, the
-reserves and komi itself, which are what a game is finally counted on. The two THREAT terms stay
-hand-set: no position a fit reads has a road hanging.
+**What is not stacks goes around it.** Output weights come in eight buckets by stones left,
+finer near the end, where what a flat is worth climbs steeply. That is the smaller of what
+either side has left and the empty squares, since a game ends on whichever comes first. A linear
+skip adds the flat lead with komi, the reserves and komi itself, which are what a game is finally
+counted on.
 
 **It is integer.** Activations are clipped to [0, 1] and squared. An activation is 255 and an
 output weight 64, so an activation times its weight fits 16 bits and 256 of those again fit 32.
 Every build scores alike, so bench is the same from clang, gcc and a build with no CPU
 assumptions. `nntrain` fits on the same rounded weights the engine runs, so the fit is what plays.
 
-Every size runs the same code with weights of its own, since a square means something different
-on each board. A size without a `netN.h` plays the hand-written evaluation.
+**One network plays every size.** A filter is laid on an 8x8 grid, and a board sits on it with
+its edges on the grid's edges, the near half of each line counted from one edge and the rest from
+the other. A corner, an edge and the line beside it are then the same weights on every size, and
+only the middle differs. Each size keeps its own bias, output and skip, which are a few hundred
+weights. 6x6 has most of the games, and sharing lets the other sizes learn from them what stacks
+and captives are worth: 7x7 and 8x8, with the fewest games for their squares, gained most, E39.
+The engine spreads the weights into a table per size as it loads them, so sharing costs nothing
+in play. The weights are `src/net.h`.
 
 ## Training data
 

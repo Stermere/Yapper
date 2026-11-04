@@ -1,6 +1,6 @@
 /* nn.h - the network: a position's stacks summed into hidden units, and those units scored.
- * docs/ARCHITECTURE.md says why it has this shape. Every size uses the same code, each with
- * weights of its own, and a size with none is played by the hand-written evaluation. */
+ * docs/ARCHITECTURE.md says why it has this shape. One network plays every size: the filters are
+ * shared, and each size has a bias, output and skip of its own. */
 #ifndef NN_H
 #define NN_H
 
@@ -22,14 +22,20 @@
 
 /* Fixed point. An activation of 1 is NN_QA and an output weight of 1 is NN_QB, which keeps
  * an activation times a weight inside 16 bits. An output of 1 is NN_SCALE hundredths of a
- * flat, the scale the hand-written evaluation is fitted at, so the search's margins hold. */
+ * flat, which keeps a flat near 100: the search's margins are written in those units. */
 #define NN_QA    255
 #define NN_QB    64
 #define NN_SCALE 310
 
-/* Weights as a trainer writes them: each filter once, before the symmetries are applied. */
+/* A filter is laid on a grid of NN_GRID by NN_GRID. A board sits on it with its edges on the
+ * grid's edges, so a corner, an edge and the line beside it are the same weights on every size,
+ * and only the middle differs. */
+#define NN_GRID MAX_SIZE
+
+/* Weights as a trainer writes them for one size: each filter once, before the symmetries are
+ * applied, and that size's own bias, output and skip. */
 typedef struct NNWeights {
-    const i16 *filters; /* [square][token][filter], squares rank by rank on the real board */
+    const i16 *filters; /* [cell][token][filter], cells rank by rank on the grid */
     const i16 *bias;    /* [filter] */
     const i16 *output;  /* [bucket][filter] */
     const i32 *skip;    /* [bucket][4]: lead, reserve, komi and a constant, in 64ths */
@@ -45,7 +51,7 @@ typedef struct NNFrame {
 /* What the network is scored on besides the stacks, all from the side to move's view. */
 typedef struct NNInputs {
     int stm;
-    int bucket;  /* by stones left, as the hand-written LEAD terms are */
+    int bucket;  /* by stones left */
     int lead;    /* flats ahead in half flats, komi included */
     int reserve; /* stones in hand ahead */
     int komi;    /* in half flats */
@@ -61,6 +67,10 @@ bool nn_install(int size, const NNWeights *weights);
 const NNWeights *nn_builtin(int size);
 
 bool nn_ready(int size);
+
+/* The cell of the grid whose weights square `sq` of a board of `size` reads under symmetry `g`,
+ * the square counted rank by rank on that board. The trainer uses it too. */
+int nn_cell(int size, int g, int sq);
 
 /* A square's token as stored in a frame. */
 int nn_feature(const Board *b, int sq);

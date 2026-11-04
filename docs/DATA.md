@@ -1,9 +1,9 @@
 # Training data
 
-Self-play games are the one training input Yapper has, for the hand-written evaluation now and
-for a network later. The format is built around that second use: **a file holds games, never
-positions or features.** Replaying a game gives back every position in it, so nothing has to be
-regenerated when the evaluation, its terms or a network's inputs change.
+Self-play games are the one training input Yapper has. **A file holds games, never positions or
+features.** Replaying a game gives back every position in it, so nothing has to be regenerated
+when a network's inputs or its shape change, and the games that taught the hand-written
+evaluation went on to teach every network after it.
 
 ## Making data
 
@@ -27,7 +27,7 @@ On about one ply in ten, a random move is searched as well, and played in place 
 choice if it comes within 0.4 of a flat of it. That is about one such deviation in 110 plies, for
 8% more search. It takes games off the lines one network keeps to, and the margin keeps it from
 being a blunder that the game's result would then pin on the positions before it. Komi is
-mostly 2, with enough of 0, 1, 1.5, 2.5 and 3 for a fit or a network to learn what it does. Games
+mostly 2, with enough of 0, 1, 1.5, 2.5 and 3 for a network to learn what it does. Games
 are played to the end under the rules, with a threefold repetition or 512 plies as a draw, the
 same convention matches use. There is no adjudication: a game costs little once it is decided,
 and a stored result is then always the true one.
@@ -67,8 +67,8 @@ run, and readers stop at the last whole game.
 ## Reading it
 
 In C, `data_replay()` calls a function with every position of a file, its game and its ply. That
-function is the seam: `tune.c` is one such reader, and whatever writes a network's inputs will be
-another. Moves off a disk go through `movegen_is_legal()` like any other unproven move.
+function is the seam: `nntrain.c` is one such reader. Moves off a disk go through
+`movegen_is_legal()` like any other unproven move.
 
 What a position gives a trainer, with nothing regenerated:
 
@@ -82,61 +82,62 @@ What a position gives a trainer, with nothing regenerated:
 | A split by game, so positions of one game never land on both sides | The file's structure |
 | The eight symmetries, for augmentation | Worked out at training time, so not stored |
 
-The search does not know what its evaluation is, so datagen will drive a network the moment one
-is behind `evaluate()`.
+## Training a network
 
-## Fitting the weights
+One network plays every size, so one fit reads every size's games at once:
 
 ```sh
-yapper tune src/weights.h 1 0 external/data/gen1-*.ydg     # report the scale of the build
-yapper tune src/weights.h 1 310 external/data/gen*-*.ydg   # fit, and rewrite the file
+D=external/data/gen1big
+yapper nntrain src/net.h 1 0.7 15 15 --share 7=0.33 --share 8=0.2 --lambda 3=0.5 \
+    --lambda 4=0.5 external/data/gen[78]-*.ydg $D/6s/gen9-20k-*.ydg $D/3s/*.ydg \
+    $D/4s/gen1-*.ydg $D/5s/gen1-*.ydg $D/7s/gen1-*.ydg $D/8s/gen1-*.ydg
 make format && make
 ```
 
-The arguments are the output, the one-in-N positions to keep, and the logistic scale. The fit is
-a logistic regression of each position's trace against its game's result, and since a score is
-linear in the weights it has one answer. It lives in the binary because it reads millions of
-positions through the board and the evaluation, which would take Python hours.
+That is the fit of E39's network. The arguments are the output, the one-in-N positions to keep,
+`lambda`, the epochs and the threads, then the options, then the games. A size is in the network
+when the games have some of it, and a size they do not have counts flats. The engine picks up
+`net.h` the next time it is built. After swapping one in by hand, check that bench changed: a
+copied file can keep an older date, and `make` will then quietly do nothing.
+
+`--seed n`, before the game files, picks other first weights and another order of the
+positions, which is how to see how far two fits of the same games play apart. `--share 8=0.2`
+puts a fifth of 8x8's positions into each epoch, drawn afresh each time, for a size with too few
+games for every epoch to see them all. Weighting its loss instead would not do: the optimiser
+rescales the steps of the weights only that size reaches, so they would move as far as ever.
+`--lambda 4=0.5` gives one size a `lambda` of its own, since the best one differs by board: E39.
 
 Only positions the evaluation is really asked about are used. A side able to win on the spot, a
 road being answered, a forced result and the random plies all go to the search rather than to a
-stand pat, so they are left out, and terms no kept position has hold their value. That is why the
-two `THREAT` weights are still hand-set.
+stand pat, so they are left out. That is why what a road threat is worth is still set by hand.
 
-The scale is held fixed at 310 from one fit to the next, which keeps a flat near 100. It sets what
-a hundredth of a flat means, and the search's margins are written in those units: letting it
-float would retune them by accident.
+The target is `lambda` times the search's score, through the scale of 310, plus the rest times
+the game's result. The scale is held fixed, which keeps a flat near 100. It sets what a hundredth
+of a flat means, and the search's margins are written in those units: letting it float would
+retune them by accident.
 
-A fit starts from the weights in the binary and overwrites the file, so a build must follow it
-before anything else reads the new weights. After swapping `weights.h` by hand, check that bench
-changed: a copied file can keep an older date, and `make` will then quietly do nothing.
+A sixteenth of the games are held out, chosen by a game's place in its own file, so a game is
+held out whatever else a fit reads. The report gives the held-out loss against the target and
+against results alone, after every epoch, and at the end for each group of games: one size,
+generation and budget. Results alone is the one to compare across fits, and a group's line
+compares between any two fits that read its files. It cannot choose `lambda`, since a target
+nearer the results always scores nearer them, nor which games to fit on: a fit on only the last
+two generations scored best on them by far and lost 80 to one that kept the one before, E39.
 
-A sixteenth of the games are held out and reported on, and a held-out loss that stops falling
-means the data has run out. A lower loss is still not a claim of strength. Only an SPRT makes one.
+Each size's held-out loss is printed every epoch too, since one size can run out of games while
+the rest still learn. A held-out loss that rises while the fit's falls means it has: 150,000 games
+of 7x7 or 8x8 did that after two epochs, E38 and E39, where 6x6's millions never have. That is
+what `--share` is for.
+
+The network written is the mean of the weights over the last tenth of the steps, not where the
+last step left them. Even that late, a held-out loss moves by up to 0.003 from one epoch to the
+next, so where a fit happened to stop would otherwise decide much of how good it is: E39.
 
 **Fit on more than the last generation.** Self-play only teaches what self-play does. One engine
 won so well by racing stones down that only 3% of its games against itself ended in a road, and a
 fit on those games alone forgot what roads are worth: it fell far behind against an outside
 opponent while its loss looked excellent. Check the outcomes `datacheck` prints before fitting,
 and judge a fit against an engine that does not play like it.
-
-## Training a network
-
-```sh
-yapper nntrain 6 src/net6.h 1 0.5 20 15 external/data/gen6-*.ydg external/data/gen7-*.ydg
-make format && make
-```
-
-The arguments are the board size, the output, the one-in-N positions to keep, `lambda`, the
-epochs and the threads. Each size has its own network and is trained on its own games, since a
-square means something different on each board: `datagen` takes the size. The engine picks up a
-`netN.h` the next time it is built, and a size with none plays the hand-written evaluation.
-
-Positions are kept as `tune` keeps them, and a sixteenth of the games are held out the same way.
-The target is `lambda` times the search's score, through the scale of 310, plus the rest times
-the game's result. The report gives the held-out loss against that target and against results
-alone, which is the one to compare with the hand-written evaluation's on the same games. That
-comparison is only fair on games neither was fitted on.
 
 A network is fitted on the same rounded weights the engine runs, so the last line, the engine
 against the fit on held-out positions, should read within a hundredth or so. Anything more means

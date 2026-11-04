@@ -19,7 +19,6 @@
 #include "datagen.h"
 #include "nntrain.h"
 #include "test/selftest.h"
-#include "tune.h"
 #endif
 
 static double now_seconds(void) {
@@ -96,20 +95,45 @@ int main(int argc, char **argv) {
                                    .generation = argc > 7 ? atoi(argv[7]) : 0};
         return datagen_run(&config);
     }
-    if (strcmp(command, "tune") == 0 && argc >= 6) {
-        return tune_run(argv[2], atoi(argv[3]), atof(argv[4]), argv + 5, argc - 5);
-    }
-    if (strcmp(command, "nntrain") == 0 && argc >= 9) {
-        const bool cpu = strcmp(argv[8], "--cpu") == 0;
-        return nntrain_run(atoi(argv[2]), argv[3], atoi(argv[4]), atof(argv[5]), atoi(argv[6]),
-                           atoi(argv[7]), !cpu, argv + 8 + cpu, argc - 8 - cpu);
+    if (strcmp(command, "nntrain") == 0 && argc >= 8) {
+        bool cpu                   = false;
+        unsigned long long seed    = 0;
+        double share[MAX_SIZE + 1] = {1, 1, 1, 1, 1, 1, 1, 1, 1};
+        double lambda[MAX_SIZE + 1];
+        for (int size = 0; size <= MAX_SIZE; size++) {
+            lambda[size] = atof(argv[4]);
+        }
+        int first = 7;
+        for (; first < argc; first++) {
+            int size;
+            double part;
+            if (strcmp(argv[first], "--cpu") == 0) {
+                cpu = true;
+            } else if (strcmp(argv[first], "--seed") == 0 && first + 1 < argc) {
+                seed = strtoull(argv[++first], NULL, 10);
+            } else if (strcmp(argv[first], "--share") == 0 && first + 1 < argc &&
+                       sscanf(argv[first + 1], "%d=%lf", &size, &part) == 2 && size >= MIN_SIZE &&
+                       size <= MAX_SIZE && part > 0.0) {
+                share[size] = part;
+                first++;
+            } else if (strcmp(argv[first], "--lambda") == 0 && first + 1 < argc &&
+                       sscanf(argv[first + 1], "%d=%lf", &size, &part) == 2 && size >= MIN_SIZE &&
+                       size <= MAX_SIZE && part >= 0.0 && part <= 1.0) {
+                lambda[size] = part;
+                first++;
+            } else {
+                break;
+            }
+        }
+        return nntrain_run(argv[2], atoi(argv[3]), lambda, atoi(argv[5]), atoi(argv[6]), !cpu, seed,
+                           share, argv + first, argc - first);
     }
     printf("usage: yapper [tei | bench [depth] | selftest | perfttest <suite> [max depth] |\n"
            "               perft <size> <depth> [position] |\n"
            "               datagen <out> <games> <seed> <nodes> [size] [generation] |\n"
-           "               tune <weights.h> <keep one in> <scale, or 0 to report it> <games>... |\n"
-           "               nntrain <size> <netN.h> <keep one in> <lambda> <epochs> <threads> "
-           "[--cpu] <games>...]\n");
+           "               nntrain <net.h> <keep one in> <lambda> <epochs> <threads> [--cpu]\n"
+           "                       [--seed n] [--share size=part]... [--lambda size=lambda]...\n"
+           "                       <games>...]\n");
 #else
     printf("usage: yapper [tei | bench [depth] | perft <size> <depth> [position]]\n");
 #endif

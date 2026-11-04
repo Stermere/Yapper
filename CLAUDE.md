@@ -11,9 +11,10 @@ world uses, so racetrack and PTN Ninja work with it unchanged.
 
 **The current goal is to beat Tiltak.** The board, move generation and harness are finished and
 verified, and Yapper leads the baselines on speed. Strength work goes in order: a stronger
-evaluation base, then the search, then long overnight runs on the evaluation. The hand-written
-evaluation is a stepping stone: networks will replace it, so training data is kept in a form
-that does not depend on it. See [docs/STATUS.md](docs/STATUS.md).
+evaluation base, then the search, then long overnight runs on the evaluation. One network,
+shared by every size, has replaced the hand-written evaluation, and training data is kept in a
+form that does not depend on any evaluation, so it outlives each network. See
+[docs/STATUS.md](docs/STATUS.md).
 
 **Never read the source of a rival Tak engine**, not to explain a result and not to see how
 something is done. Yapper's ideas stay its own. `external/engines/` holds black-box binaries.
@@ -83,11 +84,11 @@ than a bug: it makes every later result untrustworthy.
     a compiler from deleting them as dead code. Without it a build once reported 517 Mnps for
     an empty loop.
 
-12. **What is fitted must be what plays.** A hand-written trace must add up to
-    `evaluate_hce()`, from the same body, and a network is fitted on the fixed point the engine
-    runs, so `nntrain` must report the engine within a hundredth or so of its fit. If the two
-    differ, a fit tunes something that does not play, and nothing in a match would say so.
-    Selftest holds every evaluation unchanged under the board's symmetries and a colour swap.
+12. **What is fitted must be what plays.** A network is fitted on the fixed point the engine
+    runs, reading a position through the engine's own `nn_feature()` and `eval_net_inputs()`,
+    so `nntrain` must report the engine within a hundredth or so of its fit. If the two differ,
+    a fit tunes something that does not play, and nothing in a match would say so. Selftest
+    holds every evaluation unchanged under the board's symmetries and a colour swap.
 
 13. **Training data is games, never features, and its format is a contract.** It has to outlive
     every evaluation trained on it, networks included. Any change to `docs/DATA.md`'s format
@@ -142,7 +143,7 @@ pass.
 | Path | Contents |
 |---|---|
 | `src/` | the engine, flat |
-| `src/netN.h` | the network for NxN, written by `yapper nntrain`; a size without one plays the hand-written evaluation |
+| `src/net.h` | the network every size shares, written by `yapper nntrain`; a size it was not fitted on only counts flats |
 | `src/test/` | selftest, in the binary on purpose |
 | `tests/perft/` | `published.perft` from other engines, `sealed.perft` from takref |
 | `tests/books/` | opening books, built by `tools/mkbook.py` |

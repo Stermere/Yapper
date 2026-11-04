@@ -9,24 +9,9 @@
 
 #include "bitboard.h"
 
-/* A size has a network exactly when its file exists. `yapper nntrain` writes them. */
-#if __has_include("net3.h")
-#include "net3.h"
-#endif
-#if __has_include("net4.h")
-#include "net4.h"
-#endif
-#if __has_include("net5.h")
-#include "net5.h"
-#endif
-#if __has_include("net6.h")
-#include "net6.h"
-#endif
-#if __has_include("net7.h")
-#include "net7.h"
-#endif
-#if __has_include("net8.h")
-#include "net8.h"
+/* A size has a network when net.h was fitted on its games. `yapper nntrain` writes it. */
+#if __has_include("net.h")
+#include "net.h"
 #endif
 
 typedef struct Net {
@@ -42,12 +27,21 @@ static Net Nets[MAX_SIZE + 1];
 static bool Ready[MAX_SIZE + 1];
 static const NNWeights *Builtin[MAX_SIZE + 1];
 
-/* Where square (rank, file) of a board of `n` goes under symmetry `g`. These are selftest's
- * eight transforms, though any eight that make up the group would serve. */
-static int orient(int g, int rank, int file, int n) {
-    rank = g & 1 ? n - 1 - rank : rank;
-    file = g & 2 ? n - 1 - file : file;
-    return g & 4 ? file * n + rank : rank * n + file;
+/* Line `x` of a board of `n` on the grid: the near half counted from one edge and the rest from
+ * the other. */
+static int on_grid(int x, int n) { return x < (n + 1) / 2 ? x : NN_GRID - n + x; }
+
+/* Selftest's eight transforms, though any eight that make up the group would serve. */
+int nn_cell(int size, int g, int sq) {
+    int rank = sq / size, file = sq % size;
+    rank = g & 1 ? size - 1 - rank : rank;
+    file = g & 2 ? size - 1 - file : file;
+    if (g & 4) {
+        const int t = rank;
+        rank        = file;
+        file        = t;
+    }
+    return on_grid(rank, size) * NN_GRID + on_grid(file, size);
 }
 
 bool nn_install(int size, const NNWeights *weights) {
@@ -66,14 +60,14 @@ bool nn_install(int size, const NNWeights *weights) {
     }
     net->table = (i16 *)(((uintptr_t)net->block + 63) & ~(uintptr_t)63);
 
-    /* Unit (filter, g) sees square s through filter's weights at g(s). Turning the position by
-     * any symmetry then only permutes the units of each filter among themselves. */
+    /* Unit (filter, g) sees square s through filter's weights at the cell of g(s). Turning the
+     * position by any symmetry then only permutes the units of each filter among themselves. */
     for (int sq = 0; sq < squares; sq++) {
         for (int g = 0; g < NN_ORIENTATIONS; g++) {
-            const int image = orient(g, sq / size, sq % size, size);
+            const int cell = nn_cell(size, g, sq);
             for (int token = 0; token < NN_TOKENS; token++) {
                 memcpy(net->table + ((size_t)sq * NN_TOKENS + token) * NN_HIDDEN + g * NN_FILTERS,
-                       weights->filters + ((size_t)image * NN_TOKENS + token) * NN_FILTERS,
+                       weights->filters + ((size_t)cell * NN_TOKENS + token) * NN_FILTERS,
                        NN_FILTERS * sizeof(i16));
             }
         }
@@ -92,29 +86,16 @@ bool nn_install(int size, const NNWeights *weights) {
 }
 
 void nn_init(void) {
-#ifdef NET3_H
-    static const NNWeights net3 = {Net3Filters, Net3Bias, Net3Output, Net3Skip};
-    Builtin[3]                  = &net3;
-#endif
-#ifdef NET4_H
-    static const NNWeights net4 = {Net4Filters, Net4Bias, Net4Output, Net4Skip};
-    Builtin[4]                  = &net4;
-#endif
-#ifdef NET5_H
-    static const NNWeights net5 = {Net5Filters, Net5Bias, Net5Output, Net5Skip};
-    Builtin[5]                  = &net5;
-#endif
-#ifdef NET6_H
-    static const NNWeights net6 = {Net6Filters, Net6Bias, Net6Output, Net6Skip};
-    Builtin[6]                  = &net6;
-#endif
-#ifdef NET7_H
-    static const NNWeights net7 = {Net7Filters, Net7Bias, Net7Output, Net7Skip};
-    Builtin[7]                  = &net7;
-#endif
-#ifdef NET8_H
-    static const NNWeights net8 = {Net8Filters, Net8Bias, Net8Output, Net8Skip};
-    Builtin[8]                  = &net8;
+#ifdef NET_H
+    static NNWeights sizes[MAX_SIZE + 1];
+    for (int size = MIN_SIZE; size <= MAX_SIZE; size++) {
+        if (NetSizes >> size & 1) {
+            sizes[size]   = (NNWeights){NetFilters, NetBias + size * NN_FILTERS,
+                                        NetOutput + size * NN_BUCKETS * NN_FILTERS,
+                                        NetSkip + size * NN_BUCKETS * 4};
+            Builtin[size] = &sizes[size];
+        }
+    }
 #endif
     for (int size = MIN_SIZE; size <= MAX_SIZE; size++) {
         if (Builtin[size] && !nn_install(size, Builtin[size])) {

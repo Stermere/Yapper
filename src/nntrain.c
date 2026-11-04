@@ -1,5 +1,6 @@
-/* nntrain.c - fits a network to self-play games. It lives in the binary for the reason tune.c
- * does, and it reads a position the way play does, through nn_feature() and eval_net_inputs(),
+/* nntrain.c - fits the network to self-play games, every size in them at once. It lives in the
+ * binary because it reads millions of positions through the board, which would take Python
+ * hours, and it reads a position the way play does, through nn_feature() and eval_net_inputs(),
  * so the two cannot drift apart. It trains in floating point with each filter stored once, as
  * the engine is given it, and writes the fixed point the engine runs.
  *
@@ -26,12 +27,20 @@
 #define NT_MAX_THREADS 64
 #define NT_BATCH       16384
 #define NT_GROUP       16 /* batches the GPU is given at once, so threads start once a group */
-#define NT_HOLD_OUT    16 /* one game in this many is kept out of the fit, as in tune.c */
+#define NT_HOLD_OUT    16 /* one game in this many is kept out of the fit */
 #define NT_RATE        0.002
 #define NT_RATE_END    0.02 /* of NT_RATE, reached on a cosine by the last batch */
 #define NT_BETA1       0.9
 #define NT_BETA2       0.999
 #define NT_PI          3.14159265358979323846
+
+/* The network written is the mean of the weights over this last share of the steps. Even this
+ * late, the steps move a held-out loss by up to 0.003 from one epoch to the next, so where a fit
+ * happened to stop would otherwise decide much of how good it is. */
+#define NT_AVERAGE 0.1
+
+/* Games of one size, generation and budget make a group, and the report scores each. */
+#define NT_GROUPS 32
 
 /* Weights stay inside what the fixed point can hold: 64 stones of the largest filter weight
  * still fit 16 bits with the bias added, and an output weight is at most 127 / NN_QB. */
@@ -45,7 +54,14 @@
 #define NT_KOMI_UNIT    4.0f
 
 /* Held-out positions kept whole, to score through the engine against the fit. */
-#define NT_CHECK_BOARDS 4096
+#define NT_CHECK_PER_SIZE 4096
+#define NT_CHECK_BOARDS   (NT_CHECK_PER_SIZE * (MAX_SIZE - MIN_SIZE + 1))
+
+/* Bias, output and skip come a set per size, indexed by the size. */
+#define NT_SLOTS (MAX_SIZE + 1)
+
+/* A position's stacks, as the kernels are given them, have a slot this long. */
+#define NT_SLOT_SQUARES (MAX_SIZE * MAX_SIZE)
 
 typedef struct NTSample {
     u64 first; /* into `features` */
@@ -54,8 +70,9 @@ typedef struct NTSample {
     u8 bucket;
     u8 result; /* 0 lost, 1 drawn, 2 won, for the side to move */
     i8 lead, reserve, komi;
+    u8 group;
     i16 score; /* the search's */
-    i16 hce;   /* the hand-written evaluation's, to compare against */
+    u8 size;
 } NTSample;
 
 typedef struct NTSet {
@@ -65,25 +82,34 @@ typedef struct NTSet {
     u64 feature_count, feature_capacity;
 } NTSet;
 
+typedef struct NTGroup {
+    int size, generation;
+    u32 nodes;
+} NTGroup;
+
 typedef struct NTLoader {
     NTSet train, held;
-    int size, keep;
-    double lambda;
+    int keep;
     u64 rng;
-    u64 games_before, last_index;
+    NTGroup groups[NT_GROUPS];
+    u64 held_counts[NT_GROUPS];
+    int group_count;
+    bool groups_full; /* the last group then holds the rest too */
     Board *check;
-    int check_count;
+    int check_count, check_sizes[NT_SLOTS];
+    double share[NT_SLOTS]; /* of a size's positions in each epoch, for a size with few games */
+    double lambda[NT_SLOTS];
 } NTLoader;
 
 /* Filters, then bias, output and skip, in one array so the optimiser can walk it as one. */
 typedef struct NTModel {
-    int size, squares;
     u64 bias_at, output_at, skip_at, count;
     float *p, *m, *v;
     /* `p` rounded to the engine's fixed point. The fit reads only this, so what is fitted is
      * what plays, to within the engine's last rounding, while `p` keeps the small steps. */
     float *q;
-    int image[NN_ORIENTATIONS][MAX_SIZE * MAX_SIZE];
+    float *a; /* the mean of `p` over the steps averaged so far */
+    int image[NT_SLOTS][NN_ORIENTATIONS][MAX_SIZE * MAX_SIZE];
 } NTModel;
 
 typedef struct NTJob {
@@ -91,14 +117,17 @@ typedef struct NTJob {
     const NTSet *set;
     const u32 *order;
     u64 from, to;
-    double lambda;
+    const double *lambda;
     float *gradient; /* NULL to score only */
     double loss, result_loss;
+    double group_loss[NT_GROUPS]; /* against results */
+    u64 group_count[NT_GROUPS];
     /* For the update. */
     float **gradients;
     int gradient_count;
-    float *p, *m, *v, *q;
+    float *p, *m, *v, *q, *a;
     double rate, kept, seen;
+    double average; /* the weight of this step in the mean, or 0 before it starts */
     float scale;
 } NTJob;
 
@@ -141,18 +170,34 @@ static void sample_of(const Board *b, NTSample *sample, u16 *features) {
     *sample = (NTSample){.count   = (u8)board_features(b, features),
                          .stm     = (u8)in.stm,
                          .bucket  = (u8)in.bucket,
+                         .size    = (u8)b->size,
                          .lead    = (i8)in.lead,
                          .reserve = (i8)in.reserve,
-                         .komi    = (i8)in.komi,
-                         .hce     = (i16)evaluate_hce(b, 0)};
+                         .komi    = (i8)in.komi};
 }
 
-/* The positions tune.c fits on: the evaluation is never asked about the rest. */
+static int group_of(NTLoader *loader, const DataHeader *h) {
+    for (int i = 0; i < loader->group_count; i++) {
+        const NTGroup *g = &loader->groups[i];
+        if (g->size == h->size && g->generation == h->generation && g->nodes == h->nodes) {
+            return i;
+        }
+    }
+    if (loader->group_count == NT_GROUPS) {
+        loader->groups_full = true;
+        return NT_GROUPS - 1;
+    }
+    loader->groups[loader->group_count] = (NTGroup){h->size, h->generation, h->nodes};
+    return loader->group_count++;
+}
+
+/* A side able to win on the spot, a road being answered, a forced result and the random plies
+ * all go to the search rather than to a stand pat, so the evaluation is never asked about
+ * them. */
 static bool nt_visit(const Board *b, const DataGame *game, int ply, u64 index, void *context) {
-    NTLoader *loader   = context;
-    loader->last_index = index + 1;
-    const int score    = game->plies[ply].score;
-    if (b->size != loader->size || ply < game->header.random_plies || score == DATA_NO_SCORE ||
+    NTLoader *loader = context;
+    const int score  = game->plies[ply].score;
+    if (ply < game->header.random_plies || score == DATA_NO_SCORE ||
         abs(score) >= SCORE_WIN_BOUND) {
         return true;
     }
@@ -168,14 +213,19 @@ static bool nt_visit(const Board *b, const DataGame *game, int ply, u64 index, v
     u16 features[SQUARE_COUNT];
     sample_of(b, &sample, features);
     sample.score = (i16)score;
+    sample.group = (u8)group_of(loader, &game->header);
 
     const Outcome outcome = (Outcome)game->header.outcome;
     const int winner      = outcome == WHITE_ROAD || outcome == WHITE_FLATS ? WHITE : BLACK;
     sample.result         = (u8)(outcome == DRAW ? 1 : winner == us ? 2 : 0);
 
-    const bool held = (loader->games_before + index) % NT_HOLD_OUT == 0;
+    /* By the game's place in its own file, so a game is held out whatever else a fit reads, and
+     * two fits that share a file are scored on the same games of it. */
+    const bool held = index % NT_HOLD_OUT == 0;
     set_add(held ? &loader->held : &loader->train, &sample, features);
-    if (held && loader->check_count < NT_CHECK_BOARDS) {
+    loader->held_counts[sample.group] += held;
+    if (held && loader->check_sizes[b->size] < NT_CHECK_PER_SIZE) {
+        loader->check_sizes[b->size]++;
         loader->check[loader->check_count++] = *b;
     }
     return true;
@@ -204,8 +254,28 @@ static inline void snap(NTModel *model, u64 i) {
 
 static inline float sigmoid(float x) { return 1.0f / (1.0f + expf(-x)); }
 
-static inline float target_of(const NTSample *s, double lambda) {
-    return (float)(lambda * sigmoid((float)s->score / NN_SCALE) + (1.0 - lambda) * s->result / 2.0);
+/* `lambda` is by size: how far to trust the search's score over the result varies with the board.
+ */
+static inline float target_of(const NTSample *s, const double *lambda) {
+    const double l = lambda[s->size];
+    return (float)(l * sigmoid((float)s->score / NN_SCALE) + (1.0 - l) * s->result / 2.0);
+}
+
+static inline u64 row_at(const NTModel *model, int size, int g, int code) {
+    const int square = code / NN_TOKENS, token = code % NN_TOKENS;
+    return ((u64)model->image[size][g][square] * NN_TOKENS + token) * NN_FILTERS;
+}
+
+static inline u64 bias_of(const NTModel *model, int size) {
+    return model->bias_at + (u64)size * NN_FILTERS;
+}
+
+static inline u64 output_of(const NTModel *model, int size, int bucket) {
+    return model->output_at + ((u64)size * NN_BUCKETS + (u64)bucket) * NN_FILTERS;
+}
+
+static inline u64 skip_of(const NTModel *model, int size, int bucket) {
+    return model->skip_at + ((u64)size * NN_BUCKETS + (u64)bucket) * 4;
 }
 
 /* The model's output for one position, in units of NN_SCALE, keeping what the gradient needs. */
@@ -216,19 +286,17 @@ static float forward(const NTModel *model, const NTSample *s, const u16 *feature
     for (int i = 0; i < s->count; i++) {
         const int code   = features[i] & 0x7FFF;
         const float sign = features[i] >> 15 ? -1.0f : 1.0f;
-        const int square = code / NN_TOKENS, token = code % NN_TOKENS;
         for (int g = 0; g < NN_ORIENTATIONS; g++) {
-            const float *row =
-                model->q + ((u64)model->image[g][square] * NN_TOKENS + token) * NN_FILTERS;
+            const float *row = model->q + row_at(model, s->size, g, code);
             for (int f = 0; f < NN_FILTERS; f++) {
                 acc[g][f] += sign * row[f];
             }
         }
     }
     const float side  = s->stm ? -1.0f : 1.0f;
-    const float *bias = model->q + model->bias_at;
-    const float *wout = model->q + model->output_at + s->bucket * NN_FILTERS;
-    const float *skip = model->q + model->skip_at + s->bucket * 4;
+    const float *bias = model->q + bias_of(model, s->size);
+    const float *wout = model->q + output_of(model, s->size, s->bucket);
+    const float *skip = model->q + skip_of(model, s->size, s->bucket);
     memset(sums, 0, sizeof(float) * NN_FILTERS);
     for (int g = 0; g < NN_ORIENTATIONS; g++) {
         for (int f = 0; f < NN_FILTERS; f++) {
@@ -251,10 +319,10 @@ static void backward(const NTModel *model, const NTSample *s, const u16 *feature
                      const float z[NN_ORIENTATIONS][NN_FILTERS], const float sums[NN_FILTERS],
                      float slope, float *gradient) {
     const float side  = s->stm ? -1.0f : 1.0f;
-    const float *wout = model->q + model->output_at + s->bucket * NN_FILTERS;
-    float *gbias      = gradient + model->bias_at;
-    float *gout       = gradient + model->output_at + s->bucket * NN_FILTERS;
-    float *gskip      = gradient + model->skip_at + s->bucket * 4;
+    const float *wout = model->q + output_of(model, s->size, s->bucket);
+    float *gbias      = gradient + bias_of(model, s->size);
+    float *gout       = gradient + output_of(model, s->size, s->bucket);
+    float *gskip      = gradient + skip_of(model, s->size, s->bucket);
     gskip[0] += slope * (float)s->lead / NT_LEAD_UNIT;
     gskip[1] += slope * (float)s->reserve / NT_RESERVE_UNIT;
     gskip[2] += slope * (float)s->komi / NT_KOMI_UNIT;
@@ -275,9 +343,8 @@ static void backward(const NTModel *model, const NTSample *s, const u16 *feature
     for (int i = 0; i < s->count; i++) {
         const int code   = features[i] & 0x7FFF;
         const float sign = features[i] >> 15 ? -1.0f : 1.0f;
-        const int square = code / NN_TOKENS, token = code % NN_TOKENS;
         for (int g = 0; g < NN_ORIENTATIONS; g++) {
-            float *row = gradient + ((u64)model->image[g][square] * NN_TOKENS + token) * NN_FILTERS;
+            float *row = gradient + row_at(model, s->size, g, code);
             for (int f = 0; f < NN_FILTERS; f++) {
                 row[f] += sign * dacc[g][f];
             }
@@ -295,13 +362,16 @@ static void pass_job(void *argument) {
     float z[NN_ORIENTATIONS][NN_FILTERS], sums[NN_FILTERS];
     double loss = 0.0, result_loss = 0.0;
     for (u64 i = job->from; i < job->to; i++) {
-        const NTSample *s = &job->set->samples[job->order ? job->order[i] : i];
-        const u16 *f      = job->set->features + s->first;
-        const float out   = forward(job->model, s, f, z, sums);
-        const float p     = sigmoid(out);
-        const float t     = target_of(s, job->lambda);
+        const NTSample *s   = &job->set->samples[job->order ? job->order[i] : i];
+        const u16 *f        = job->set->features + s->first;
+        const float out     = forward(job->model, s, f, z, sums);
+        const float p       = sigmoid(out);
+        const float t       = target_of(s, job->lambda);
+        const double result = cross_entropy((float)s->result / 2.0f, p);
         loss += cross_entropy(t, p);
-        result_loss += cross_entropy((float)s->result / 2.0f, p);
+        result_loss += result;
+        job->group_loss[s->group] += result;
+        job->group_count[s->group]++;
         if (job->gradient) {
             backward(job->model, s, f, z, sums, (p - t) * job->scale, job->gradient);
         }
@@ -330,6 +400,9 @@ static void update_job(void *argument) {
                                                    : 1e9f;
         job->p[i]         = w > limit ? limit : w < -limit ? -limit : w;
         job->q[i]         = (float)((double)grid(model, i, job->p[i]) / unit_of(model, i));
+        if (job->average > 0.0) {
+            job->a[i] += (float)((job->p[i] - job->a[i]) * job->average);
+        }
     }
 }
 
@@ -347,9 +420,10 @@ static void run_jobs(void *jobs, size_t size, int threads, ThreadEntry entry) {
     }
 }
 
-/* Mean loss against the blended target and against the result alone. */
-static void score_set(const NTModel *model, const NTSet *set, double lambda, int threads,
-                      double *loss, double *result_loss) {
+/* Mean loss against the blended target and against the result alone, and the latter for each
+ * group if `by_group` is given. */
+static void score_set(const NTModel *model, const NTSet *set, const double *lambda, int threads,
+                      double *loss, double *result_loss, double by_group[NT_GROUPS]) {
     NTJob jobs[NT_MAX_THREADS];
     for (int t = 0; t < threads; t++) {
         jobs[t] = (NTJob){.model  = model,
@@ -359,52 +433,60 @@ static void score_set(const NTModel *model, const NTSet *set, double lambda, int
                           .lambda = lambda};
     }
     run_jobs(jobs, sizeof(NTJob), threads, pass_job);
-    *loss = *result_loss = 0.0;
+    *loss = *result_loss   = 0.0;
+    double sums[NT_GROUPS] = {0};
+    u64 counts[NT_GROUPS]  = {0};
     for (int t = 0; t < threads; t++) {
         *loss += jobs[t].loss;
         *result_loss += jobs[t].result_loss;
+        for (int g = 0; g < NT_GROUPS; g++) {
+            sums[g] += jobs[t].group_loss[g];
+            counts[g] += jobs[t].group_count[g];
+        }
     }
     *loss /= (double)set->count;
     *result_loss /= (double)set->count;
+    for (int g = 0; by_group && g < NT_GROUPS; g++) {
+        by_group[g] = counts[g] ? sums[g] / (double)counts[g] : 0.0;
+    }
 }
 
-static u64 ModelRng = 0x9E3779B97F4A7C15ULL;
+static u64 ModelRng;
 
 static float model_random(float width) {
     ModelRng = ModelRng * 0xD1342543DE82EF95ULL + 1;
     return ((float)(ModelRng >> 40) / (float)(1 << 24) * 2.0f - 1.0f) * width;
 }
 
-static bool model_init(NTModel *model, int size) {
-    model->size      = size;
-    model->squares   = size * size;
-    model->bias_at   = (u64)model->squares * NN_TOKENS * NN_FILTERS;
-    model->output_at = model->bias_at + NN_FILTERS;
-    model->skip_at   = model->output_at + NN_BUCKETS * NN_FILTERS;
-    model->count     = model->skip_at + NN_BUCKETS * 4;
+static bool model_init(NTModel *model, u64 seed) {
+    model->bias_at   = (u64)NN_GRID * NN_GRID * NN_TOKENS * NN_FILTERS;
+    model->output_at = model->bias_at + NT_SLOTS * NN_FILTERS;
+    model->skip_at   = model->output_at + NT_SLOTS * NN_BUCKETS * NN_FILTERS;
+    model->count     = model->skip_at + NT_SLOTS * NN_BUCKETS * 4;
     model->p         = calloc(model->count, sizeof(float));
     model->m         = calloc(model->count, sizeof(float));
     model->v         = calloc(model->count, sizeof(float));
     model->q         = calloc(model->count, sizeof(float));
-    if (!model->p || !model->m || !model->v || !model->q) {
+    model->a         = calloc(model->count, sizeof(float));
+    if (!model->p || !model->m || !model->v || !model->q || !model->a) {
         return false;
     }
-    /* The same eight transforms the engine spreads the filters over. */
-    for (int g = 0; g < NN_ORIENTATIONS; g++) {
-        for (int sq = 0; sq < model->squares; sq++) {
-            int rank = sq / size, file = sq % size;
-            rank                = g & 1 ? size - 1 - rank : rank;
-            file                = g & 2 ? size - 1 - file : file;
-            model->image[g][sq] = g & 4 ? file * size + rank : rank * size + file;
+    ModelRng = 0x9E3779B97F4A7C15ULL ^ seed * 0xD1B54A32D192ED03ULL;
+    /* The engine's own map from squares to cells, so the two cannot differ. */
+    for (int n = MIN_SIZE; n <= MAX_SIZE; n++) {
+        for (int g = 0; g < NN_ORIENTATIONS; g++) {
+            for (int sq = 0; sq < n * n; sq++) {
+                model->image[n][g][sq] = nn_cell(n, g, sq);
+            }
         }
     }
     for (u64 i = 0; i < model->bias_at; i++) {
         model->p[i] = model_random(0.1f);
     }
-    for (int f = 0; f < NN_FILTERS; f++) {
-        model->p[model->bias_at + f] = 0.5f;
+    for (int i = 0; i < NT_SLOTS * NN_FILTERS; i++) {
+        model->p[model->bias_at + i] = 0.5f;
     }
-    for (int i = 0; i < NN_BUCKETS * NN_FILTERS; i++) {
+    for (int i = 0; i < NT_SLOTS * NN_BUCKETS * NN_FILTERS; i++) {
         model->p[model->output_at + i] = model_random(0.05f);
     }
     for (u64 i = 0; i < model->count; i++) {
@@ -415,9 +497,9 @@ static bool model_init(NTModel *model, int size) {
 
 typedef struct NTQuantised {
     i16 *filters;
-    i16 bias[NN_FILTERS];
-    i16 output[NN_BUCKETS * NN_FILTERS];
-    i32 skip[NN_BUCKETS * 4];
+    i16 bias[NT_SLOTS * NN_FILTERS];
+    i16 output[NT_SLOTS * NN_BUCKETS * NN_FILTERS];
+    i32 skip[NT_SLOTS * NN_BUCKETS * 4];
 } NTQuantised;
 
 /* The same integers the fit read. The limits on `p` keep every one inside its type. */
@@ -425,15 +507,21 @@ static void quantise_model(const NTModel *model, NTQuantised *q) {
     for (u64 i = 0; i < model->bias_at; i++) {
         q->filters[i] = (i16)grid(model, i, model->p[i]);
     }
-    for (int f = 0; f < NN_FILTERS; f++) {
-        q->bias[f] = (i16)grid(model, model->bias_at + f, model->p[model->bias_at + f]);
+    for (int i = 0; i < NT_SLOTS * NN_FILTERS; i++) {
+        q->bias[i] = (i16)grid(model, model->bias_at + i, model->p[model->bias_at + i]);
     }
-    for (int i = 0; i < NN_BUCKETS * NN_FILTERS; i++) {
+    for (int i = 0; i < NT_SLOTS * NN_BUCKETS * NN_FILTERS; i++) {
         q->output[i] = (i16)grid(model, model->output_at + i, model->p[model->output_at + i]);
     }
-    for (int i = 0; i < NN_BUCKETS * 4; i++) {
+    for (int i = 0; i < NT_SLOTS * NN_BUCKETS * 4; i++) {
         q->skip[i] = (i32)grid(model, model->skip_at + i, model->p[model->skip_at + i]);
     }
+}
+
+/* What the engine is given for one size. */
+static NNWeights weights_for(const NTQuantised *q, int size) {
+    return (NNWeights){q->filters, q->bias + size * NN_FILTERS,
+                       q->output + size * NN_BUCKETS * NN_FILTERS, q->skip + size * NN_BUCKETS * 4};
 }
 
 static bool write_array(FILE *out, const char *type, const char *name, const char *length,
@@ -448,62 +536,109 @@ static bool write_array(FILE *out, const char *type, const char *name, const cha
     return !ferror(out);
 }
 
-static bool write_header(const char *path, int size, const NTQuantised *q, u64 filter_count) {
+/* net.h: the filters, every size's bias, output and skip, and a mask of the sizes it was fitted
+ * on, since a size it never saw has only the weights it started with. */
+static bool write_header(const char *path, const NTModel *model, const NTQuantised *q, int sizes) {
     FILE *out = fopen(path, "wb");
     if (!out) {
         printf("cannot write %s\n", path);
         return false;
     }
-    char name[32], length[64];
     fprintf(out,
-            "/* net%d.h - the network for %dx%d. Written by `yapper nntrain`: docs/DATA.md says "
-            "how. */\n",
-            size, size, size);
-    fprintf(out, "// clang-format off\n#ifndef NET%d_H\n#define NET%d_H\n\n#include \"nn.h\"\n\n",
-            size, size);
-    snprintf(name, sizeof(name), "Net%dFilters", size);
-    snprintf(length, sizeof(length), "%d * NN_TOKENS * NN_FILTERS", size * size);
-    bool ok = write_array(out, "i16", name, length, q->filters, filter_count, false);
-    snprintf(name, sizeof(name), "Net%dBias", size);
-    ok = ok && write_array(out, "i16", name, "NN_FILTERS", q->bias, NN_FILTERS, false);
-    snprintf(name, sizeof(name), "Net%dOutput", size);
-    ok = ok && write_array(out, "i16", name, "NN_BUCKETS * NN_FILTERS", q->output,
-                           NN_BUCKETS * NN_FILTERS, false);
-    snprintf(name, sizeof(name), "Net%dSkip", size);
-    ok = ok && write_array(out, "i32", name, "NN_BUCKETS * 4", q->skip, NN_BUCKETS * 4, true);
-    fprintf(out, "#endif\n");
+            "/* net.h - the network every size shares. Written by `yapper nntrain`: docs/DATA.md "
+            "says how. */\n");
+    fprintf(out, "// clang-format off\n#ifndef NET_H\n#define NET_H\n\n#include \"nn.h\"\n\n");
+    bool ok = write_array(out, "i16", "NetFilters", "NN_GRID * NN_GRID * NN_TOKENS * NN_FILTERS",
+                          q->filters, model->bias_at, false);
+    ok      = ok && write_array(out, "i16", "NetBias", "(MAX_SIZE + 1) * NN_FILTERS", q->bias,
+                                NT_SLOTS * NN_FILTERS, false);
+    ok      = ok && write_array(out, "i16", "NetOutput", "(MAX_SIZE + 1) * NN_BUCKETS * NN_FILTERS",
+                                q->output, NT_SLOTS * NN_BUCKETS * NN_FILTERS, false);
+    ok      = ok && write_array(out, "i32", "NetSkip", "(MAX_SIZE + 1) * NN_BUCKETS * 4", q->skip,
+                                NT_SLOTS * NN_BUCKETS * 4, true);
+    fprintf(out, "static const int NetSizes = 0x%x;\n\n#endif\n", sizes);
     return fclose(out) == 0 && ok;
 }
 
 /* The fixed point the engine runs, through evaluate() itself, against the fit it came from. */
-static void check_engine(const NTModel *model, const NTLoader *loader) {
-    double total = 0.0;
-    int worst    = 0;
-    for (int i = 0; i < loader->check_count; i++) {
-        const Board *b = &loader->check[i];
-        NTSample s;
-        u16 features[SQUARE_COUNT];
-        sample_of(b, &s, features);
-        float z[NN_ORIENTATIONS][NN_FILTERS], sums[NN_FILTERS];
-        const int fitted = (int)lroundf(forward(model, &s, features, z, sums) * NN_SCALE);
-        const int played = evaluate(b, 0);
-        const int miss   = abs(played - fitted);
-        total += miss;
-        worst = miss > worst ? miss : worst;
+static bool check_engine(const NTModel *model, const NTLoader *loader, const NTQuantised *q,
+                         int sizes) {
+    for (int size = MIN_SIZE; size <= MAX_SIZE; size++) {
+        if (!(sizes >> size & 1)) {
+            continue;
+        }
+        const NNWeights weights = weights_for(q, size);
+        if (!nn_install(size, &weights)) {
+            printf("out of memory\n");
+            return false;
+        }
+        double total = 0.0;
+        int worst = 0, count = 0;
+        for (int i = 0; i < loader->check_count; i++) {
+            const Board *b = &loader->check[i];
+            if (b->size != size) {
+                continue;
+            }
+            NTSample s;
+            u16 features[SQUARE_COUNT];
+            sample_of(b, &s, features);
+            float z[NN_ORIENTATIONS][NN_FILTERS], sums[NN_FILTERS];
+            const int fitted = (int)lroundf(forward(model, &s, features, z, sums) * NN_SCALE);
+            const int played = evaluate(b, 0);
+            const int miss   = abs(played - fitted);
+            total += miss;
+            worst = miss > worst ? miss : worst;
+            count++;
+        }
+        printf("engine against the fit on %d held-out %dx%d positions: mean %.2f, worst %d "
+               "hundredths\n",
+               count, size, size, total / (count ? count : 1), worst);
     }
-    printf("engine against the fit on %d held-out positions: mean %.2f, worst %d hundredths\n",
-           loader->check_count, total / (loader->check_count ? loader->check_count : 1), worst);
+    return true;
 }
 
-/* Each epoch sees the positions in a new order, the same one on every run and every device. */
-static void shuffle_order(u32 *order, u64 count, u64 *state) {
-    for (u64 i = count - 1; i > 0; i--) {
+/* Whether position `i` is in an epoch, for a size given `share` of each one. */
+static bool in_epoch(u64 i, int epoch, u64 seed, double share) {
+    if (share >= 1.0) {
+        return true;
+    }
+    u64 x = i * 0x9E3779B97F4A7C15ULL ^ (u64)epoch * 0xD1B54A32D192ED03ULL ^ seed;
+    x     = (x ^ (x >> 31)) * 0xBF58476D1CE4E5B9ULL;
+    x     = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+    return (double)((x ^ (x >> 31)) >> 11) < share * 9007199254740992.0;
+}
+
+/* The positions of an epoch, or with no `order` only how many there are. Each epoch sees them in
+ * a new order, the same one on every run and every device. */
+static u64 epoch_order(u32 *order, const NTLoader *loader, u64 seed, int epoch, u64 *state) {
+    const NTSet *train = &loader->train;
+    u64 count          = 0;
+    for (u64 i = 0; i < train->count; i++) {
+        if (in_epoch(i, epoch, seed, loader->share[train->samples[i].size])) {
+            if (order) {
+                order[count] = (u32)i;
+            }
+            count++;
+        }
+    }
+    for (u64 i = count - 1; order && i > 0; i--) {
         *state      = *state * 0xD1342543DE82EF95ULL + 1;
         const u64 j = (*state >> 16) % (i + 1);
         const u32 t = order[i];
         order[i]    = order[j];
         order[j]    = t;
     }
+    return count;
+}
+
+static u64 batches_of(u64 count) { return (count + NT_BATCH - 1) / NT_BATCH; }
+
+static u64 steps_of(const NTLoader *loader, int epochs, u64 seed) {
+    u64 steps = 0;
+    for (int epoch = 1; epoch <= epochs; epoch++) {
+        steps += batches_of(epoch_order(NULL, loader, seed, epoch, NULL));
+    }
+    return steps;
 }
 
 static double rate_at(u64 step, u64 steps) {
@@ -511,17 +646,45 @@ static double rate_at(u64 step, u64 steps) {
     return NT_RATE * (NT_RATE_END + (1.0 - NT_RATE_END) * 0.5 * (1.0 + cos(NT_PI * progress)));
 }
 
-static void report_epoch(const NTModel *model, const NTSet *held, double lambda, int threads,
-                         int epoch, double fit) {
-    double held_loss, held_result;
-    score_set(model, held, lambda, threads, &held_loss, &held_result);
+/* The weight of a step in the mean of the weights: 0 before the mean starts, then one over the
+ * steps in it so far, this one included. */
+static double average_at(u64 step, u64 steps) {
+    u64 window = (u64)((double)steps * NT_AVERAGE);
+    window     = window ? window : 1;
+    return step < steps - window ? 0.0 : 1.0 / (double)(step - (steps - window) + 1);
+}
+
+static u64 shuffle_seed(u64 seed) { return 0x853C49E6748FEA9BULL ^ seed * 0x9E3779B97F4A7C15ULL; }
+
+/* For a fit on every size, each size's held out against results too, since one can run out of
+ * games while the rest still learn. */
+static void report_epoch(const NTModel *model, const NTLoader *loader, const double *lambda,
+                         int threads, int epoch, double fit) {
+    double held_loss, held_result, by_group[NT_GROUPS];
+    score_set(model, &loader->held, lambda, threads, &held_loss, &held_result, by_group);
     printf("epoch %3d: fit %.6f, held out %.6f, against results %.6f\n", epoch, fit, held_loss,
            held_result);
+    {
+        double sums[NT_SLOTS] = {0};
+        u64 counts[NT_SLOTS]  = {0};
+        for (int g = 0; g < loader->group_count; g++) {
+            sums[loader->groups[g].size] += by_group[g] * (double)loader->held_counts[g];
+            counts[loader->groups[g].size] += loader->held_counts[g];
+        }
+        printf("          ");
+        for (int n = MIN_SIZE; n <= MAX_SIZE; n++) {
+            if (counts[n]) {
+                printf(" %dx%d %.6f", n, n, sums[n] / (double)counts[n]);
+            }
+        }
+        printf("\n");
+    }
     fflush(stdout);
 }
 
-static bool train_cpu(NTModel *model, const NTSet *train, const NTSet *held, double lambda,
-                      int epochs, int threads, u32 *order) {
+static bool train_cpu(NTModel *model, const NTLoader *loader, const double *lambda, int epochs,
+                      int threads, u64 seed, u32 *order) {
+    const NTSet *train = &loader->train;
     float *gradients[NT_MAX_THREADS];
     for (int t = 0; t < threads; t++) {
         gradients[t] = calloc(model->count, sizeof(float));
@@ -529,17 +692,17 @@ static bool train_cpu(NTModel *model, const NTSet *train, const NTSet *held, dou
             return false;
         }
     }
-    const u64 batches = (train->count + NT_BATCH - 1) / NT_BATCH;
-    const u64 steps   = batches * (u64)epochs;
-    u64 step          = 0;
-    u64 shuffle       = 0x853C49E6748FEA9BULL;
+    const u64 steps = steps_of(loader, epochs, seed);
+    u64 step        = 0;
+    u64 shuffle     = shuffle_seed(seed);
     NTJob jobs[NT_MAX_THREADS];
     for (int epoch = 1; epoch <= epochs; epoch++) {
-        shuffle_order(order, train->count, &shuffle);
-        double loss = 0.0;
+        const u64 total   = epoch_order(order, loader, seed, epoch, &shuffle);
+        const u64 batches = batches_of(total);
+        double loss       = 0.0;
         for (u64 batch = 0; batch < batches; batch++, step++) {
             const u64 from = batch * NT_BATCH;
-            const u64 to   = from + NT_BATCH < train->count ? from + NT_BATCH : train->count;
+            const u64 to   = from + NT_BATCH < total ? from + NT_BATCH : total;
             for (int t = 0; t < threads; t++) {
                 jobs[t] = (NTJob){.model    = model,
                                   .set      = train,
@@ -564,13 +727,15 @@ static bool train_cpu(NTModel *model, const NTSet *train, const NTSet *held, dou
                                   .m              = model->m,
                                   .v              = model->v,
                                   .q              = model->q,
+                                  .a              = model->a,
                                   .rate           = rate_at(step, steps),
+                                  .average        = average_at(step, steps),
                                   .kept           = 1.0 - pow(NT_BETA1, (double)(step + 1)),
                                   .seen           = 1.0 - pow(NT_BETA2, (double)(step + 1))};
             }
             run_jobs(jobs, sizeof(NTJob), threads, update_job);
         }
-        report_epoch(model, held, lambda, threads, epoch, loss / (double)train->count);
+        report_epoch(model, loader, lambda, threads, epoch, loss / (double)total);
     }
     return true;
 }
@@ -587,7 +752,7 @@ static const char KernelBody[] =
     "#define FIXED 281474976710656.0\n"
     "#define FIXED32 268435456.0f\n"
     "struct Packed {\n"
-    "    unsigned char count, stm, bucket, unused;\n"
+    "    unsigned char count, stm, bucket, size;\n"
     "    signed char lead, reserve, komi, spare;\n"
     "    float target;\n"
     "};\n"
@@ -595,9 +760,10 @@ static const char KernelBody[] =
     "    return (unsigned long long)__double2ll_rn((double)x * FIXED);\n"
     "}\n"
     "__device__ static int fixed32_of(float x) { return __float2int_rn(x * FIXED32); }\n"
-    "__device__ static int row_of(const int *image, int g, unsigned short feature) {\n"
+    "__device__ static int row_of(const int *image, int size, int g, unsigned short feature) {\n"
     "    const int code = feature & 0x7FFF;\n"
-    "    return image[g * IMAGE_STRIDE + code / NN_TOKENS] * NN_TOKENS + code % NN_TOKENS;\n"
+    "    return image[(size * G + g) * IMAGE_STRIDE + code / NN_TOKENS] * NN_TOKENS +\n"
+    "           code % NN_TOKENS;\n"
     "}\n"
     "extern \"C\" __global__ void train_step(const Packed *packed, const unsigned short *stacks,\n"
     "        const float *q, const int *image, int *grad_filters, unsigned long long *grad,\n"
@@ -616,22 +782,25 @@ static const char KernelBody[] =
     "    float acc = 0.0f;\n"
     "    for (int i = 0; i < s.count; i++) {\n"
     "        const float sign = feature[i] >> 15 ? -1.0f : 1.0f;\n"
-    "        acc += sign * q[row_of(image, g, feature[i]) * F + f];\n"
+    "        acc += sign * q[row_of(image, s.size, g, feature[i]) * F + f];\n"
     "    }\n"
     "    const float side = s.stm ? -1.0f : 1.0f;\n"
-    "    const float pre = side * acc + q[bias_at + f];\n"
+    "    const int bias = bias_at + s.size * F;\n"
+    "    const int wout = output_at + (s.size * NN_BUCKETS + s.bucket) * F;\n"
+    "    const int skip_from = skip_at + (s.size * NN_BUCKETS + s.bucket) * 4;\n"
+    "    const float pre = side * acc + q[bias + f];\n"
     "    const float x = pre < 0.0f ? 0.0f : pre > 1.0f ? 1.0f : pre;\n"
     "    squared[g][f] = x * x;\n"
     "    __syncthreads();\n"
     "    if (g == 0) {\n"
     "        float sum = 0.0f;\n"
     "        for (int h = 0; h < G; h++) sum += squared[h][f];\n"
-    "        float out = q[output_at + s.bucket * F + f] * sum;\n"
+    "        float out = q[wout + f] * sum;\n"
     "        for (int width = F / 2; width > 0; width /= 2) {\n"
     "            out += __shfl_down_sync(0xFFFFFFFFu, out, width);\n"
     "        }\n"
     "        if (f == 0) {\n"
-    "            const float *skip = q + skip_at + s.bucket * 4;\n"
+    "            const float *skip = q + skip_from;\n"
     "            out += skip[0] * (float)s.lead / LEAD_UNIT +\n"
     "                   skip[1] * (float)s.reserve / RESERVE_UNIT +\n"
     "                   skip[2] * (float)s.komi / KOMI_UNIT + skip[3];\n"
@@ -642,7 +811,7 @@ static const char KernelBody[] =
     "            const float t = s.target;\n"
     "            const float l = -(t * logf(c) + (1.0f - t) * logf(1.0f - c));\n"
     "            atomicAdd(loss, (unsigned long long)__float2ll_rn(l * 4294967296.0f));\n"
-    "        unsigned long long *gskip = grad + skip_at + s.bucket * 4;\n"
+    "        unsigned long long *gskip = grad + skip_from;\n"
     "        atomicAdd(gskip + 0, fixed_of(slope * (float)s.lead / LEAD_UNIT));\n"
     "        atomicAdd(gskip + 1, fixed_of(slope * (float)s.reserve / RESERVE_UNIT));\n"
     "        atomicAdd(gskip + 2, fixed_of(slope * (float)s.komi / KOMI_UNIT));\n"
@@ -651,31 +820,31 @@ static const char KernelBody[] =
     "    }\n"
     "    __syncthreads();\n"
     "    const float slope = shared_slope;\n"
-    "    const float wout = q[output_at + s.bucket * F + f];\n"
-    "    const float d = pre > 0.0f && pre < 1.0f ? slope * wout * 2.0f * pre : 0.0f;\n"
+    "    const float w = q[wout + f];\n"
+    "    const float d = pre > 0.0f && pre < 1.0f ? slope * w * 2.0f * pre : 0.0f;\n"
     "    delta[g][f] = d;\n"
     "    __syncthreads();\n"
     "    if (g == 0) {\n"
-    "        float sum = 0.0f, bias = 0.0f;\n"
+    "        float sum = 0.0f, delta_sum = 0.0f;\n"
     "        for (int h = 0; h < G; h++) {\n"
     "            sum += squared[h][f];\n"
-    "            bias += delta[h][f];\n"
+    "            delta_sum += delta[h][f];\n"
     "        }\n"
-    "        atomicAdd(grad + output_at + s.bucket * F + f, fixed_of(slope * sum));\n"
-    "        atomicAdd(grad + bias_at + f, fixed_of(bias));\n"
+    "        atomicAdd(grad + wout + f, fixed_of(slope * sum));\n"
+    "        atomicAdd(grad + bias + f, fixed_of(delta_sum));\n"
     "    }\n"
     "    const float da = side * d;\n"
     "    if (da != 0.0f) {\n"
     "        for (int i = 0; i < s.count; i++) {\n"
     "            const float sign = feature[i] >> 15 ? -1.0f : 1.0f;\n"
-    "            atomicAdd(grad_filters + row_of(image, g, feature[i]) * F + f, fixed32_of(sign * "
-    "da));\n"
+    "            atomicAdd(grad_filters + row_of(image, s.size, g, feature[i]) * F + f,\n"
+    "                      fixed32_of(sign * da));\n"
     "        }\n"
     "    }\n"
     "}\n"
-    "extern \"C\" __global__ void adam(float *p, float *m, float *v, float *q,\n"
+    "extern \"C\" __global__ void adam(float *p, float *m, float *v, float *q, float *a,\n"
     "        int *grad_filters, unsigned long long *grad, int count, int bias_at, int output_at,\n"
-    "        int skip_at, double rate, double kept, double seen) {\n"
+    "        int skip_at, double rate, double kept, double seen, double average) {\n"
     "    const int i = blockIdx.x * blockDim.x + threadIdx.x;\n"
     "    if (i >= count) return;\n"
     "    float g;\n"
@@ -697,6 +866,7 @@ static const char KernelBody[] =
     "                           : k == 2 ? KOMI_UNIT : 1.0f;\n"
     "    const double unit = i < output_at ? QA : i < skip_at ? QB : SCALE * 64.0 / skip_unit;\n"
     "    q[i] = (float)((double)llround((double)p[i] * unit) / unit);\n"
+    "    if (average > 0.0) a[i] += (float)((p[i] - a[i]) * average);\n"
     "}\n";
 
 /* The kernels with this build's constants, so the two sides cannot disagree on one. */
@@ -704,13 +874,13 @@ static const char *kernel_source(void) {
     static char source[sizeof(KernelBody) + 1024];
     snprintf(source, sizeof(source),
              "#define NN_TOKENS %d\n#define NN_FILTERS %d\n#define NN_ORIENTATIONS %d\n"
-             "#define IMAGE_STRIDE %d\n#define MAX_SQUARES %d\n"
+             "#define IMAGE_STRIDE %d\n#define MAX_SQUARES %d\n#define NN_BUCKETS %d\n"
              "#define QA %.17g\n#define QB %.17g\n#define SCALE %.17g\n"
              "#define LEAD_UNIT ((float)%.9g)\n#define RESERVE_UNIT ((float)%.9g)\n"
              "#define KOMI_UNIT ((float)%.9g)\n#define BETA1 %.17g\n#define BETA2 %.17g\n"
              "#define FILTER_LIMIT ((float)%.9g)\n#define BIAS_LIMIT ((float)%.9g)\n"
              "#define OUTPUT_LIMIT ((float)%.9g)\n%s",
-             NN_TOKENS, NN_FILTERS, NN_ORIENTATIONS, MAX_SIZE * MAX_SIZE, SQUARE_COUNT,
+             NN_TOKENS, NN_FILTERS, NN_ORIENTATIONS, MAX_SIZE * MAX_SIZE, SQUARE_COUNT, NN_BUCKETS,
              (double)NN_QA, (double)NN_QB, (double)NN_SCALE, (double)NT_LEAD_UNIT,
              (double)NT_RESERVE_UNIT, (double)NT_KOMI_UNIT, NT_BETA1, NT_BETA2,
              (double)NT_FILTER_LIMIT, (double)NT_BIAS_LIMIT, (double)NT_OUTPUT_LIMIT, KernelBody);
@@ -719,7 +889,7 @@ static const char *kernel_source(void) {
 
 /* One position as the kernels read it. Its stacks follow in a slot of one entry per square. */
 typedef struct NTPacked {
-    u8 count, stm, bucket, unused;
+    u8 count, stm, bucket, size;
     i8 lead, reserve, komi, spare;
     float target;
 } NTPacked;
@@ -730,7 +900,7 @@ typedef struct NTPackJob {
     const NTSet *set;
     const u32 *order;
     u64 from, to, first;
-    double lambda;
+    const double *lambda;
     u64 slot;
     NTPacked *packed;
     u16 *stacks;
@@ -744,6 +914,7 @@ static void pack_job(void *argument) {
         job->packed[at]   = (NTPacked){.count   = s->count,
                                        .stm     = s->stm,
                                        .bucket  = s->bucket,
+                                       .size    = s->size,
                                        .lead    = s->lead,
                                        .reserve = s->reserve,
                                        .komi    = s->komi,
@@ -754,7 +925,7 @@ static void pack_job(void *argument) {
 
 /* Positions `from` to `to` of `order`, laid out for the kernels. */
 static void pack_batch(NTPackJob *jobs, int threads, const NTSet *set, const u32 *order, u64 from,
-                       u64 to, double lambda, u64 slot, NTPacked *packed, u16 *stacks) {
+                       u64 to, const double *lambda, u64 slot, NTPacked *packed, u16 *stacks) {
     for (int t = 0; t < threads; t++) {
         jobs[t] = (NTPackJob){.set    = set,
                               .order  = order,
@@ -770,19 +941,21 @@ static void pack_batch(NTPackJob *jobs, int threads, const NTSet *set, const u32
 }
 
 /* The CPU lays out each batch while the card works through the one before it. */
-static bool train_gpu(NTModel *model, const NTSet *train, const NTSet *held, double lambda,
-                      int epochs, int threads, u32 *order) {
-    void *step_kernel = gpu_function("train_step");
-    void *adam_kernel = gpu_function("adam");
+static bool train_gpu(NTModel *model, const NTLoader *loader, const double *lambda, int epochs,
+                      int threads, u64 seed, u32 *order) {
+    const NTSet *train = &loader->train;
+    void *step_kernel  = gpu_function("train_step");
+    void *adam_kernel  = gpu_function("adam");
     if (!step_kernel || !adam_kernel) {
         return false;
     }
-    const u64 slot      = (u64)model->squares;
+    const u64 slot      = NT_SLOT_SQUARES;
     const u64 group     = (u64)NT_GROUP * NT_BATCH;
     const size_t floats = model->count * sizeof(float);
-    GpuPtr p, m, v, q, grad_filters, grad, image, loss, packed, stacks;
+    GpuPtr p, m, v, q, a, grad_filters, grad, image, loss, packed, stacks;
     if (!gpu_alloc(&p, floats) || !gpu_alloc(&m, floats) || !gpu_alloc(&v, floats) ||
-        !gpu_alloc(&q, floats) || !gpu_alloc(&grad_filters, model->bias_at * sizeof(i32)) ||
+        !gpu_alloc(&q, floats) || !gpu_alloc(&a, floats) ||
+        !gpu_alloc(&grad_filters, model->bias_at * sizeof(i32)) ||
         !gpu_alloc(&grad, model->count * sizeof(u64)) || !gpu_alloc(&image, sizeof(model->image)) ||
         !gpu_alloc(&loss, sizeof(u64)) || !gpu_alloc(&packed, group * sizeof(NTPacked)) ||
         !gpu_alloc(&stacks, group * slot * sizeof(u16)) || !gpu_upload(p, model->p, floats) ||
@@ -802,18 +975,16 @@ static bool train_gpu(NTModel *model, const NTSet *train, const NTSet *held, dou
         }
     }
 
-    int count = (int)model->count, squares = model->squares;
+    int count = (int)model->count, squares = NT_SLOT_SQUARES;
     int bias_at = (int)model->bias_at, output_at = (int)model->output_at;
-    int skip_at       = (int)model->skip_at;
-    const u64 total   = train->count;
-    const u64 batches = (total + NT_BATCH - 1) / NT_BATCH;
-    const u64 groups  = (total + group - 1) / group;
-    const u64 steps   = batches * (u64)epochs;
-    u64 step          = 0;
-    u64 shuffle       = 0x853C49E6748FEA9BULL;
+    int skip_at     = (int)model->skip_at;
+    const u64 steps = steps_of(loader, epochs, seed);
+    u64 step        = 0;
+    u64 shuffle     = shuffle_seed(seed);
     NTPackJob jobs[NT_MAX_THREADS];
     for (int epoch = 1; epoch <= epochs; epoch++) {
-        shuffle_order(order, total, &shuffle);
+        const u64 total  = epoch_order(order, loader, seed, epoch, &shuffle);
+        const u64 groups = (total + group - 1) / group;
         if (!gpu_zero(loss, sizeof(u64))) {
             return false;
         }
@@ -835,12 +1006,13 @@ static bool train_gpu(NTModel *model, const NTSet *train, const NTSet *held, dou
                 double rate            = rate_at(step, steps);
                 double kept            = 1.0 - pow(NT_BETA1, (double)(step + 1));
                 double seen            = 1.0 - pow(NT_BETA2, (double)(step + 1));
+                double average         = average_at(step, steps);
                 void *step_arguments[] = {&batch_packed, &batch_stacks, &q,       &image,
                                           &grad_filters, &grad,         &loss,    &squares,
                                           &bias_at,      &output_at,    &skip_at, &scale};
-                void *adam_arguments[] = {&p,    &m,     &v,       &q,         &grad_filters,
-                                          &grad, &count, &bias_at, &output_at, &skip_at,
-                                          &rate, &kept,  &seen};
+                void *adam_arguments[] = {
+                    &p,       &m,         &v,       &q,    &a,    &grad_filters, &grad,   &count,
+                    &bias_at, &output_at, &skip_at, &rate, &kept, &seen,         &average};
                 if (!gpu_launch(step_kernel, n, NN_HIDDEN, step_arguments) ||
                     !gpu_launch(adam_kernel, (unsigned)(count + 255) / 256, 256, adam_arguments)) {
                     return false;
@@ -858,55 +1030,66 @@ static bool train_gpu(NTModel *model, const NTSet *train, const NTSet *held, dou
         if (!gpu_download(&sum, loss, sizeof(u64)) || !gpu_download(model->q, q, floats)) {
             return false;
         }
-        report_epoch(model, held, lambda, threads, epoch,
+        report_epoch(model, loader, lambda, threads, epoch,
                      (double)sum / 4294967296.0 / (double)total);
     }
-    return gpu_download(model->p, p, floats) && gpu_download(model->q, q, floats);
+    return gpu_download(model->p, p, floats) && gpu_download(model->q, q, floats) &&
+           gpu_download(model->a, a, floats);
 }
 
-int nntrain_run(int size, const char *out, int keep, double lambda, int epochs, int threads,
-                bool gpu, char **paths, int path_count) {
-    if (size < MIN_SIZE || size > MAX_SIZE || keep < 1 || epochs < 1 || threads < 1 ||
-        threads > NT_MAX_THREADS) {
+/* Scores the network as written, the mean of the fit's last steps, on each group of games. */
+static void report_groups(const NTModel *model, const NTLoader *loader, const double *lambda,
+                          int threads) {
+    double loss, result, by_group[NT_GROUPS];
+    score_set(model, &loader->held, lambda, threads, &loss, &result, by_group);
+    printf("averaged: held out %.6f, against results %.6f\n", loss, result);
+    for (int g = 0; g < loader->group_count; g++) {
+        const NTGroup *group = &loader->groups[g];
+        printf("  %dx%d gen %d at %u nodes%s: %.6f against results, %llu held out\n", group->size,
+               group->size, group->generation, group->nodes,
+               loader->groups_full && g == NT_GROUPS - 1 ? " and the rest" : "", by_group[g],
+               (unsigned long long)loader->held_counts[g]);
+    }
+}
+
+int nntrain_run(const char *out, int keep, const double *lambda, int epochs, int threads, bool gpu,
+                unsigned long long seed, const double *share, char **paths, int path_count) {
+    if (keep < 1 || epochs < 1 || threads < 1 || threads > NT_MAX_THREADS) {
         printf("bad arguments\n");
         return 2;
     }
     static NTLoader loader;
-    loader.size   = size;
-    loader.keep   = keep;
-    loader.lambda = lambda;
-    loader.rng    = 0x2545F4914F6CDD1DULL;
-    loader.check  = malloc(sizeof(Board) * NT_CHECK_BOARDS);
+    loader.keep = keep;
+    memcpy(loader.lambda, lambda, sizeof(loader.lambda));
+    loader.rng   = 0x2545F4914F6CDD1DULL;
+    loader.check = malloc(sizeof(Board) * NT_CHECK_BOARDS);
     if (!loader.check) {
         printf("out of memory\n");
         return 1;
     }
+    for (int n = 0; n < NT_SLOTS; n++) {
+        loader.share[n] = share ? share[n] : 1.0;
+    }
     for (int i = 0; i < path_count; i++) {
-        loader.last_index = 0;
         if (!data_replay(paths[i], nt_visit, &loader)) {
             return 1;
         }
-        loader.games_before += loader.last_index;
     }
     const NTSet *train = &loader.train, *held = &loader.held;
     printf("%llu positions to fit, %llu held out, %.1f stacks a position\n",
            (unsigned long long)train->count, (unsigned long long)held->count,
            train->count ? (double)train->feature_count / (double)train->count : 0.0);
     if (!train->count || !held->count) {
-        printf("not enough positions on %dx%d\n", size, size);
+        printf("not enough positions\n");
         return 1;
     }
-
-    double hce_loss = 0.0;
-    for (u64 i = 0; i < held->count; i++) {
-        const NTSample *s = &held->samples[i];
-        hce_loss += cross_entropy((float)s->result / 2.0f, sigmoid((float)s->hce / NN_SCALE));
+    int sizes = 0;
+    for (int g = 0; g < loader.group_count; g++) {
+        sizes |= 1 << loader.groups[g].size;
     }
-    printf("hand-written evaluation, held out against results: %.6f\n",
-           hce_loss / (double)held->count);
 
     static NTModel model;
-    if (!model_init(&model, size)) {
+    if (!model_init(&model, seed)) {
         printf("out of memory\n");
         return 1;
     }
@@ -915,20 +1098,17 @@ int nntrain_run(int size, const char *out, int keep, double lambda, int epochs, 
         printf("out of memory\n");
         return 1;
     }
-    for (u64 i = 0; i < train->count; i++) {
-        order[i] = (u32)i;
-    }
 
     char why[4096] = "not asked for";
     if (gpu && gpu_open(kernel_source(), why, sizeof(why))) {
         printf("training on %s\n", gpu_name());
-        if (!train_gpu(&model, train, held, lambda, epochs, threads, order)) {
+        if (!train_gpu(&model, &loader, loader.lambda, epochs, threads, seed, order)) {
             printf("%s\n", gpu_error());
             return 1;
         }
     } else {
         printf("training on %d CPU threads, with no GPU: %s\n", threads, why);
-        if (!train_cpu(&model, train, held, lambda, epochs, threads, order)) {
+        if (!train_cpu(&model, &loader, loader.lambda, epochs, threads, seed, order)) {
             printf("out of memory\n");
             return 1;
         }
@@ -940,16 +1120,15 @@ int nntrain_run(int size, const char *out, int keep, double lambda, int epochs, 
         printf("out of memory\n");
         return 1;
     }
+    for (u64 i = 0; i < model.count; i++) {
+        model.p[i] = model.a[i];
+        snap(&model, i);
+    }
+    report_groups(&model, &loader, loader.lambda, threads);
     quantise_model(&model, &q);
-    if (!write_header(out, size, &q, model.bias_at)) {
+    if (!write_header(out, &model, &q, sizes) || !check_engine(&model, &loader, &q, sizes)) {
         return 1;
     }
-    const NNWeights weights = {q.filters, q.bias, q.output, q.skip};
-    if (!nn_install(size, &weights)) {
-        printf("out of memory\n");
-        return 1;
-    }
-    check_engine(&model, &loader);
     printf("wrote %s\n", out);
     return 0;
 }

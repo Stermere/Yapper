@@ -81,7 +81,7 @@ endif
 
 # What ships is the engine alone. It must bench the same as the full build, since that is
 # what ties it to the build the gates passed on.
-TOOL_SRC := src/datagen.c src/gpu.c src/nntrain.c src/tune.c $(wildcard src/test/*.c)
+TOOL_SRC := src/datagen.c src/gpu.c src/nntrain.c $(wildcard src/test/*.c)
 ifneq ($(findstring release,$(MAKECMDGOALS)),)
     SRC     := $(filter-out $(TOOL_SRC),$(SRC))
     CFLAGS  += -DYAPPER_RELEASE -ffunction-sections -fdata-sections

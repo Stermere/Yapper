@@ -996,8 +996,280 @@ jobs at 5000 nodes, one after another: 200,000 games each of 3x3, 4x4 and 5x5, t
 7x7 and 8x8. Then 6x6, generation 9 in its headers: 600,000 games at 5000 nodes on 10 jobs and
 64,000 at 20,000 on 5, side by side, so that five jobs of each are equal time.
 
+## E38: a network for every size, and the hand-written evaluation retired
+
+**Gen-1Big** ran from 23:25 to 08:58, as planned in E37, and `datacheck` replayed 8,634 of its
+games through takref with no failures.
+
+| Size | Games | Games a second | Median plies | Roads | Flats | Draws | A deviation in |
+|---|---|---|---|---|---|---|---|
+| 3x3 | 200,000 | 105.8 | 22 | 43.3% | 42.0% | 14.7% | 344 plies |
+| 4x4 | 200,000 | 148.2 | 41 | 17.0% | 67.7% | 15.3% | 120 |
+| 5x5 | 200,000 | 76.7 | 62 | 24.1% | 66.9% | 9.0% | 98 |
+| 6x6, 5k on 10 jobs | 600,000 | 32.6 | 92 | 12.8% | 76.1% | 11.1% | 89 |
+| 6x6, 20k on 5 jobs | 64,000 | 3.6 | 93 | 10.1% | 76.5% | 13.3% | 93 |
+| 7x7 | 150,000 | 34.5 | 126 | 29.6% | 64.8% | 5.6% | 56 |
+| 8x8 | 150,000 | 25.8 | 158 | 31.1% | 63.2% | 5.7% | 43 |
+
+Every size but 6x6 was played by the hand-written evaluation, which was fitted on 6x6 alone. A
+flatter evaluation finds more random moves within 40 hundredths of the best, which is why 7x7 and
+8x8 deviate most.
+
+**The other sizes' first networks**, v2's network and settings, lambda 0.5, on GPU fits of a
+minute or two:
+
+| Size | Positions | Epochs | Held out against results | The hand-written evaluation's |
+|---|---|---|---|---|
+| 3x3 | 975k | 15 | 0.3962 | 0.5340 |
+| 4x4 | 4.06M | 15 | 0.3788 | 0.4657 |
+| 5x5 | 7.39M | 15 | 0.4238 | 0.4639 |
+| 7x7 | 14.0M | 3 | 0.5396, and 0.5453 on 15 | 0.5549 |
+| 8x8 | 18.4M | 3 | 0.5861, and 0.5996 on 15 | 0.6097 |
+
+On 7x7 and 8x8 the held-out loss was lowest after one or two epochs and rose from there while the
+fit's kept falling: 150,000 games are too few for 49 or 64 squares of filters. Three epochs, on a
+cosine of their own, beat fifteen. The engine reads within 0.51 hundredths of every fit on average
+and 1 at worst.
+
+New books, as `mkbook.py` builds them by default, judged by these networks: `4s_4ply.txt`
+(median 139, kept 66 to 211), `7s_4ply.txt` (10, from -9 to 29) and `8s_4ply.txt` (21, from 8 to
+34). The 4x4 median says white is well ahead after four plies with 2 komi.
+
+Against the hand-written evaluation, E36's search for both, 2+0.02, 2 komi:
+
+| Size | Result |
+|---|---|
+| 4x4 | **PASSED**, 422 games, +229 -46 =147, **+161.3 +/- 22.0**, pairs [1, 4, 59, 105, 42] |
+| 5x5 | **PASSED**, 420 games, +308 -62 =50, **+233.2 +/- 34.6**, pairs [1, 7, 55, 39, 108] |
+| 7x7 | **PASSED**, 498 games, +374 -117 =7, **+198.4 +/- 35.1**, pairs [13, 1, 90, 6, 139] |
+| 8x8 | **PASSED**, 1456 games, +825 -614 =17, **+50.7 +/- 17.6**, pairs [124, 6, 360, 11, 227], 2 of them lost on time |
+| 3x3 | 408 games, every pair 1-1: the side to move first won every game |
+
+3x3 at a real clock is played out by the search, so no evaluation can be told apart there. At 200
+nodes a move it can, and the network **FAILED**: 408 games, +178 -213 =17, **-29.9 +/- 11.5**,
+pairs [9, 17, 178, 0, 0]. Only 975k of 4.5M positions were fitted on, 5 a game, because a 5000-node
+search already sees the result of most of the rest, and a fit leaves out every position with a
+forced score. A 200-node search lives in exactly those positions.
+
+So 200,000 more 3x3 games were played at 500 nodes, by the hand-written evaluation, and the
+network refitted on both sets: 2.06M positions, reaching 0.3392 held out against results to that
+evaluation's 0.5053. At 200 nodes and again at 50, every one of 408 games went to the side that
+moved first, as at 2+0.02: pairs [0, 0, 204, 0, 0]. With 2 komi and these openings, no budget that
+was tried tells two evaluations apart on 3x3, where the first network had lost 26 pairs. The
+refitted network went in.
+
+**6x6, and whether 5k is too few.** Three fits with v2's settings, each on gens 1-8 and part of
+gen 9:
+
+| Fit | Gen 9 games in it | Positions | Held out against results |
+|---|---|---|---|
+| A | 300,000 at 5k, seeds 9000-9004: five jobs' worth | 177.2M | 0.4644 |
+| B | 64,000 at 20k: five jobs' worth | 162.0M | 0.4644 |
+| C | all 664,000 | 200.9M | 0.4636 |
+
+The held-out games differ between fits, so these do not compare with each other.
+
+| Match, 2+0.02 unless said | Result |
+|---|---|
+| A against B | **FAILED**, 994 games, +329 -494 =171, **-58.2 +/- 19.5**, pairs [114, 99, 174, 58, 52] |
+| C against v2 | **INCONCLUSIVE** at the cap, 2000 games, +790 -877 =333, **-15.1 +/- 13.9**, pairs [195, 139, 380, 130, 156] |
+| B against v2 | **INCONCLUSIVE** at the cap, 2000 games, +886 -778 =336, **+18.8 +/- 13.8**, pairs [152, 123, 374, 167, 184] |
+| B against v2, 100,000 nodes a move | **INCONCLUSIVE** at the cap, 2000 games, +829 -793 =378, **+6.3 +/- 13.4**, pairs [159, 128, 385, 174, 154] |
+
+At equal time, 64,000 games at 20,000 nodes taught far more than 300,000 at 5,000. Gen 9's 5k
+games look harmful as well: C has B's games and more, and read -15 against v2 where B read +19 and
++6. Gen 8 was 5k games too and gave v2 its +137, so the harm would be in what changed since: E36's search, which is
+more selective and may need more nodes before its scores mean as much, or E37's longer openings
+and deviations, which the 20k games share. This cannot say which. Datagen for 6x6 should run at
+20k from here.
+
+B is not shown to be better than v2: one interval is above zero and the other holds it, so v2 stays.
+How far apart two fits of the same games play has never been measured, and until it is, a gap of
+15 between fits says little.
+
+**The hand-written evaluation is gone.** `eval.c` keeps what the network is scored on besides the
+stacks, and the two threat values, hand-set at -60 and -220 for the opening and the end alike, so
+their blend was always exactly that and is now a constant. `weights.h`, `tune.c`, the trace and
+selftest's check of it, `yapper tune`, and nntrain's comparison against the hand-written score
+went with it. A size with no network now counts flats, which only a build whose network has
+changed shape would ever play.
+
+With every size on a network, nothing played the hand-written evaluation any more, so deleting it
+had to be a pure change, and it measured as one: bench 3204012 from the source with it and without,
+and from `make release`, and the same evaluation of one position on each of 3x3, 4x4, 7x7 and 8x8.
+`make check` and `make datacheck` pass, and `nntrain` writes the same bytes as before, on the GPU
+and with `--cpu`. The new networks had moved bench from 5871664 to 3204012, as bench has positions
+on other sizes. It has none on 3x3, so that network was checked by an evaluation instead.
+
+## E39: one network for every size, and a better fit from the same games
+
+The aim was more from 6x6's games without new ones, and one network that plays every size. Matches
+are at 100,000 nodes a move, 2 komi, E36's search, unless said, so that fits could run beside
+them: two networks of one shape cost the same to run, so a fixed budget is fair between them.
+
+**The trainer first.** A game is now held out by its place in its own file, so two fits that
+read a file are scored on the same games of it, and the report scores each group of games, one
+size, generation and budget, on its own. `--seed` varies the first weights and the order of the
+positions. Every loss below is on one group's held-out games, against results.
+
+**Averaging the weights.** E37 saw the held-out loss move by up to 0.003 between epochs, even at
+the end. The network written is now the mean of the weights over the last tenth of the steps. On
+B1, gens 1-8 and gen 9's 20k games, the mean scored 0.4640 where the last step's weights scored
+0.4651, and it beat every epoch's own. Against those last-step weights: **INCONCLUSIVE** at the
+cap, 2000 games, +846 -756 =398, **+15.6 +/- 13.7**, pairs [158, 123, 356, 197, 166]. Kept: its
+interval is above zero, and the fit is better on the same games.
+
+**How far apart two fits play.** B2 is B1 with seed 1. Their held-out losses differ by 0.0004 at
+most, and in play, a fixed 2000 games: +896 -791 =313, **+18.3 +/- 14.2**, pairs [164, 121, 368,
+140, 207]. Three seeds of the final recipe later spread wider still, below. Two fits of the same
+games can play 15 to 35 apart, as far as most changes here move them, so one fit against another
+says little unless something else agrees, and choosing among seeds is itself worth something.
+
+**Which 6x6 games.**
+
+| Fit | Games | Positions | Gen 7 | Gen 8 | Gen 9, 20k |
+|---|---|---|---|---|---|
+| B1 | gens 1-8, gen 9's 20k | 162.0M | 0.4516 | 0.4691 | 0.4467 |
+| B2 | the same, seed 1 | 162.0M | 0.4517 | 0.4690 | 0.4463 |
+| D1 | gens 7-8, gen 9's 20k | 136.0M | 0.4502 | 0.4669 | 0.4438 |
+| E1 | gen 8, gen 9's 20k | 70.9M | | 0.4657 | 0.4402 |
+
+| Match | Result |
+|---|---|
+| D1 against B1 | **INCONCLUSIVE** at the cap, 2000 games, +890 -800 =310, **+15.6 +/- 14.0**, pairs [159, 125, 381, 137, 198] |
+| E1 against D1 | **FAILED**, 800 games, +256 -437 =107, **-80.0 +/- 22.8**, pairs [118, 59, 148, 36, 39] |
+| D1 against v2 | **INCONCLUSIVE** at the cap, 2000 games, +867 -823 =310, **+7.6 +/- 13.6**, pairs [165, 113, 407, 143, 172] |
+
+Gens 1-6, 400,000 games from the hand-written evaluation, can go, and gen 9's 5k games already
+had, E38: D1 scores better on every newer generation, and the match leans its way. Gen 7 cannot.
+E1 scored best of all on the newest games, by far more than a seed moves them, and lost 80. A fit
+on the last generations learns the positions their play reaches and forgets the rest, which no
+loss on those games can show.
+
+**lambda.** On D1's games:
+
+| lambda | Against lambda 0.5 |
+|---|---|
+| 0.3 | **FAILED**, 1712 games, +663 -826 =223, **-33.2 +/- 15.2**, pairs [191, 112, 346, 83, 124] |
+| 0.7 | **INCONCLUSIVE** at the cap, 2000 games, +889 -795 =316, **+16.3 +/- 13.6**, pairs [143, 135, 391, 147, 184] |
+
+lambda 0.3 scored best against results and lost: a target nearer the results always scores
+nearer them, so the loss cannot choose `lambda`. Half the learning rate scored 0.4429 on gen 9's
+20k games against 0.4430 to 0.4438 from three seeds at the usual rate, which is within them.
+
+**One network for every size.** The shared grid of the `nnue` branch, brought onto the GPU
+trainer without E35's stones in hand: an 8x8 grid of filters, each board on it with its edges on
+the grid's edges, and each size with its own bias, output and skip. Selftest plays random networks
+on it, and dropping the grid's transpose for the smaller boards failed it 155,380 times. The GPU
+and the CPU fit the same network to within float rounding, and the engine reads within 0.51
+hundredths of every size's fit on average and 1 at worst.
+
+Fitting every size at once, 8x8's held-out loss was lowest after the first epoch and rose from
+there, as on its own in E38. Weighting its loss down would not help, since the optimiser rescales
+the steps of the weights only 8x8 reaches, so `--share` puts a part of a size's positions into each
+epoch, drawn afresh each time: a fifth of 8x8's and a third of 7x7's.
+
+Each size's own network refitted with this trainer, on E38's games and settings, against U3, one
+network on D1's 6x6 games and every other size's at lambda 0.5:
+
+| Size | Its own | Shared, U3 |
+|---|---|---|
+| 3x3 | 0.3531, and 0.3246 at 500 nodes | 0.3350, 0.3091 |
+| 4x4 | 0.3737 | 0.3756 |
+| 5x5 | 0.4134 | 0.4108 |
+| 6x6, gen 9's 20k | 0.4438, D1 | 0.4440 |
+| 7x7 | 0.5391 | 0.5328 |
+| 8x8 | 0.5856 | 0.5814 |
+
+U3 against E38's networks:
+
+| Size | Result |
+|---|---|
+| 8x8 | **PASSED**, 586 games, +393 -183 =10, **+130.3 +/- 28.0**, pairs [21, 3, 138, 7, 124] |
+| 7x7 | **PASSED**, 514 games, +386 -116 =12, **+202.8 +/- 36.1**, pairs [16, 3, 81, 9, 148] |
+| 5x5 | **PASSED**, 862 games, +452 -296 =114, **+63.6 +/- 19.3**, pairs [38, 23, 208, 69, 93] |
+| 6x6, v2 | **INCONCLUSIVE** at the cap, 2000 games, +869 -793 =338, **+13.2 +/- 14.0**, pairs [161, 134, 365, 148, 192] |
+| 6x6, against D1 | **INCONCLUSIVE** at the cap, 2000 games, +831 -868 =301, **-6.4 +/- 13.6**, pairs [172, 139, 402, 128, 159] |
+| 4x4 | **INCONCLUSIVE** at the cap, 2000 games, +515 -558 =927, **-7.5 +/- 9.0**, pairs [36, 238, 482, 221, 23] |
+
+The sizes with the fewest games for their squares gain most from the one with the most. 6x6
+plays as its own fit does, within the seeds. A first shared fit, U1, on E1's 6x6 games and with no
+shares, had played 8x8 at -6.8 +/- 19.9 over 1126 games: the shares and the 6x6 games together
+made that +130.
+
+**lambda by size.** U3 refitted with lambda 0.7, and on 6x6 with 0.9, against U3:
+
+| Size | lambda 0.7 | lambda 0.9 |
+|---|---|---|
+| 8x8 | **PASSED**, 1010 games, +600 -379 =31, **+77.3 +/- 21.9**, pairs [75, 10, 219, 21, 180] | |
+| 7x7 | **PASSED**, 1046 games, +594 -385 =67, **+70.4 +/- 21.0**, pairs [70, 29, 221, 28, 175] | |
+| 6x6 | **INCONCLUSIVE** at the cap, 2000 games, +852 -800 =348, **+9.0 +/- 13.7**, pairs [156, 142, 372, 154, 176] | **FAILED**, 1744 games, +663 -827 =254, **-32.8 +/- 15.1**, pairs [191, 125, 342, 85, 129] |
+| 5x5 | **INCONCLUSIVE** at the cap, 2000 games, +873 -801 =326, **+12.5 +/- 12.5**, pairs [121, 130, 454, 146, 149] | |
+| 4x4 | **FAILED**, 1282 games, +316 -369 =597, **-14.4 +/- 10.4**, pairs [17, 163, 324, 130, 7] | |
+
+On 6x6 lambda 0.7 has read +16.3 and +9.0 in two separate fits. The larger the board, the more it
+gained, and 4x4, the smallest that can be measured, lost. `--lambda` gives a size its own: 0.7, and 0.5 on 3x3
+and 4x4.
+
+**The network.** That recipe, three seeds:
+
+| Seed | Gen 9, 20k | 4x4 | 7x7 | 8x8 | Against seed 0, 6x6 |
+|---|---|---|---|---|---|
+| 0, F0 | 0.4496 | 0.3741 | 0.5361 | 0.5863 | |
+| 1, F1 | 0.4502 | 0.3739 | 0.5360 | 0.5851 | **FAILED**, 1538 games, +565 -728 =245, **-37.0 +/- 16.0**, pairs [171, 116, 291, 87, 104] |
+| 2, F2 | 0.4503 | 0.3736 | 0.5352 | 0.5854 | **INCONCLUSIVE** at the cap, 2000 games, +781 -860 =359, **-13.7 +/- 13.8**, pairs [183, 155, 371, 140, 151] |
+
+F0 is the network, `src/net.h`. Against E38's:
+
+| Size | Result |
+|---|---|
+| 6x6, v2, 100,000 nodes | **INCONCLUSIVE** at the cap, 2000 games, +882 -785 =333, **+16.9 +/- 13.8**, pairs [155, 123, 380, 154, 188] |
+| 4x4, 100,000 nodes | **PASSED**, 1990 games, +570 -488 =932, **+14.3 +/- 8.8**, pairs [20, 192, 507, 238, 38] |
+| 6x6, v2, 2+0.02 | **INCONCLUSIVE** at the cap, 2000 games, +896 -760 =344, **+23.7 +/- 13.9**, pairs [146, 127, 368, 163, 196] |
+| 4x4, 2+0.02 | **INCONCLUSIVE** at the cap, 2000 games, +496 -454 =1050, **+7.3 +/- 8.2**, pairs [15, 205, 520, 243, 17] |
+
+With 4x4 back at 0.5, F0 beat 4x4's own network at 100,000 nodes where U3 had not. F0 itself was
+not matched on 5x5, 7x7 and 8x8: U3 stands for it there, with lambda 0.7's gains on top. Every
+size that can be measured plays at least as well on the one network as on its own, 5x5, 7x7 and
+8x8 far better, and 3x3 scores better on its held-out games.
+
+The per-size networks and their code are gone: `src/net.h` is the only network, `nntrain` always
+fits every size in the games it is given, and the engine has one path. The trainer, without its
+size argument, refits F0 to the same bytes. Bench 3378307 from clang, gcc and `make release`,
+`make check` and `make datacheck` pass, and selftest passes 584,534,452 checks.
+
+On 6x6 the gain is small: +16.9 at 100,000 nodes and +23.7 at 2+0.02, neither a passed SPRT,
+though both intervals are above zero. Gens 7-9 hold little that v2 did not already have, and what
+the recipe added, lambda 0.7 for 0.5 and the best of three seeds, is about the size of the seeds'
+own spread. The large gains are on the sizes whose games are still all the hand-written
+evaluation's.
+
+Two short checks against outside engines, 6x6 at 5+0.05 with 2 komi through racetrack, 100 games
+each, which say where F0 stands rather than measure a change:
+
+| Opponent | Result | Earlier |
+|---|---|---|
+| Tiltak | +95 -4 =1, **+530 [+354, +714]** | v1 +428 [+384, +471] over 800 games, E33 |
+| syntaks | +1 -97 =2, **-676 [-965, -426]** | v2 -576 [-665, -481] and E36 -665 [-784, -541], 400 games each |
+
+Against syntaks, 28 games were lost by road, 27 of them by spread, and 69 on flats by a median of 4
+half flats with komi; F0 was above +1 late in 15 of its 97 losses, against v2's 61 of 381. Neither
+match is long enough to set beside the earlier ones, and at this gap no length of match against
+syntaks would be.
+
+A candidate was once built after the per-size networks were removed, with its weights under the
+old file name: it compiled, played every size on flats, and lost 274 games of 274 before it was
+stopped. Its bench, 3529232, was new and so passed for a different network.
+
 ## Mistakes worth not repeating
 
+- **A build with no network still plays.** One candidate's weights went in under a file name the
+  engine no longer read, so it counted flats on every size and lost 274 games of 274. Its bench was
+  new, which passed for a new network. A network that changes bench must also change it from a
+  build with none.
+- **An SPRT can fail on no evidence.** On 3x3 the side to move first won all 408 games, every pair
+  went 1-1, and the test read FAILED in three seconds. Read the pairs before the verdict: a test
+  where nothing can differ says nothing about either side.
 - **200 games is a sketch.** A match against Tiltak read +159 and was called the target reached.
   800 games on the same build read +116. Both intervals held the truth, and only one was narrow
   enough to report as a result.
