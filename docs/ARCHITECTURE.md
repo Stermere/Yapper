@@ -139,13 +139,21 @@ every stone under a stack whenever one lands on it, so a move would touch more r
 A square's token changes only when a move touches the square, so a move costs at most two rows
 per square, and a placement one.
 
-**One accumulator serves both sides.** Colours are folded so the top stone is white, and a black
-top subtracts its row where a white one adds it. The accumulator is then white's view, and black's
-is its negation, so there is no second one to keep up. The side to move flips the sign before the
-activation.
+**Each side has a view of its own.** Colours are folded so the top stone is its owner's, and each
+side's view reads a stack as its own or as the other side's, with weights for each. The
+accumulator holds white's view and then black's, and the output weighs the side to move's view
+apart from the other. Both views are the same weights, so swapping the colours and the side to
+move only swaps the views. A stack's row holds both halves, its owner's view first, and a black
+top sends them to the other halves of the accumulator, so the table is the size one view of the
+same width would need. One view, which a black top subtracted from, could only weigh the
+difference between the sides: never a total, such as how full a line is, and a wall of either
+side's always counted as minus the other's, though only one of them blocks. Two views of 64
+filters beat one of 128 at the same cost by +88 in self-play, and by 57 and 103 against two other
+engines: EXPERIMENTS.md E44.
 
-**The board's symmetries are in the weights.** The 1024 hidden units are 128 filters, each seen
-through all eight rotations and reflections of the board, and the output weighs the eight alike.
+**The board's symmetries are in the weights.** The 1024 hidden units are 64 filters in each view,
+each seen through all eight rotations and reflections of the board, and the output weighs the
+eight alike.
 Turning a position only permutes each filter's units, so the score cannot change, and selftest
 holds that exactly, for any weights. Training stores each filter once. That is an eighth of the
 weights to fit, with no augmentation, and the engine spreads them over the symmetries as it
@@ -163,13 +171,27 @@ either side has left and the empty squares, since a game ends on whichever comes
 skip adds the flat lead with komi, the reserves and komi itself, which are what a game is finally
 counted on.
 
-**It is integer.** Activations are clipped to [0, 1] and squared. An activation is 255 and an
-output weight 64, so an activation times its weight fits 16 bits and 256 of those again fit 32,
-which is why the units are summed 256 at a time. A `net.h` carries the width it was fitted at, and
-a build of another width will not compile with it, since C would fill the missing weights with
-zeros and the engine would play on them.
-Every build scores alike, so bench is the same from clang, gcc and a build with no CPU
-assumptions. `nntrain` fits on the same rounded weights the engine runs, so the fit is what plays.
+**A head reads the pools.** Each filter's eight units, squared, are pooled into one in each view,
+so nothing past the pooling can tell how the board is turned. Two small layers read the 128 pools,
+16 clipped units and then 32, the first with the lead, reserves and komi too, and the output adds
+the 32 to the straight sum of the pools. Each size and bucket has a head of its own. It costs a
+fifth of the search's speed and played +54 in self-play, +86 at equal nodes: EXPERIMENTS.md E48.
+
+**It is integer.** Activations are clipped to [0, 1], where 1 is 255, and squared; each square is
+cut to 16 bits before it is pooled, so the pools are summed in 16 bits. Every layer of the head
+is 16-bit inputs times 16-bit weights summed in 32 bits, and each layer's units are cut back to 16
+bits before the next reads them. A `net.h` carries the width, the number of views and the size of
+the head it was fitted with, and a build of another shape will not compile with it, since C
+would fill the missing weights with zeros and the engine would play on them. Every build scores
+alike, so bench is the same from clang, gcc and a build with no CPU assumptions. `nntrain` fits
+on the same rounded weights the engine runs, so the fit is what plays.
+
+**What a node's evaluation costs.** Bringing the accumulator up to date cost three times what
+scoring it did, a third of the search's time, E43; with the head, scoring costs about as much
+again. All of a carry's rows are applied in one pass, a slice of the accumulator at a time held in
+vector registers, from the ancestor's accumulator straight into the node's. The head's loops are
+written for what the compiler makes of them: each part was timed alone, and the obvious forms ran
+two to four times slower, E48.
 
 **One network plays every size.** A filter is laid on an 8x8 grid, and a board sits on it with
 its edges on the grid's edges, the near half of each line counted from one edge and the rest from

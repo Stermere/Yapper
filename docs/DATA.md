@@ -102,16 +102,18 @@ yapper nntrain src/net.h 1 0.7 15 15 --share 7=0.33 --share 8=0.2 --lambda 3=0.5
 make format && make
 ```
 
-That is the fit of E42's network, at 128 filters. E40's was the same without gen 10, and E39's
-that at 32 filters. The arguments are the
+That is the fit of E48's network: two views of 64 filters and a head of 16 and 32 units. E44's
+was the same without the head, E42's at one view of 128 filters, E40's that without gen 10, and
+E39's that at 32 filters. The arguments are the
 output, the one-in-N positions to keep, `lambda`, the epochs and the threads, then the options,
 then the games. A size is in the network when the games have some of it, and a size they do not
 have counts flats. The engine picks up `net.h` the next time it is built. After swapping one in by
 hand, check that bench changed: a copied file can keep an older date, and `make` will then quietly
 do nothing.
 
-The width is `NN_FILTERS` in `src/nn.h`, a multiple of 32. A `net.h` of another width stops the
-build, so to fit a new width, move `net.h` aside, build, which then counts flats, and fit.
+The width is `NN_FILTERS` in `src/nn.h`, a multiple of 32, in each of the `NN_SIDES` views, and
+the head is `NN_L2` and `NN_L3`. A `net.h` of another shape stops the build, so to fit a new one, move `net.h` aside, build, which
+then counts flats, and fit.
 
 `--seed n`, before the game files, picks other first weights and another order of the
 positions, which is how to see how far two fits of the same games play apart. `--share 8=0.2`

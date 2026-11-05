@@ -1494,7 +1494,267 @@ Yapper reached 14 on 1.93M at 3.6M a second, at 1.8 to 2.4 times. That is E34's 
 still there. syntaks's `MoveOverhead` is 10 ms by default, which at 1/8 is more than its 6.25 ms
 increment, so that handicap takes more from it than the clock alone says.
 
+## E43: what the network costs, and what it cannot see
+
+Measurements of E42's network from an instrumented copy of the source, kept with its diff in
+`external/build/e43`. Nothing here changes the engine, and the copy benches 1388639, as E42 does.
+
+**Where a node's time goes.** 120 positions from gen 10 games, each searched to 200,000 nodes from
+an empty table on a quiet machine, with cycles counted around the network inside the search. The
+search ran at 1263 to 1271 cycles a node, and the counters added 3%.
+
+| Part | Cycles an evaluation | Share of the search |
+|---|---|---|
+| Bringing the accumulator up to date | 615 | 33.7% |
+| Scoring it | 172 | 9.4% |
+
+71% of nodes evaluate. A frame comes from an ancestor 2.91 plies back on average, through 3.88
+changed squares and 5.27 rows of 1024. Most of the network's cost is the update, not the score.
+
+The table a search reads repeats each filter row once per symmetry, 21 MB on 6x6. Reading the
+trainer's layout instead, an eighth of the size, ran at 1290 to 1307 cycles a node, so the update
+is not waiting on memory. Applying all of a carry's rows in one pass, an orientation at a time in
+eight vector registers, from the ancestor's accumulator straight into the frame, ran at 1197 and
+1211 cycles against 1263 and 1271: **about 5% faster**, with the update at 526 cycles, the bench
+unchanged and selftest clean. E32's single pass was slower because the compiler did not keep the
+slice in registers. The vector types that movegen already uses make it do so.
+
+That pass is now `nn_derive()`. Its vectors are as wide as the target's registers: eight of 32
+bytes on SSE took all sixteen registers and spilled, and gcc with POPCNT, CI's build, ran 14%
+slower than before until they were cut to 16 bytes there. Then, alternating builds on the same
+machine:
+
+| Build | Before | After |
+|---|---|---|
+| clang native, the 120 positions, cycles a node, median of 4 | 1339 | 1260, **6% faster** |
+| gcc POPCNT, bench nps, 3 runs | 2.34M to 2.37M | 2.79M to 2.81M, **+19%** |
+| clang generic, bench nps, 3 runs | 2.35M to 2.45M | 2.59M to 2.62M, **+8%** |
+
+Bench is 1388639 from clang native, clang generic, gcc POPCNT and `make release`, perft and
+selftest pass, and gcc's selftest passes too. A pure speedup, so no match was played.
+
+**What the units do.** On the 532,651 positions of gen 10's held-out games, from the side to
+move's view, 77.7% of units are below zero, 2.5% are at the clip and 19.8% are between. Every
+position has an eighth to a quarter of the layer live. No unit is never live, and 56 are below
+zero in 95% of positions. The largest accumulator in all 8.5M positions of gen 10 is 2280, where
+16 bits hold 32767.
+
+**Where the score comes from.** The hidden layer's part has a standard deviation of 288 hundredths
+and the linear skip's 445. They correlate with the search's score at 0.42 and 0.80, the flat lead
+alone at 0.48 and their sum at 0.96. The lead, reserves and komi, linear within each bucket, carry
+most of the score, and the hidden layer is a positional correction on top of them.
+
+**Where it falls short of the search**, by bucket on the same positions, against results:
+
+| Bucket | Positions | Network | Skip alone | 20,000-node search | Network minus search | Mean difference from the search |
+|---|---|---|---|---|---|---|
+| 0, the end | 20,102 | 0.4238 | 0.5339 | 0.3404 | 0.0835 | 245 |
+| 1 | 40,164 | 0.3320 | 0.4306 | 0.2831 | 0.0489 | 205 |
+| 2 | 42,772 | 0.3351 | 0.4344 | 0.2998 | 0.0353 | 158 |
+| 3 | 37,286 | 0.3614 | 0.4623 | 0.3265 | 0.0349 | 137 |
+| 4 | 61,974 | 0.3797 | 0.4788 | 0.3493 | 0.0304 | 123 |
+| 5 | 78,145 | 0.4236 | 0.5197 | 0.3940 | 0.0296 | 106 |
+| 6 | 107,573 | 0.4644 | 0.5620 | 0.4396 | 0.0248 | 89 |
+| 7, the start | 144,635 | 0.5168 | 0.6185 | 0.5015 | 0.0153 | 59 |
+
+The network trails the search by 0.015 at the start and 0.084 at the end, where the two differ by
+2.45 flats on average. Part of that is the search seeing the end, but it is also where the games
+are lost: most losses to syntaks are flat games by 2 to 4 half flats, E42. The hidden layer is
+worth about 0.1 of loss over the skip alone in every bucket.
+
+**What the stacks are fitted on.** Each filter row, by cell and token, was counted over the 144M
+6x6 positions of gens 7 to 10 that a fit reads, and then over gen 10's held-out positions. Every
+lone stone, 78% of what a position reads, reads a row seen more than a million times. Of the stacks,
+85.5% read such a row and 2.65% one seen fewer than 100,000 times. 319 of the 18,432 filter rows
+never moved from their random start, and no position, in a game or a search, read one. 6x6's token
+table is not short of data.
+
+**What it cannot see.** A black top subtracts the row that the same stack under a white top adds,
+so every unit weighs a stack of the other side's at exactly minus the same stack of its own. A
+unit can only measure the difference between the sides, never a total: how full the board or a
+line is reaches the network only through the eight buckets. A wall of the other side's across a
+road, and a wall of this side's in the same place, are equal and opposite in every unit, though
+only one of them blocks. E35's stones in hand went into the hidden layer under the same rule.
+
+**Clips.** The fit holds biases within 1.98, and 19 of 8x8's 128 are at that limit, with 3 of
+7x7's and 1 of 4x4's. Accumulators would leave room for far more. Output weights span -34 to 21
+on 6x6 and -15 to 16 on 8x8, of the 127 the fixed point allows, so most are within a few steps of
+1/64. 5713 filter weights, 0.24%, are at their limit of 1.5.
+
+## E44: a view for each side
+
+E43 found that one view, which a black top subtracted from, could only weigh the difference
+between the sides. Now each side has a view of its own, with weights for a stack of its own and
+for one of the other side's, and the output weighs the side to move's view apart from the other.
+Both views are the same weights, so swapping the colours and the side to move swaps the views. At
+64 filters a view, the accumulator is 1024 wide as before, a changed stack still costs one row of
+1024, and the table is the same size: a stack's row holds its owner's view first, and a black top
+sends the halves the other way.
+
+Selftest passes 584,543,208 checks with random networks of two views on every size. A score that
+read white's view whoever was to move failed 101,832 of them, and an update that took every stack
+for black's failed 222,132. The GPU and the CPU fit one file for two epochs to 0.601785 and
+0.601804 held out, and the engine reads within 0.50 hundredths of every size's fit, 1 at worst.
+
+The fit is F1's, E42: the same games, `lambda`, shares, epochs and seed.
+
+| Held out, against results | F1, one view of 128 | Two views of 64 | Change |
+|---|---|---|---|
+| 6x6 gen 10 | 0.4337 | 0.4292 | **-0.0045** |
+| 6x6 gen 9, 20k | 0.4429 | 0.4382 | -0.0046 |
+| 6x6 gen 8 | 0.4655 | 0.4616 | -0.0040 |
+| 6x6 gen 7 | 0.4503 | 0.4471 | -0.0032 |
+| 3x3, 4x4, 5x5 | 0.3197, 0.3655, 0.4136 | 0.3141, 0.3602, 0.4089 | -0.005 |
+| 7x7, 8x8 | 0.5353, 0.5867 | 0.5333, 0.5869 | -0.002, 0.000 |
+
+Against the blended targets the gain was only 0.0010, against results 0.0033: the scores in the
+targets are a one-view network's.
+
+| Match | Result |
+|---|---|
+| Against E43's build, 2+0.02, [0, 10] | **PASSED**, 368 games, +202 -111 =55, **+87.7 +/- 31.9**, pairs [14, 16, 68, 37, 49] |
+| syntaks at 1/8 of 5+0.05, 600 games, nothing else running | +335 -194 =71, **+83 [+55, +110]**, score 0.618, against E42's +26 |
+| Topaz at 5+0.05, 200 games, the same | +84 -74 =42, **+17 [-27, +61]**, score 0.525, against E42's -86 |
+
+The first time Yapper has scored above half against Topaz at full strength. By E42's rule of 10
+Elo at equal nodes for each 0.001 of held-out loss, the fit was worth about 45; it played twice
+that.
+
+**What it costs.** On E43's 120 positions, the update costs 545 cycles an evaluation to the one
+view's 535. Scoring each view in a loop of its own took 217 cycles to the one view's 180, and one
+loop over both, a step adding a unit of each, takes 196. The search then runs at 1252 cycles a
+node to 1232, 1.5% slower. The matches above played the two-loop build, the same evaluation 1%
+slower.
+
+Bench 1347007 from clang native, clang generic, gcc POPCNT and `make release`. Perft and
+selftest pass, gcc's selftest too.
+
+## E45: output buckets by the race to the end, a neutral test
+
+E43 found the network furthest behind the search at the end of the game, and most losses are
+close flat games. The buckets were the smaller of the stones either side has left and the empty
+squares, which cannot say who places last. These were the placements left if both sides only
+place, `min(empty, 2 * mine - 1, 2 * theirs)`, odd when the side to move places last: 16 buckets,
+each count from 1 to 8 alone, then 9-12, 13-18, 19-26 and more, each split by who places last.
+The rest is E44's network, fit and seed.
+
+| Held out, against results | E44 | Race buckets |
+|---|---|---|
+| 6x6 gen 10 | 0.4292 | 0.4280 |
+| 6x6 gen 9, 20k | 0.4382 | 0.4388 |
+| 6x6 gen 8, gen 7 | 0.4616, 0.4471 | 0.4617, 0.4471 |
+| 4x4, 5x5 | 0.3602, 0.4089 | 0.3606, 0.4103 |
+| 7x7, 8x8 | 0.5333, 0.5869 | 0.5327, 0.5858 |
+
+Against E44, 2+0.02, [0, 10]: **INCONCLUSIVE** at the cap, 2000 games, +759 -745 =496,
+**+2.4 +/- 12.7**, pairs [128, 174, 382, 188, 128]. Not kept. What a flat is worth at the end is
+not what the buckets were missing, or the search already sees who places last.
+
+## E46: units multiplied in pairs, a neutral test
+
+The output weighed each unit squared. Here it weighs filter f times filter f + 32, of one view
+and orientation, so the symmetries still hold: half as many products, each of two patterns. The
+fit is E44's.
+
+| Held out, against results | E44 | Pairs |
+|---|---|---|
+| 6x6 gen 10, gen 9 | 0.4292, 0.4382 | 0.4296, 0.4394 |
+| 6x6 gen 8, gen 7 | 0.4616, 0.4471 | 0.4617, 0.4473 |
+| 4x4, 5x5 | 0.3602, 0.4089 | 0.3612, 0.4093 |
+| 7x7, 8x8 | 0.5333, 0.5869 | 0.5325, 0.5859 |
+
+Worse on every 6x6 group, better on 7x7 and 8x8. The score took 188 cycles to 208, both views in
+one loop, and the search 1257 cycles a node to 1279. Against E44, 2+0.02, [0, 10]:
+**INCONCLUSIVE** at the cap, 2000 games, +769 -792 =439, **-4.0 +/- 12.8**, pairs [138, 178,
+381, 175, 128]. Not kept: what the speed bought, the fit gave back.
+
+## E47: shared rows in the fit, for the sizes with few games
+
+Two blocks only the fit has: a row for each token, as its own side's or the other's, that every
+cell shares, and a row for each cell and top type. A filter weight plays as its own plus those
+two, rounded, so the engine is given the sum and nothing in it changes. A shared row's gradient is
+the sum of its filter weights' gradients, added after each batch rather than in the kernel. The
+shared block first started 32 past a multiple of 64, and the CPU read its filters from the whole
+array's index: on one file for two epochs the CPU then fitted 0.588026 held out to the GPU's
+0.583373. Fixed, 0.583393 to 0.583373. That file alone without the shared rows fitted 0.601785.
+
+On E44's fit:
+
+| Held out, against results | E44 | Shared rows |
+|---|---|---|
+| 6x6 gen 10, gen 9 | 0.4292, 0.4382 | 0.4291, 0.4387 |
+| 6x6 gen 8, gen 7 | 0.4616, 0.4471 | 0.4618, 0.4470 |
+| 3x3, 4x4, 5x5 | 0.3141, 0.3602, 0.4089 | 0.3128, 0.3600, 0.4101 |
+| 7x7, 8x8 | 0.5333, 0.5869 | 0.5325, **0.5847** |
+
+6x6 is where E43 found the rows well fed, and nothing moved there. 8x8, with the fewest games for
+its squares, gained 0.0022. Not played yet: no 6x6 match could see it, and it belongs with the
+next fit, on new games of 7x7 and 8x8. The trainer is in `external/build/p5`.
+
+## E48: a head of two layers
+
+The user asked for a standard chess idea: small layers between the main one and the output.
+Each filter's eight units, squared, are pooled into one, in each view, so the 128 pools cannot
+change when the board is turned. 16 clipped units read the pools and the lead, reserves and komi,
+32 clipped units read those, and the output adds the 32 to the straight sum of the pools it had
+before, which keeps the network's old judgement as the head's starting point. Every size and
+bucket has its own head. In the engine a pool is cut to 16 bits, as in E42, and each layer's
+units are cut back to 16 bits before the next reads them, so every product is 16 by 16 bits into
+32 and the score fits 64. Selftest passes 584,523,449 checks with random heads on every size.
+
+On E44's fit:
+
+| Held out, against results | E44 | The head |
+|---|---|---|
+| 6x6 gen 10 | 0.4292 | **0.4254** |
+| 6x6 gen 9, 20k | 0.4382 | 0.4349 |
+| 6x6 gen 8, gen 7 | 0.4616, 0.4471 | 0.4592, 0.4452 |
+| 3x3, 4x4, 5x5 | 0.3141, 0.3602, 0.4089 | 0.2883, 0.3528, 0.4072 |
+| 7x7, 8x8 | 0.5333, 0.5869 | 0.5327, 0.5857 |
+
+The engine reads within 0.52 hundredths of every size's fit, 2 at worst. E42's head of one layer
+on one view fitted 0.0016 better on 6x6; this one 0.0038, and against E44 at 100,000 nodes a move
+each, [0, 10]: **PASSED**, 338 games, +175 -93 =70, **+86.0 +/- 31.3**, pairs [9, 19, 61, 41, 39].
+E42's played +14.5 there.
+
+**What it costs, and what the compiler made of it.** As first written the score took 980 cycles to
+E44's 197, and the search ran at 0.69 of the speed: four rows of the first layer in one loop were
+widened to 32-bit multiplies, and the second layer was built a word at a time. Each part was
+timed alone, and the candidates, on data in L1, in cycles a call:
+
+| Part | clang | gcc |
+|---|---|---|
+| Pooling both views, squares summed in 32 bits | 269 | 214 |
+| The same, each square cut to 16 bits first, in GCC's vectors | **122** | 158 |
+| First layer, four rows a loop | 227 | 93 |
+| First layer, a row a call | **128** | 131 |
+| Second layer, rows inline | 257 | 289 |
+| Second layer, a row a call | **117** | 149 |
+| Second layer, by column | 124 | 801 |
+
+Cutting each square before the sum moves a pool by at most 1 of 2048. With the three in bold, the
+score takes about 520 cycles and the search runs at about 0.8 of E44's speed.
+
+| Match | Result |
+|---|---|
+| Against E44, 2+0.02, [0, 10] | **PASSED**, 512 games, +243 -164 =105, **+54.0 +/- 24.7**, pairs [22, 25, 107, 56, 46] |
+| syntaks at 1/8 of 5+0.05, 600 games, nothing else running | +349 -174 =77, **+104 [+76, +131]**, score 0.646, against E44's +83 |
+| Topaz at 5+0.05, 200 games, the same | +93 -65 =42, **+48 [+3, +93]**, score 0.570, against E44's +17 |
+| syntaks at 5+0.05, 400 games, the same | +25 -356 =19, **-410 [-467, -349]**, score 0.083, against E42's -427 |
+
+Against syntaks at full strength nothing measurable moved, where at an eighth of its clock E42 to
+E48 gained 78 and Topaz 134. At full time syntaks searches two to three plies deeper, E42, and
+that is where the rest of the gap is.
+
+The GPU and the CPU fit one file for two epochs to 0.601273 and 0.601208 held out. Bench 1495587
+from clang native, clang generic, gcc POPCNT and `make release`; perft and selftest pass, gcc's
+selftest too.
+
 ## Mistakes worth not repeating
+
+- **An idea that times slower may be the compiler's fault.** E32 dropped a single pass over the
+  accumulator as slower. With the slice held in vector registers it is 5% faster, E43. Check
+  what the compiler made of an idea before dropping the idea.
 
 - **A build with no network still plays.** One candidate's weights went in under a file name the
   engine no longer read, so it counted flats on every size and lost 274 games of 274. Its bench was

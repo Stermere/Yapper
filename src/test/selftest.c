@@ -289,22 +289,42 @@ static void check_frame(const Board *b, NNFrame *frames, const Move *made, int p
 /* Random weights on every size, whatever is compiled in, so the network is held to its gates
  * before one has been trained. Symmetry holds for any weights, by construction. */
 static void network_games(int size, int games, int halfkomi) {
-    static i16 filters[NN_GRID * NN_GRID * NN_TOKENS * NN_FILTERS];
-    static i16 bias[NN_FILTERS], output[NN_BUCKETS * NN_FILTERS];
+    static i16 filters[NN_GRID * NN_GRID * NN_INPUTS * NN_FILTERS];
+    static i16 bias[NN_FILTERS], output[NN_BUCKETS * NN_POOLS];
     static i32 skip[NN_BUCKETS * 4];
-    for (int i = 0; i < NN_GRID * NN_GRID * NN_TOKENS * NN_FILTERS; i++) {
+    static i16 l2[NN_BUCKETS * NN_L2 * NN_POOLS], l2_skip[NN_BUCKETS * NN_L2 * 3];
+    static i16 l3[NN_BUCKETS * NN_L3 * NN_L2], l4[NN_BUCKETS * NN_L3];
+    static i32 l2_bias[NN_BUCKETS * NN_L2], l3_bias[NN_BUCKETS * NN_L3];
+    for (int i = 0; i < NN_GRID * NN_GRID * NN_INPUTS * NN_FILTERS; i++) {
         filters[i] = (i16)(rng() % 129) - 64;
     }
     for (int i = 0; i < NN_FILTERS; i++) {
         bias[i] = (i16)(rng() % 201) - 100;
     }
-    for (int i = 0; i < NN_BUCKETS * NN_FILTERS; i++) {
+    for (int i = 0; i < NN_BUCKETS * NN_POOLS; i++) {
         output[i] = (i16)(rng() % 255) - 127;
+    }
+    /* The head's units sit inside their clips often enough to be tested on both sides of them. */
+    for (int i = 0; i < NN_BUCKETS * NN_L2 * NN_POOLS; i++) {
+        l2[i] = (i16)(rng() % 65) - 32;
+    }
+    for (int i = 0; i < NN_BUCKETS * NN_L2 * 3; i++) {
+        l2_skip[i] = (i16)(rng() % 65) - 32;
+    }
+    for (int i = 0; i < NN_BUCKETS * NN_L2; i++) {
+        l2_bias[i] = (i32)(rng() % (NN_QU * NN_Q2 / 2)) + NN_QU * NN_Q2 / 4;
+    }
+    for (int i = 0; i < NN_BUCKETS * NN_L3 * NN_L2; i++) {
+        l3[i] = (i16)(rng() % 129) - 64;
+    }
+    for (int i = 0; i < NN_BUCKETS * NN_L3; i++) {
+        l3_bias[i] = (i32)(rng() % (NN_QY * NN_Q3 / 2)) + NN_QY * NN_Q3 / 4;
+        l4[i]      = (i16)(rng() % 401) - 200;
     }
     for (int i = 0; i < NN_BUCKETS * 4; i++) {
         skip[i] = (i32)(rng() % 2001) - 1000;
     }
-    const NNWeights random = {filters, bias, output, skip};
+    const NNWeights random = {filters, bias, output, skip, l2, l2_skip, l2_bias, l3, l3_bias, l4};
     CHECK(nn_install(size, &random), "installing a network on %d", size);
 
     static Move list[MAX_MOVES];
