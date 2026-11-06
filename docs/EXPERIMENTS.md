@@ -1750,6 +1750,70 @@ The GPU and the CPU fit one file for two epochs to 0.601273 and 0.601208 held ou
 from clang native, clang generic, gcc POPCNT and `make release`; perft and selftest pass, gcc's
 selftest too.
 
+## E49: gen 11, and E48 fine-tuned on it
+
+**Gen 11.** Rounds over 5x5 to 8x8 at 20,000 nodes a move from E48, each round 50,000 games of
+6x6, 22,000 of 7x7, 17,000 of 8x8 and 12,000 of 5x5, on 15 jobs, with seeds of 110000 + 1000 a
+size + 100 a round. A round took 5.7 hours, at 6.1, 4.0, 3.0 and 10.3 games a second. Four rounds
+were planned; the user stopped it after two to try the games: 202,000 games, 21.5M positions.
+takref replayed 1010 of them without a failure. Roads end fewer games than before: 8% on 6x6,
+where gen 10 had 9%, and 12% and 11% on 7x7 and 8x8, where the gen 1 games of those sizes had 30%.
+
+**Fine-tuning.** `nntrain --warm` starts from the network the binary was built with, and `--rate`
+sets the first step's rate. A warm fit at a rate of 1e-12 wrote back `net.h` byte for byte. Trials
+on a quarter of the positions, with E48's games and the first round, for 2 or 3 epochs:
+
+| Held out, against results | Start | 0.0005, gen 11 4× | 0.002, gen 11 once | 0.001, gen 11 4× |
+|---|---|---|---|---|
+| 6x6 gen 11 | 0.4237 | **0.4196** | 0.4223 | 0.4196 |
+| 7x7 gen 11 | 0.4639 | **0.4571** | 0.4592 | 0.4570 |
+| 8x8 gen 11 | 0.5190 | **0.5125** | 0.5132 | 0.5125 |
+| 6x6 gen 10 | 0.4260 | **0.4227** | 0.4252 | 0.4227 |
+
+Listed once, a quarter of gen 11 is drawn from other positions, and its start reads 0.4232, 0.4628
+and 0.5180. Gen 11 is a twentieth of the positions, and listed once it hardly moved the network,
+even at the full rate. Listed four times it moved every group of games, the old ones included, and the rate
+made no difference. Listing a file again weighs it again; its held-out games are counted again
+too, so a group's mean does not change.
+
+The fit: E48 warm, E48's games and both rounds listed four times, every position, at 0.0005 for 2
+epochs. 254M positions, in 4 minutes:
+
+| Held out, against results | E48 | E49 |
+|---|---|---|
+| 6x6 gen 11, gen 10 | 0.4230, 0.4254 | **0.4160, 0.4199** |
+| 6x6 gen 9, 8, 7 | 0.4349, 0.4592, 0.4452 | 0.4302, 0.4577, 0.4441 |
+| 7x7 gen 11, gen 1 | 0.4724, 0.5327 | **0.4630**, 0.5310 |
+| 8x8 gen 11, gen 1 | 0.5138, 0.5857 | **0.5041**, 0.5846 |
+| 5x5 gen 11, gen 1 | 0.4043, 0.4072 | **0.3876**, 0.3985 |
+| 3x3, 4x4 | 0.2883, 0.3528 | 0.2881, 0.3532 |
+
+The engine reads within 0.52 hundredths of the fit on average, 0.68 on 3x3, and 5 at worst there.
+
+| Match | Result |
+|---|---|
+| Against E48, 2+0.02, [0, 10] | **PASSED**, 1324 games, +518 -429 =377, **+23.4 +/- 15.4**, pairs [68, 113, 231, 162, 88] |
+| The same games fitted from nothing, against E49, 2+0.02, [0, 10] | **FAILED**, 680 games, +222 -278 =180, **-28.7 +/- 20.5**, pairs [47, 69, 146, 49, 29] |
+| syntaks at 1/8 of 5+0.05, 600 games, nothing else running | +395 -150 =55, **+150 [+120, +179]**, score 0.704, against E48's +104 |
+| syntaks at 1/4 of 5+0.05, 600 games, the same | +252 -282 =66, **-17 [-44, +9]**, score 0.475: the stick from here on |
+| Topaz at 5+0.05, 200 games, the same | +112 -54 =34, **+103 [+55, +150]**, score 0.645, against E48's +48 |
+| syntaks at 5+0.05, 400 games, the same | +27 -351 =22, **-391 [-446, -334]**, score 0.095, against E48's -410 |
+
+The fit from nothing took the usual 15 epochs at 0.002, in 21 minutes, and held out level with
+E49 on 6x6, 0.4162 on gen 11 and 0.4201 on gen 10, a little behind on 7x7's 0.4636 and 8x8's
+0.5077, and ahead on 5x5's 0.3862. It still lost on 6x6, though by no more than two seeds of one
+fit can play apart, E39, so this says the fine-tune is no worse, not that it is better. It is a
+fifth of the time.
+
+Against the other engines the 23 of self-play read as about 50: 46 more at an eighth of syntaks's
+clock and 55 more against Topaz. syntaks at full strength moved 19, inside either interval. At
+0.704, an eighth no longer measures much, so syntaks at a quarter, 1.25+0.0125, is the stick
+for the next changes. Doubling its clock cost E49 167.
+
+The match is on 6x6, where the fit moved least; 7x7, 8x8 and 5x5 moved more and have not been
+played. Gen 10, added by a fit from nothing, moved its groups by about 0.001 and played +11.8 at
+the cap, E42. Bench 1209000 from `make` and `make release`, and selftest passes.
+
 ## Mistakes worth not repeating
 
 - **An idea that times slower may be the compiler's fault.** E32 dropped a single pass over the

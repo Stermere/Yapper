@@ -24,6 +24,10 @@
 #include "search.h"
 #include "thread.h"
 
+#if __has_include("net.h")
+#include "net.h"
+#endif
+
 #define NT_MAX_THREADS 64
 #define NT_BATCH       16384
 #define NT_GROUP       16 /* batches the GPU is given at once, so threads start once a group */
@@ -107,6 +111,7 @@ typedef struct NTLoader {
     int check_count, check_sizes[NT_SLOTS];
     double share[NT_SLOTS]; /* of a size's positions in each epoch, for a size with few games */
     double lambda[NT_SLOTS];
+    double rate; /* at the first step, falling on a cosine from there */
 } NTLoader;
 
 /* Filters, then bias, output and skip, in one array so the optimiser can walk it as one. */
@@ -665,6 +670,32 @@ static bool model_init(NTModel *model, u64 seed) {
     return true;
 }
 
+/* The network this build plays, as the fit's weights. net.h holds them in the fit's own order, so
+ * weight `i` is the i-th of its arrays laid end to end, and snapping gives back the same integers.
+ */
+static bool model_warm(NTModel *model) {
+#ifdef NET_H
+    for (u64 i = 0; i < model->count; i++) {
+        const long stored = i < model->bias_at      ? NetFilters[i]
+                            : i < model->output_at  ? NetBias[i - model->bias_at]
+                            : i < model->skip_at    ? NetOutput[i - model->output_at]
+                            : i < model->l2_at      ? NetSkip[i - model->skip_at]
+                            : i < model->l2_skip_at ? NetL2[i - model->l2_at]
+                            : i < model->l2_bias_at ? NetL2Skip[i - model->l2_skip_at]
+                            : i < model->l3_at      ? NetL2Bias[i - model->l2_bias_at]
+                            : i < model->l3_bias_at ? NetL3[i - model->l3_at]
+                            : i < model->l4_at      ? NetL3Bias[i - model->l3_bias_at]
+                                                    : NetL4[i - model->l4_at];
+        model->p[i]       = (float)((double)stored / unit_of(model, i));
+        snap(model, i);
+    }
+    return true;
+#else
+    (void)model;
+    return false;
+#endif
+}
+
 typedef struct NTQuantised {
     i16 *filters;
     i16 bias[NT_SLOTS * NN_FILTERS];
@@ -859,9 +890,9 @@ static u64 steps_of(const NTLoader *loader, int epochs, u64 seed) {
     return steps;
 }
 
-static double rate_at(u64 step, u64 steps) {
+static double rate_at(double first, u64 step, u64 steps) {
     const double progress = (double)step / (double)steps;
-    return NT_RATE * (NT_RATE_END + (1.0 - NT_RATE_END) * 0.5 * (1.0 + cos(NT_PI * progress)));
+    return first * (NT_RATE_END + (1.0 - NT_RATE_END) * 0.5 * (1.0 + cos(NT_PI * progress)));
 }
 
 /* The weight of a step in the mean of the weights: 0 before the mean starts, then one over the
@@ -946,7 +977,7 @@ static bool train_cpu(NTModel *model, const NTLoader *loader, const double *lamb
                                   .v              = model->v,
                                   .q              = model->q,
                                   .a              = model->a,
-                                  .rate           = rate_at(step, steps),
+                                  .rate           = rate_at(loader->rate, step, steps),
                                   .average        = average_at(step, steps),
                                   .kept           = 1.0 - pow(NT_BETA1, (double)(step + 1)),
                                   .seen           = 1.0 - pow(NT_BETA2, (double)(step + 1))};
@@ -1320,7 +1351,7 @@ static bool train_gpu(NTModel *model, const NTLoader *loader, const double *lamb
                 GpuPtr batch_packed    = packed + (at - from) * sizeof(NTPacked);
                 GpuPtr batch_stacks    = stacks + (at - from) * slot * sizeof(u16);
                 float scale            = 1.0f / (float)n;
-                double rate            = rate_at(step, steps);
+                double rate            = rate_at(loader->rate, step, steps);
                 double kept            = 1.0 - pow(NT_BETA1, (double)(step + 1));
                 double seen            = 1.0 - pow(NT_BETA2, (double)(step + 1));
                 double average         = average_at(step, steps);
@@ -1356,12 +1387,13 @@ static bool train_gpu(NTModel *model, const NTLoader *loader, const double *lamb
            gpu_download(model->a, a, floats);
 }
 
-/* Scores the network as written, the mean of the fit's last steps, on each group of games. */
+/* Scores the network on each group of games: as written, the mean of the fit's last steps, or a
+ * warm fit's before its first step. */
 static void report_groups(const NTModel *model, const NTLoader *loader, const double *lambda,
-                          int threads) {
+                          int threads, const char *when) {
     double loss, result, by_group[NT_GROUPS];
     score_set(model, &loader->held, lambda, threads, &loss, &result, by_group);
-    printf("averaged: held out %.6f, against results %.6f\n", loss, result);
+    printf("%s: held out %.6f, against results %.6f\n", when, loss, result);
     for (int g = 0; g < loader->group_count; g++) {
         const NTGroup *group = &loader->groups[g];
         printf("  %dx%d gen %d at %u nodes%s: %.6f against results, %llu held out\n", group->size,
@@ -1372,13 +1404,15 @@ static void report_groups(const NTModel *model, const NTLoader *loader, const do
 }
 
 int nntrain_run(const char *out, int keep, const double *lambda, int epochs, int threads, bool gpu,
-                unsigned long long seed, const double *share, char **paths, int path_count) {
-    if (keep < 1 || epochs < 1 || threads < 1 || threads > NT_MAX_THREADS) {
+                unsigned long long seed, double rate, bool warm, const double *share, char **paths,
+                int path_count) {
+    if (keep < 1 || epochs < 1 || threads < 1 || threads > NT_MAX_THREADS || rate < 0.0) {
         printf("bad arguments\n");
         return 2;
     }
     static NTLoader loader;
     loader.keep = keep;
+    loader.rate = rate > 0.0 ? rate : NT_RATE;
     memcpy(loader.lambda, lambda, sizeof(loader.lambda));
     loader.rng   = 0x2545F4914F6CDD1DULL;
     loader.check = malloc(sizeof(Board) * NT_CHECK_BOARDS);
@@ -1412,6 +1446,13 @@ int nntrain_run(const char *out, int keep, const double *lambda, int epochs, int
         printf("out of memory\n");
         return 1;
     }
+    if (warm) {
+        if (!model_warm(&model)) {
+            printf("this build has no network to start from\n");
+            return 1;
+        }
+        report_groups(&model, &loader, loader.lambda, threads, "start");
+    }
     u32 *order = malloc(train->count * sizeof(u32));
     if (!order) {
         printf("out of memory\n");
@@ -1443,7 +1484,7 @@ int nntrain_run(const char *out, int keep, const double *lambda, int epochs, int
         model.p[i] = model.a[i];
         snap(&model, i);
     }
-    report_groups(&model, &loader, loader.lambda, threads);
+    report_groups(&model, &loader, loader.lambda, threads, "averaged");
     quantise_model(&model, &q);
     if (!write_header(out, &model, &q, sizes) || !check_engine(&model, &loader, &q, sizes)) {
         return 1;

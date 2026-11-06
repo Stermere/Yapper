@@ -104,7 +104,16 @@ make format && make
 
 That is the fit of E48's network: two views of 64 filters and a head of 16 and 32 units. E44's
 was the same without the head, E42's at one view of 128 filters, E40's that without gen 10, and
-E39's that at 32 filters. The arguments are the
+E39's that at 32 filters. E49's, which plays now, is E48's carried on, built with E48's `net.h`:
+
+```sh
+G="external/data/gen11/[5678]s/gen11-20k-*.ydg"
+yapper nntrain src/net.h 1 0.7 2 15 --warm --rate 0.0005 --share 7=0.33 --share 8=0.2 \
+    --lambda 3=0.5 --lambda 4=0.5 <E48's games, as above> $G $G $G $G
+```
+
+Gen 11 is listed four times, which weighs it four times as heavily: listed once, as a twentieth of
+the positions, it hardly moved the network. The arguments are the
 output, the one-in-N positions to keep, `lambda`, the epochs and the threads, then the options,
 then the games. A size is in the network when the games have some of it, and a size they do not
 have counts flats. The engine picks up `net.h` the next time it is built. After swapping one in by
@@ -121,6 +130,12 @@ puts a fifth of 8x8's positions into each epoch, drawn afresh each time, for a s
 games for every epoch to see them all. Weighting its loss instead would not do: the optimiser
 rescales the steps of the weights only that size reaches, so they would move as far as ever.
 `--lambda 4=0.5` gives one size a `lambda` of its own, since the best one differs by board: E39.
+
+`--warm` starts the fit from the network the binary was built with instead of random weights, and
+prints its held-out loss before the first step, so the report says what the fit added. `--rate r`
+sets the first step's rate, which then falls on the usual cosine; a fit from a network that has
+already learned wants a smaller one than the 0.002 a fit from nothing starts at. A warm fit at a
+rate near zero writes back the `net.h` it started from, byte for byte.
 
 Only positions the evaluation is really asked about are used. A side able to win on the spot, a
 road being answered, a forced result and the random plies all go to the search rather than to a

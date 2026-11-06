@@ -21,7 +21,10 @@ above half against it. E48 put a head of two small layers after the pooled filte
 **+54.0 +/- 24.7** in self-play at a time control despite a fifth less speed, +86.0 at equal
 nodes, and **+104 [+76, +131]** against syntaks at an eighth and **+48 [+3, +93]** against
 Topaz. Against syntaks at full strength it reads **-410 [-467, -349]**, E42's -427: what is left
-there is depth.
+there is depth. E49 fine-tuned E48 on gen 11, 202,000 games of 5x5 to 8x8 from E48 itself, and
+passed against it, **+23.4 +/- 15.4**, in a fit of 4 minutes. It reads **+150 [+120, +179]**
+against syntaks at an eighth, **-17 [-44, +9]** at a quarter, which is the measure from here on,
+**+103 [+55, +150]** against Topaz and **-391 [-446, -334]** against syntaks at full strength. A fit of the same games from nothing lost to it by 28.7.
 
 ## Done and verified
 
@@ -32,10 +35,10 @@ there is depth.
 | Move generation | Done, and leading | 9.9 to 12.6 times the fastest engine on bulk, and 6.0 to 7.5 times on full where only Topaz and Tiltak can be compared, on every position raced: EXPERIMENTS.md E8 and E13 |
 | TEI | Done | 40 games through the real racetrack with no protocol faults |
 | Match runner and SPRT | Done | Known-answer tests, EXPERIMENTS.md E1-E3 |
-| Evaluation | One network for every size, a view for each side, a head of two layers | A head of 16 and 32 units on the pooled filters: **+54.0 +/- 24.7** at 2+0.02, +86.0 at equal nodes, E48. Two views of 64 filters, for one of 128 that the other side subtracted from: **+87.7 +/- 31.9** in self-play, +83 at k=8 and +17 against Topaz, E44, after E43 found one view could weigh only the difference between the sides. Before that, 128 filters, from 32 in E39: +79.4 +/- 21.8 for 64 at 100,000 nodes, and 128 led 64 by 45 against syntaks at k=8, E40. Filters on an 8x8 grid every board shares, and each size's own bias, output and skip. Against E38's networks of each size's own at 100,000 nodes: **8x8 +130, 7x7 +203, 5x5 +64**, passed SPRTs for its lambda 0.5 forerunner, then **+77 and +70 more on 8x8 and 7x7** from lambda 0.7; **4x4 +14.3 +/- 8.8**, passed, and +7.3 +/- 8.2 at 2+0.02; **6x6 +16.9 +/- 13.8 against v2, and +23.7 +/- 13.9 at 2+0.02**, both at the cap with their intervals above zero; 3x3 is decided by who moves first at every budget tried: E39. The hand-written evaluation went in E38. Refitted with gen 10, E42: +11.8 +/- 13.5 on E40 in self-play. A second layer fitted better and lost 37 on speed, playing only +14.5 at equal nodes, and the same as F1 against both other engines |
+| Evaluation | One network for every size, a view for each side, a head of two layers | E48 fine-tuned on gen 11: **+23.4 +/- 15.4** at 2+0.02, +150 at k=8 and +103 against Topaz, E49. A head of 16 and 32 units on the pooled filters: **+54.0 +/- 24.7** at 2+0.02, +86.0 at equal nodes, E48. Two views of 64 filters, for one of 128 that the other side subtracted from: **+87.7 +/- 31.9** in self-play, +83 at k=8 and +17 against Topaz, E44, after E43 found one view could weigh only the difference between the sides. Before that, 128 filters, from 32 in E39: +79.4 +/- 21.8 for 64 at 100,000 nodes, and 128 led 64 by 45 against syntaks at k=8, E40. Filters on an 8x8 grid every board shares, and each size's own bias, output and skip. Against E38's networks of each size's own at 100,000 nodes: **8x8 +130, 7x7 +203, 5x5 +64**, passed SPRTs for its lambda 0.5 forerunner, then **+77 and +70 more on 8x8 and 7x7** from lambda 0.7; **4x4 +14.3 +/- 8.8**, passed, and +7.3 +/- 8.2 at 2+0.02; **6x6 +16.9 +/- 13.8 against v2, and +23.7 +/- 13.9 at 2+0.02**, both at the cap with their intervals above zero; 3x3 is decided by who moves first at every budget tried: E39. The hand-written evaluation went in E38. Refitted with gen 10, E42: +11.8 +/- 13.5 on E40 in self-play. A second layer fitted better and lost 37 on speed, playing only +14.5 at equal nodes, and the same as F1 against both other engines |
 | Search | Second pass done | **+116 [+92, +140] against Tiltak over 800 games at 5+0.05**, from -38: EXPERIMENTS.md E25. It sees roads by spread, and most of the gain is speed in real middlegames. With the network, stronger reductions, move-count pruning to depth 6 and singular extensions: **+82.5 +/- 31.3 on v2's search at 2+0.02**, E36. History by the whole move rather than square and kind: **+121.7 +/- 26.5** at 100,000 nodes, E40. Move-count pruning at half: **+19.7 +/- 12.9** at the cap, and a quarter or deeper gained nothing more, E42 |
 | Time management | Done for now | Budgets on the moves left, from the shorter reserve. One time loss in 5242 games, and it does not use the whole clock yet: E25. More time in the opening, as syntaks spends it, lost 22; less lost 9, and a later stop lost 7: E42 |
-| Training data | Every size | 6x6: gens 1-10, 228.8M positions, gen 10 being 120,000 games at 20,000 nodes from E40, E42; every one recoverable from about four bytes a ply, repeatable, checked by takref: docs/DATA.md, E34, E38. 150,000 to 400,000 games of each other size from Gen-1Big. Openings of up to 16 random plies and margin-checked deviations from E37 on. At equal time, 20,000 nodes a move taught a 6x6 network far more than 5000, E38. The network is fitted on 6x6's gens 7-8 and gen 9's 20,000-node games: gens 1-6 can go and gen 7 cannot, E39 |
+| Training data | Every size | Gen 11, two rounds over 5x5 to 8x8 at 20,000 nodes from E48: 202,000 games, 21.5M positions, E49. 6x6: gens 1-10, 228.8M positions, gen 10 being 120,000 games at 20,000 nodes from E40, E42; every one recoverable from about four bytes a ply, repeatable, checked by takref: docs/DATA.md, E34, E38. 150,000 to 400,000 games of each other size from Gen-1Big. Openings of up to 16 random plies and margin-checked deviations from E37 on. At equal time, 20,000 nodes a move taught a 6x6 network far more than 5000, E38. The network is fitted on 6x6's gens 7-8 and gen 9's 20,000-node games: gens 1-6 can go and gen 7 cannot, E39 |
 | Fitting a network | On the GPU | An RTX 3070 fits about 18M positions a second to the CPU's 1.05M, the same network to within float rounding and repeatable to the byte; nothing is needed to build it: E37. Every size in one fit of minutes, the weights averaged over its last tenth. Two fits of the same games that differ only in seed play 15 to 35 apart, so a fit is chosen from several: E39 |
 | Playing it yourself | Done | `python tools/play.py` |
 | Portability | Partly | The hot files compile for AArch64 with NEON; passes every gate with no CPU assumptions on x86-64, at about 80% of native speed, with clang and gcc giving the same bench. **Not yet run on ARM**: CI has a real ARM runner, and it runs on the first push |
@@ -80,15 +83,17 @@ has to be the one of its commit's day: `topaz-tei.exe` is dcb8cd2 on branch `bac
    are still by spread, 56 of 59, but looking for the other side's spreads where the search trusts
    a quiet position lost, in reverse futility and more so in the leaf search, as did a follow-up
    history and IIR: E41. Topaz at full strength, which E40 scores 0.36 against, is a second stick.
+   E49 scores 0.704 at an eighth and 0.475 at a quarter, 1.25+0.0125, which is the stick now.
    E42 still finds syntaks two to three plies deeper at less time, its tree growing 1.5 times a ply
    to Yapper's 1.8 to 2.4. syntaks also spends three times Yapper's time on each opening move. Its
    10 ms `MoveOverhead` takes more than the clock says at an eighth. Both sticks move with the
    machine's load, by 72 and 94 for one binary, so a gauntlet has to run alone and against
    another run alike.
-2. The next generation, at 20,000 nodes, from the one network, on every size. Gen 10 was 6x6
-   alone, and moved the network +11.8 +/- 13.5 in self-play, E42. The other sizes still
-   have only games from the hand-written evaluation, and gained most from sharing 6x6's. 6x6's
-   first generation from a network gave +355, E33. On 6x6, 64,000 games at 20,000 nodes taught
+2. More generations, at 20,000 nodes, from the one network, on every size. Gen 11's two rounds,
+   weighted four times in a fine-tune, gave +23.4 on 6x6, where the fit moved least; 7x7, 8x8
+   and 5x5 moved more and have not been played, E49. Roads end fewer of its games each
+   generation, 8% on 6x6 and 11% on 8x8 where gen 1 had 30%, so keep the older games in a fit.
+   6x6's first generation from a network gave +355, E33. On 6x6, 64,000 games at 20,000 nodes taught
    more than 300,000 at 5000 in the same time, E38. At 128 filters a 20,000-node game takes 1.6
    times what it did at 32: E42.
 3. Training. Two fits of the same games differ by 15 to 35 in play, as much as most changes, so
