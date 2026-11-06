@@ -18,6 +18,7 @@
 #ifndef YAPPER_RELEASE
 #include "datagen.h"
 #include "nntrain.h"
+#include "policyfit.h"
 #include "test/selftest.h"
 #endif
 
@@ -134,13 +135,17 @@ int main(int argc, char **argv) {
         return nntrain_run(argv[2], atoi(argv[3]), lambda, atoi(argv[5]), atoi(argv[6]), !cpu, seed,
                            rate, warm, share, argv + first, argc - first);
     }
+    if (strcmp(command, "policyfit") == 0 && argc >= 6) {
+        return policyfit_run(argv[2], atoi(argv[3]), atoi(argv[4]), argv + 5, argc - 5);
+    }
     printf("usage: yapper [tei | bench [depth] | selftest | perfttest <suite> [max depth] |\n"
            "               perft <size> <depth> [position] |\n"
            "               datagen <out> <games> <seed> <nodes> [size] [generation] |\n"
            "               nntrain <net.h> <keep one in> <lambda> <epochs> <threads> [--cpu]\n"
            "                       [--seed n] [--rate r] [--warm] [--share size=part]...\n"
            "                       [--lambda size=lambda]...\n"
-           "                       <games>...]\n");
+           "                       <games>...] |\n"
+           "               policyfit <policy_net.h> <keep one in> <epochs> <games>...]\n");
 #else
     printf("usage: yapper [tei | bench [depth] | perft <size> <depth> [position]]\n");
 #endif

@@ -12,6 +12,7 @@
 #include "eval.h"
 #include "movegen.h"
 #include "notation.h"
+#include "policy.h"
 #include "thread.h"
 #include "tt.h"
 
@@ -275,42 +276,13 @@ static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *move
     return best;
 }
 
-/* Empty squares where a flat or capstone leaves a road to finish next move: touching a group
- * that runs to one edge and beside an empty square that touches one running to the other. A
- * square that does it through a group touching neither edge is missed. */
-static inline u64 road_near(const u64 ends[4], u64 empty) {
-    return ((ends[0] & neighbours(ends[1] & empty)) | (ends[1] & neighbours(ends[0] & empty)) |
-            (ends[2] & neighbours(ends[3] & empty)) | (ends[3] & neighbours(ends[2] & empty))) &
-           empty;
-}
-
-/* Tops held by `us` less those held by the other side, after the spread `m` against before it,
- * read off the stack's bits as spread_wins() does. */
-static inline int spread_swing(const Board *b, Move m, int us) {
-    const int sq    = move_square(m);
-    const int step  = DirectionStep[move_direction(m)];
-    const int carry = move_carry(m);
-    const u64 word  = b->stones[sq];
-    int swing       = -1;
-    if (board_short_height(b, sq) > carry) {
-        swing += ((word >> carry) & 1) == (u64)us ? 1 : -1;
-    }
-    int to = sq;
-    for (int hops = move_pattern(m); hops; hops &= hops - 1) {
-        to += step;
-        const int before = (b->owned[us] >> to) & 1 ? 1 : (b->owned[!us] >> to) & 1 ? -1 : 0;
-        const int after  = ((word >> (carry - 1 - __builtin_ctz(hops))) & 1) == (u64)us ? 1 : -1;
-        swing += after - before;
-    }
-    return swing;
-}
-
-/* Besides the history, a static prior from the roads and the tops. A placement that leaves a road
- * to finish, or takes a square where the other side would leave one, is far more likely to cut
- * than the rest, and a spread is worth the tops it wins: E50. Each alone was too small to measure,
- * and together they passed. */
+/* Besides the history, a prior. From depth 2 it is the fitted one of policy.c, at 1024 a nat,
+ * which beat E50's by 42 and by 20 more once depth 1 was left to E50's: E51. A node a ply from the
+ * leaves has too little below its moves to pay for scoring them all. There a placement that leaves
+ * a road to finish, or takes a square where the other side would leave one, is far more likely to
+ * cut than the rest, and a spread is worth the tops it wins: E50. */
 static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Move tt_move, int ply,
-                        u64 threats, const u64 ends[4], const u64 their_ends[4]) {
+                        int depth, u64 threats, const u64 ends[4], const u64 their_ends[4]) {
     const Board *b        = &w->board;
     const int us          = board_stm(b);
     const Move killer_a   = w->killers[ply][0];
@@ -318,8 +290,14 @@ static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Mo
     const u64 near_mine   = neighbours(board_road_stones(b, us));
     const i32 *replies    = w->replies[us][ply ? w->played[ply - 1] & 0xFF : 0];
     const u64 empty       = board_empty(b);
-    const u64 near_ours   = b->ply >= 2 ? road_near(ends, empty) : 0;
-    const u64 near_theirs = b->ply >= 2 ? road_near(their_ends, empty) : 0;
+    const u64 near_ours   = b->ply >= 2 ? board_road_near(ends, empty) : 0;
+    const u64 near_theirs = b->ply >= 2 ? board_road_near(their_ends, empty) : 0;
+
+    PolicyContext ctx;
+    const bool prior = b->ply >= 2 && depth >= 2;
+    if (prior) {
+        policy_context(b, ends, their_ends, &ctx);
+    }
 
     for (int i = 0; i < count; i++) {
         const Move m = moves[i];
@@ -330,6 +308,13 @@ static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Mo
             score += 1 << 24;
         } else if (m == killer_b) {
             score += 1 << 23;
+        }
+        if (prior) {
+            if (move_is_place(m) && ((threats >> move_square(m)) & 1)) {
+                score += 1 << 26;
+            }
+            scores[i] = score + 4 * policy_logit(b, &ctx, m);
+            continue;
         }
         if (move_is_place(m)) {
             const int sq         = move_square(m);
@@ -349,7 +334,7 @@ static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Mo
                 score += 4096;
             }
         } else {
-            score += 256 * spread_swing(b, m, us);
+            score += 256 * movegen_spread_swing(b, m, us);
         }
         scores[i] = score;
     }
@@ -536,7 +521,7 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, bool cut_n
     for (int i = 0;; i++) {
         if (i == first_count) {
             count = movegen_all(b, moves);
-            score_moves(w, moves, scores, count, tt_move, ply, threats, ends, their_ends);
+            score_moves(w, moves, scores, count, tt_move, ply, depth, threats, ends, their_ends);
             for (int j = 0; j < first_count; j++) {
                 pick_next(moves, scores, j, count);
             }

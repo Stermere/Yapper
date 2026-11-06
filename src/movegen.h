@@ -20,6 +20,10 @@ int movegen_count(const Board *b);
  * is played. */
 bool movegen_road_spread(const Board *b, int color, const u64 ends[4]);
 
+/* Tops held by `color` less those held by the other side, after the spread `m` against before
+ * it, read off the stack's bits. */
+int movegen_spread_swing(const Board *b, Move m, int color);
+
 /* What a move has to touch to stop the roads `color` could finish by placing on `threats`: for
  * each of those squares, the square itself or a stone of a group it would join. A move that
  * misses one leaves that road to be placed, and with two such squares no placement can stop

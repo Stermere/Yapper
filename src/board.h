@@ -154,6 +154,11 @@ static inline u64 board_road_gaps(const u64 ends[4]) {
     return (ends[0] & ends[1]) | (ends[2] & ends[3]);
 }
 
+/* Empty squares where a flat or capstone leaves a road to finish next move, from that side's
+ * ends: touching a group that runs to one edge and beside an empty square that touches one running
+ * to the other. A square that does it through a group touching neither edge is missed. */
+u64 board_road_near(const u64 ends[4], u64 empty);
+
 /* Rebuilds everything derived from the stacks after they are written directly. Parsing a
  * position is the only thing that does. */
 void board_refresh(Board *b);

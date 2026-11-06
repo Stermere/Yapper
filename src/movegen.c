@@ -361,6 +361,25 @@ bool movegen_road_spread(const Board *b, int us, const u64 ends[4]) {
     return false;
 }
 
+int movegen_spread_swing(const Board *b, Move m, int us) {
+    const int sq    = move_square(m);
+    const int step  = DirectionStep[move_direction(m)];
+    const int carry = move_carry(m);
+    const u64 word  = b->stones[sq];
+    int swing       = -1;
+    if (board_short_height(b, sq) > carry) {
+        swing += ((word >> carry) & 1) == (u64)us ? 1 : -1;
+    }
+    int to = sq;
+    for (int hops = move_pattern(m); hops; hops &= hops - 1) {
+        to += step;
+        const int before = (b->owned[us] >> to) & 1 ? 1 : (b->owned[!us] >> to) & 1 ? -1 : 0;
+        const int after  = ((word >> (carry - 1 - __builtin_ctz(hops))) & 1) == (u64)us ? 1 : -1;
+        swing += after - before;
+    }
+    return swing;
+}
+
 void movegen_road_answer(const Board *b, int color, u64 threats, RoadAnswer *a) {
     const u64 area = board_road_stones(b, color);
     a->threats     = threats;

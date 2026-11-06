@@ -562,6 +562,12 @@ void board_road_ends(const Board *b, int color, u64 ends[4]) {
     ends[3]         = neighbours(flood(b->rank_last, area)) | b->rank_last;
 }
 
+u64 board_road_near(const u64 ends[4], u64 empty) {
+    return ((ends[0] & neighbours(ends[1] & empty)) | (ends[1] & neighbours(ends[0] & empty)) |
+            (ends[2] & neighbours(ends[3] & empty)) | (ends[3] & neighbours(ends[2] & empty))) &
+           empty;
+}
+
 u64 board_road_placements(const Board *b, int color) {
     u64 ends[4];
     board_road_ends(b, color, ends);

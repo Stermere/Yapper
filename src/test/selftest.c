@@ -13,6 +13,7 @@
 #include "../movegen.h"
 #include "../nn.h"
 #include "../notation.h"
+#include "../policy.h"
 #include "../search.h"
 
 static int Failures;
@@ -248,6 +249,42 @@ static void check_eval(const Board *b) {
 }
 
 /* Mostly spreads once there are any, or the stacks that make the rules hard never form. */
+static int compare_ints(const void *a, const void *b) {
+    const int x = *(const int *)a, y = *(const int *)b;
+    return (x > y) - (x < y);
+}
+
+/* The prior of every move of the position, sorted, which a turned or recoloured board must give
+ * back unchanged without anything having to say which move became which. */
+static int sorted_priors(const Board *b, int *out) {
+    static Move list[MAX_MOVES];
+    const int count = movegen_all(b, list);
+    u64 ends[4], their_ends[4];
+    board_road_ends(b, board_stm(b), ends);
+    board_road_ends(b, !board_stm(b), their_ends);
+    PolicyContext ctx;
+    policy_context(b, ends, their_ends, &ctx);
+    for (int i = 0; i < count; i++) {
+        out[i] = policy_logit(b, &ctx, list[i]);
+    }
+    qsort(out, (size_t)count, sizeof(int), compare_ints);
+    return count;
+}
+
+static void check_policy(const Board *b) {
+    static int base[MAX_MOVES], other[MAX_MOVES];
+    char tps[TPS_BUFFER];
+    show(b, tps, sizeof(tps));
+    const int count = sorted_priors(b, base);
+    Board turned;
+    for (int transform = 1; transform < 8 + (b->halfkomi == 0); transform++) {
+        board_transformed(b, &turned, transform & 7, transform == 8);
+        const int n = sorted_priors(&turned, other);
+        CHECK(n == count && memcmp(base, other, sizeof(int) * (size_t)count) == 0,
+              "transform %d changed the move priors: %s", transform, tps);
+    }
+}
+
 static Move pick_move(const Move *list, int count) {
     if (rng() % 4) {
         int spreads = 0;
@@ -278,6 +315,7 @@ static void random_games(int size, int games, int halfkomi) {
             check_moves(&board);
             if (ply >= 2) {
                 check_eval(&board);
+                check_policy(&board);
             }
             const int count = movegen_all(&board, list);
             board_make(&board, pick_move(list, count), &undo);
@@ -575,10 +613,17 @@ static void towers(void) {
 int selftest_run(void) {
     rules();
     towers();
+    /* Random weights, so that a prior that tells a turned board from the original shows it. */
+    static i16 priors[1024];
+    for (int i = 0; i < policy_feature_count() && i < 1024; i++) {
+        priors[i] = (i16)(rng() % 2001) - 1000;
+    }
+    policy_install(priors);
     for (int size = MIN_SIZE; size <= MAX_SIZE; size++) {
         random_games(size, size <= 6 ? 400 : 200, 0);
     }
     random_games(6, 200, 4);
+    policy_install(NULL);
     for (int size = MIN_SIZE; size <= MAX_SIZE; size++) {
         network_games(size, 60, 0);
     }

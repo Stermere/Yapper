@@ -1914,6 +1914,86 @@ standard errors, so a lead and not a finding, but the way E36's more selective s
 The other variants are kept behind their switches in `external/build/tak/search-variants-e50.diff`,
 with the prover's `tinue.c` and `tinue.h` beside it. `make check` passes.
 
+## E51: a move prior fitted on the games' own moves
+
+**Where the ordering stood.** An instrumented E50, on the 150 positions of E50 at depth 11. The
+cutting move's place among the moves tried, at nodes off the PV that cut:
+
+| Depth left | Cuts | 1st | 2nd | 3-4 | 5-8 | 9-16 | 17+ |
+|---|---|---|---|---|---|---|---|
+| 1 | 2433038 | 81.5% | 8.7% | 7.7% | 1.6% | 0.3% | 0.2% |
+| 2 | 950960 | 77.1% | 10.3% | 7.3% | 3.8% | 1.3% | 0.2% |
+| 3-4 | 900990 | 82.7% | 8.6% | 5.1% | 2.0% | 1.1% | 0.6% |
+| 5+ | 229329 | 86.2% | 6.7% | 4.1% | 1.5% | 0.7% | 0.9% |
+
+At one in 16 of the nodes where move-count pruning stopped, the moves it would have left were
+searched anyway: in 11.0% of 113,679, one of them cut. Of those 12,478 moves, 8507 were spreads,
+7477 of which won tops, and 3971 placements, 6 of them near squares. 44% sat 17 or more moves past
+the limit.
+
+**The prior.** `policy.c` scores a move by a weight for each feature it has, all read the same
+under the board's symmetries and from either side: for a placement, its stone by the game's phase,
+its ring, a corner, how many of each kind of neighbour it has, whether it is on either side's near
+squares, the other side's road squares or either side's ends, and how the flat race stands near
+the end; for a spread, its carry, hops, whether it lifts the whole stack, the tops it wins by
+phase, the stone on top, what it leaves behind, the tallest of the other side's stacks it covers,
+how many near squares and road squares it lands on, a crush, the race and the ring it ends on. 262
+weights. `yapper policyfit` fits them as a softmax over each scored ply's legal moves, aimed at the
+move the search played, by Adagrad, on half of the 6x6 games of gens 10 and 11 and one game in 16
+held out. 9.0M positions, 3 epochs, 5.5 minutes on one thread. The engine's own `policy_logit()` on
+the rounded weights scores the held-out games as the fit does:
+
+| Held out, 1.12M positions | Top 1 | Top 3 | Top 8 | Mean rank | Loss |
+|---|---|---|---|---|---|
+| The fitted prior | 14.4% | 32.6% | 58.7% | 10.42 | 3.2507, uniform 4.5324 |
+| E50's hand-set prior | 8.7% | 21.7% | 43.7% | 15.79 | |
+
+The loss moved 0.003 after the first epoch: a weight per feature is all this can learn from any
+amount of games. Selftest holds every move's prior unchanged under the eight symmetries and a
+colour swap, on random weights; a ring read off the file alone failed 3.6M of those checks.
+
+**In the ordering**, from depth 1 or 2, the prior times a weight in place of E50's hand-set terms,
+the bonus for a road square to answer kept. On the 150 positions at depth 11, every weight
+searched more nodes and took longer than E50: 5% to 17% and 26% to 43%. The matches say otherwise,
+at 2+0.02, [0, 10]:
+
+| Change | Bench | Result |
+|---|---|---|
+| The prior at 1024 a nat from depth 1, against E50 | 1224480 | **PASSED**, 608 games, +262 -188 =158, **+42.5 +/- 22.0**, pairs [19, 53, 115, 69, 48] |
+| 2048 a nat, against 1024 | 1319817 | Stopped at 834 games as neutral, +298 -304 =232, **-2.5 +/- 19.1** |
+| 512 a nat, against 1024 | 1316764 | **FAILED**, 582 games, +180 -244 =158, **-38.4 +/- 23.4** |
+| From depth 2, with E50's ordering at depth 1, against 1024 from depth 1 | 1614296 | **PASSED**, 1612 games, +613 -520 =479, **+20.1 +/- 14.0**, pairs [77, 163, 264, 194, 108] |
+
+A tree that takes longer to reach a depth was the stronger one: what the prior changes is which
+moves the pruning and the reductions keep. At depth 1, where four interior nodes in five are, a
+prior for every move costs more than it gives, and E50's terms there are the better trade.
+
+**In the pruning**, on the prior from depth 2, against it:
+
+| Change | Bench | Result |
+|---|---|---|
+| Spare: where move-count pruning stops, the moves left within half a nat of the node's best prior are still searched | 1514873 | INCONCLUSIVE at the cap, 2000 games, +711 -690 =599, **+3.6 +/- 12.4** |
+| Floor: at depth 2 off the PV, after one move, a move six nats below the node's best prior is skipped | 1617786 | INCONCLUSIVE at the cap, 2000 games, +725 -713 =562, **+2.1 +/- 12.4** |
+
+Neither is kept. With the prior in the order, the moves the pruning leaves are already the ones it
+rates least, and asking it again when the pruning stops adds nothing measurable.
+
+**As staged**, the prior from depth 2 at 1024 a nat, bench 1614296 from `make` and `make release`:
+
+| Match | Result |
+|---|---|
+| syntaks at 1/4 of 5+0.05, 600 games, nothing else running | +234 -296 =70, **-36 [-62, -9]** |
+| E50 again, straight after, the same | +212 -302 =86, -52 [-79, -25], where E50's own run read -33 |
+| Topaz at 5+0.05, 200 games, the same | +122 -56 =22, **+119 [+68, +168]** |
+| E50 again, the same | +92 -59 =49, +57 [+13, +101], where E50's own run read +79 |
+
+16 and 62 ahead of E50 run beside it, about the 60 that the two passes add up to in self-play.
+Against syntaks it lost 75 games by road to E50's 82, 71 of them by spread to 79, and won 152 on
+flats to 130.
+
+The prior was fitted on 6x6 alone and plays every size; no other size has been played with it. The
+variants are kept in `external/build/pol/search-variants-e51.diff`.
+
 ## Mistakes worth not repeating
 
 - **An idea that times slower may be the compiler's fault.** E32 dropped a single pass over the
