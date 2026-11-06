@@ -185,15 +185,8 @@ static int node_eval(Worker *w, int ply, u64 threats) {
     return evaluate_frame(b, threats, frame);
 }
 
-/* What the side to move can do about a road the other side has next move. A placement
- * can only help on one of the squares that finishes the road, so the rest are skipped;
- * a spread can help from anywhere. */
-static inline bool answers_threat(Move m, u64 threats) {
-    return !move_is_place(m) || (threats >> move_square(m)) & 1;
-}
-
 /* With the last stones going in, the flat count can end the game before the road comes, and
- * the reasoning in answers_threat() no longer holds. */
+ * the reasoning in movegen_may_answer() no longer holds. */
 static inline bool last_stones(const Board *b, int us) {
     return (b->flats[us] + b->capstones[us] <= 1) || (b->flats[!us] + b->capstones[!us] <= 1) ||
            (board_empty(b) & (board_empty(b) - 1)) == 0;
@@ -241,11 +234,13 @@ static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *move
 
     const int count = movegen_all(b, moves);
     int best        = -SCORE_WIN + ply + 2; /* the road lands unless a reply stops it */
+    RoadAnswer answer;
+    movegen_road_answer(b, !us, threats, &answer);
     Undo undo;
     board_save(b, &undo);
     for (int i = 0; i < count; i++) {
         const Move m = moves[i];
-        if (!answers_threat(m, threats)) {
+        if (!movegen_may_answer(&answer, m)) {
             continue;
         }
         board_play(b, m, &undo);
@@ -280,14 +275,51 @@ static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *move
     return best;
 }
 
+/* Empty squares where a flat or capstone leaves a road to finish next move: touching a group
+ * that runs to one edge and beside an empty square that touches one running to the other. A
+ * square that does it through a group touching neither edge is missed. */
+static inline u64 road_near(const u64 ends[4], u64 empty) {
+    return ((ends[0] & neighbours(ends[1] & empty)) | (ends[1] & neighbours(ends[0] & empty)) |
+            (ends[2] & neighbours(ends[3] & empty)) | (ends[3] & neighbours(ends[2] & empty))) &
+           empty;
+}
+
+/* Tops held by `us` less those held by the other side, after the spread `m` against before it,
+ * read off the stack's bits as spread_wins() does. */
+static inline int spread_swing(const Board *b, Move m, int us) {
+    const int sq    = move_square(m);
+    const int step  = DirectionStep[move_direction(m)];
+    const int carry = move_carry(m);
+    const u64 word  = b->stones[sq];
+    int swing       = -1;
+    if (board_short_height(b, sq) > carry) {
+        swing += ((word >> carry) & 1) == (u64)us ? 1 : -1;
+    }
+    int to = sq;
+    for (int hops = move_pattern(m); hops; hops &= hops - 1) {
+        to += step;
+        const int before = (b->owned[us] >> to) & 1 ? 1 : (b->owned[!us] >> to) & 1 ? -1 : 0;
+        const int after  = ((word >> (carry - 1 - __builtin_ctz(hops))) & 1) == (u64)us ? 1 : -1;
+        swing += after - before;
+    }
+    return swing;
+}
+
+/* Besides the history, a static prior from the roads and the tops. A placement that leaves a road
+ * to finish, or takes a square where the other side would leave one, is far more likely to cut
+ * than the rest, and a spread is worth the tops it wins: E50. Each alone was too small to measure,
+ * and together they passed. */
 static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Move tt_move, int ply,
-                        u64 threats) {
-    const Board *b      = &w->board;
-    const int us        = board_stm(b);
-    const Move killer_a = w->killers[ply][0];
-    const Move killer_b = w->killers[ply][1];
-    const u64 near_mine = neighbours(board_road_stones(b, us));
-    const i32 *replies  = w->replies[us][ply ? w->played[ply - 1] & 0xFF : 0];
+                        u64 threats, const u64 ends[4], const u64 their_ends[4]) {
+    const Board *b        = &w->board;
+    const int us          = board_stm(b);
+    const Move killer_a   = w->killers[ply][0];
+    const Move killer_b   = w->killers[ply][1];
+    const u64 near_mine   = neighbours(board_road_stones(b, us));
+    const i32 *replies    = w->replies[us][ply ? w->played[ply - 1] & 0xFF : 0];
+    const u64 empty       = board_empty(b);
+    const u64 near_ours   = b->ply >= 2 ? road_near(ends, empty) : 0;
+    const u64 near_theirs = b->ply >= 2 ? road_near(their_ends, empty) : 0;
 
     for (int i = 0; i < count; i++) {
         const Move m = moves[i];
@@ -310,6 +342,14 @@ static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Mo
             } else if (type == CAP) {
                 score += 150;
             }
+            if (type != WALL && ((near_ours >> sq) & 1)) {
+                score += 8192;
+            }
+            if ((near_theirs >> sq) & 1) {
+                score += 4096;
+            }
+        } else {
+            score += 256 * spread_swing(b, m, us);
         }
         scores[i] = score;
     }
@@ -386,16 +426,19 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, bool cut_n
         }
     }
 
-    u64 ends[4];
-    if (!root && b->ply >= 2) {
+    /* Both sides' ends, which the ordering reads as well. */
+    u64 ends[4]       = {0};
+    u64 their_ends[4] = {0};
+    u64 threats       = 0;
+    if (b->ply >= 2) {
         board_road_ends(b, us, ends);
-        if (board_road_gaps(ends) & board_empty(b)) {
+        if (!root && (board_road_gaps(ends) & board_empty(b))) {
             return SCORE_WIN - ply - 1;
         }
+        board_road_ends(b, !us, their_ends);
+        threats = board_road_gaps(their_ends) & board_empty(b);
     }
-
-    const u64 threats = b->ply >= 2 ? board_road_placements(b, !us) : 0;
-    const int eval    = hit ? entry.eval : node_eval(w, ply, threats);
+    const int eval = hit ? entry.eval : node_eval(w, ply, threats);
 
     /* A side whose position has got better since its last move is more likely to find something
      * late in its list. */
@@ -477,7 +520,11 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, bool cut_n
     }
 
     /* The other side's road lands unless a reply stops it. */
-    const bool must_answer   = threats && !root && !last_stones(b, us);
+    const bool must_answer = threats && !root && !last_stones(b, us);
+    RoadAnswer answer;
+    if (must_answer) {
+        movegen_road_answer(b, !us, threats, &answer);
+    }
     const int original_alpha = alpha;
     int best_score           = must_answer ? -SCORE_WIN + ply + 2 : -SCORE_WIN;
     Move best_move           = MOVE_NONE;
@@ -489,7 +536,7 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, bool cut_n
     for (int i = 0;; i++) {
         if (i == first_count) {
             count = movegen_all(b, moves);
-            score_moves(w, moves, scores, count, tt_move, ply, threats);
+            score_moves(w, moves, scores, count, tt_move, ply, threats, ends, their_ends);
             for (int j = 0; j < first_count; j++) {
                 pick_next(moves, scores, j, count);
             }
@@ -498,7 +545,7 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, bool cut_n
             break;
         }
         const Move m = i < first_count ? first[i] : pick_next(moves, scores, i, count);
-        if ((must_answer && !answers_threat(m, threats)) || m == excluded) {
+        if ((must_answer && !movegen_may_answer(&answer, m)) || m == excluded) {
             continue;
         }
 

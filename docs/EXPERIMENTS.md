@@ -1814,6 +1814,106 @@ The match is on 6x6, where the fit moved least; 7x7, 8x8 and 5x5 moved more and 
 played. Gen 10, added by a fit from nothing, moved its groups by about 0.001 and played +11.8 at
 the cap, E42. Bench 1209000 from `make` and `make release`, and selftest passes.
 
+## E50: move ordering and search from Tak's own structure
+
+Eleven ideas, each built on something only Tak has: roads and their ends, spread patterns and the
+stack's bits, tops and reserves. Nothing taken from chess. Each was a switch on E49's search, tested
+alone against the build with every switch off, which benched E49's 1209000.
+
+**Measured first**, on 150 positions from E49's games against syntaks at a quarter and against
+Topaz, every 7th ply from the 12th, each searched to depth 11 from an empty table. Time is the
+search alone:
+
+| Change | Nodes | Time |
+|---|---|---|
+| A road to answer plays only what can stop it, below | -20% | -7.4% |
+| A block placed by whether the other side can cover it | -8.5% | -8% |
+| A spread scored by the tops it wins | -2% | +5% |
+| Placements that leave a road to finish | +1% | 0% |
+| Placements where the other side would leave one | +5% | +5% |
+| Walls with no purpose last | -1% | +1% |
+| Placements first when ahead near the end, spreads when behind | +2% | +5% |
+
+**The answer filter** is exact. With the other side able to place a road on squares T, a spread
+can only help if, for every square of T, it lands on the square or on a stone of a group the
+square would join; anything else leaves that road to be placed, and the child returns a win on
+the spot. With two squares in T, no placement can help at all. The search already had no road of
+its own by then, and `last_stones()` keeps out the flat count, so this is the same tree less
+nodes that lose at once. Selftest plays every move it turns away and requires the road to be
+there after it. A copy that turned away every spread failed 47,518 of those checks.
+
+At 2+0.02 on 6x6 with 2 komi, 7 games at once, against the switches off:
+
+| Change | Bench | Result |
+|---|---|---|
+| The answer filter, a non-regression test at [-20, 5] | 1053668 | **PASSED**, 356 games, +134 -115 =107, **+18.6 +/- 28.6**, pairs [18, 29, 66, 46, 19] |
+| Block type: a wall or capstone first on a square the other side can reach, a flat first otherwise | 1518872 | INCONCLUSIVE at the cap, 2000 games, +707 -704 =589, **+0.5 +/- 12.0** |
+| Near: +8192 for a flat or capstone that leaves a road to finish, the mask from the ends a node already has | 1370690 | INCONCLUSIVE at the cap, 2000 games, +738 -710 =552, **+4.9 +/- 12.3** |
+| Swing: 256 a top for a spread, ours less theirs, before against after | 1776565 | INCONCLUSIVE at the cap, 2000 games, +733 -701 =566, **+5.6 +/- 12.5** |
+| Block: +4096 for any placement where the other side's mask is | 1283760 | INCONCLUSIVE at the cap, 2000 games, +717 -691 =592, **+4.5 +/- 12.4** |
+| Walls: -4096 for a wall beside nothing of theirs and off their mask | 1471502 | INCONCLUSIVE at the cap, 2000 games, +692 -718 =590, **-4.5 +/- 12.5** |
+| End: +4096 to flat placements when ahead, to spreads when behind, with 6 stones or squares left | 1305733 | INCONCLUSIVE at the cap, 2000 games, +730 -724 =546, **+1.0 +/- 12.3** |
+| Near, block and swing together | 1879457 | **PASSED**, 1632 games, +627 -535 =470, **+19.6 +/- 13.8**, pairs [83, 139, 310, 171, 113] |
+
+E21 found that past the 8th move, moves that make a threat are 3.7% of the moves and a third of
+the cutoffs. Sparing them from pruning and reductions lost, E21 and E36. Sorting them earlier was
+untried, and measures about +5. History already learns most of what one static prior says, and
+the three together say enough more to pass.
+
+**Three that lost**, against a rebuild of the switches off from the same tree:
+
+| Change | Result |
+|---|---|
+| Tinue: a prover for forced roads, below. A road the side to move can force is played at once, and the move each depth prefers is set aside if it hands the other side one | **FAILED**, 1550 games, +538 -580 =432, **-9.4 +/- 13.6** |
+| Silhouettes: at depth 2 or less off the PV, a spread that leaves the same tops as one already failed low is skipped | **FAILED**, 650 games, +201 -257 =192, **-30.0 +/- 21.1** |
+| A leaf whose stand pat would count asks whether the other side has a road by spread, and if so plays only walls and capstones on its lines and spreads that touch them or its road stones | **FAILED**, 522 games, +154 -226 =142, **-48.2 +/- 25.8** |
+
+The prover's attacker plays only moves that leave a road to finish, and its defender only the
+answer filter's moves, so its trees are narrow, and anything it leaves out can only make a proof
+fail. Selftest checked every proof it found on random games of 3x3 to 6x6 by trying every move
+for both sides, and a prover whose defender never spread failed 6,056 of those. On the 150
+positions it found no forced road the search had missed, and set aside root moves that handed one
+over at plies 68, 75 and 82. Asking again at each depth cost 48% of the search's time, because a
+question cut short by its budget remembers nothing; asking each move once cost 3%. The few roads
+it finds do not pay for asking at every move.
+
+Spreads that leave the same tops, by line, hops, whose stone ends on each and on the source, were
+8.8% of the spreads searched at depth 2 or less off the PV and 11.7% deeper, and such a repeat beat
+alpha 0.12% and 0.05% of the time. Skipping them at depth 2 or less took 4.8% off the time, and
+lost 30: what a spread buries matters, and a skipped move does not count towards move-count
+pruning, which lets later moves in.
+
+The leaf search is E41's -105.5 with the reply set narrowed. Only a wall or capstone on its line
+stops a spread among the placements, since it lands on a flat, and only a spread that touches the
+line or the road stones can change either. It still cost 19% of the time at depth 11, and lost.
+That is the third leaf that looks for the other side's spreads and loses.
+
+Two more went no further than measuring. Whether the side to move has a road by a spread, kept in
+the top bit of a table entry's depth, left bench unchanged and moved the time by -2.3% and +0.3% in
+two runs: the check after the prunes is no longer a large part of a node. Asking the prover of
+every root move, not only the preferred one, was estimated at about 6 ms a move at 2+0.02, a tenth
+of the clock, and not built.
+
+**The answer filter and the three priors together**, as staged, bench 1621886 from `make` and
+`make release`:
+
+| Match | Result |
+|---|---|
+| Against the switches off, 2+0.02, [0, 10] | **PASSED**, 940 games, +373 -294 =273, **+29.3 +/- 17.6**, pairs [36, 88, 169, 115, 62] |
+| syntaks at 1/4 of 5+0.05, 600 games, nothing else running | +238 -295 =67, **-33 [-60, -6]** |
+| E49 again, straight after, the same | +232 -302 =66, -40 [-67, -13], where E49's own run read -17 |
+| Topaz at 5+0.05, 200 games, the same | +100 -55 =45, **+79 [+34, +123]** |
+| E49 again, the same | +97 -55 =48, +74 [+29, +117], where E49's own run read +103 |
+
+Against E49 run beside it, E50 is 7 and 5 ahead, inside either interval, and E49 itself moved by
+23 and 29 since its own run: a gauntlet only compares with one run under the same conditions.
+Against syntaks, E50 lost 209 games on flats to E49's 225 and won 152 there to 143, and was above
++1 late in 40 of its losses to 52. It lost 86 by road to 76, 82 of them by spread to 66: about 1.3
+standard errors, so a lead and not a finding, but the way E36's more selective search went too.
+
+The other variants are kept behind their switches in `external/build/tak/search-variants-e50.diff`,
+with the prover's `tinue.c` and `tinue.h` beside it. `make check` passes.
+
 ## Mistakes worth not repeating
 
 - **An idea that times slower may be the compiler's fault.** E32 dropped a single pass over the

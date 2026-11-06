@@ -98,6 +98,38 @@ static void check_tps_round_trip(const Board *b) {
           "TPS changed the reserves: %s", tps);
 }
 
+/* Every move the answer filter turns away has to leave the other side a road to place, or lose
+ * on the spot. Only where the search asks it: no road for the mover, and stones and squares to
+ * spare. */
+static void check_answers(Board *b, const Move *list, int count, const char *tps) {
+    const int us      = board_stm(b);
+    const u64 threats = board_road_placements(b, !us);
+    const u64 empty   = board_empty(b);
+    const bool spare  = b->flats[us] + b->capstones[us] > 1 &&
+                       b->flats[!us] + b->capstones[!us] > 1 && (empty & (empty - 1)) != 0;
+    u64 ends[4];
+    board_road_ends(b, us, ends);
+    if (!threats || !spare || (board_road_gaps(ends) & empty) || movegen_road_spread(b, us, ends)) {
+        return;
+    }
+    RoadAnswer answer;
+    movegen_road_answer(b, !us, threats, &answer);
+    const Outcome loss = us == WHITE ? BLACK_ROAD : WHITE_ROAD;
+    for (int i = 0; i < count; i++) {
+        if (movegen_may_answer(&answer, list[i])) {
+            continue;
+        }
+        Undo undo;
+        board_make(b, list[i], &undo);
+        const Outcome outcome = board_outcome(b);
+        const bool lost =
+            outcome == loss || (outcome == ONGOING && board_road_placements(b, !us) != 0);
+        board_unmake(b, list[i], &undo);
+        char text[MOVE_BUFFER];
+        CHECK(lost, "%s turned away but stops the road: %s", move_format(list[i], text), tps);
+    }
+}
+
 /* Every move of the position, against every way of looking at it. */
 static void check_moves(Board *b) {
     static u8 seen[65536];
@@ -153,6 +185,7 @@ static void check_moves(Board *b) {
         CHECK(movegen_road_spread(b, board_stm(b), ends) == spread_road,
               "road by a spread, expected %d: %s", spread_road, tps);
         CHECK(memcmp(b, &before, sizeof(Board)) == 0, "looking for a road spread: %s", tps);
+        check_answers(b, list, count, tps);
     }
 
     /* Random words catch legality claims the generator would never produce. */

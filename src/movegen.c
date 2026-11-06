@@ -361,6 +361,31 @@ bool movegen_road_spread(const Board *b, int us, const u64 ends[4]) {
     return false;
 }
 
+void movegen_road_answer(const Board *b, int color, u64 threats, RoadAnswer *a) {
+    const u64 area = board_road_stones(b, color);
+    a->threats     = threats;
+    a->count       = 0;
+    /* Past the first few squares, fewer needs only lets more moves through. */
+    while (threats && a->count < ANSWER_NEEDS) {
+        const u64 square     = 1ULL << pop_lsb(&threats);
+        a->needs[a->count++] = square | flood(neighbours(square) & area, area);
+    }
+}
+
+bool movegen_may_answer(const RoadAnswer *a, Move m) {
+    if (move_is_place(m)) {
+        return (a->threats & (a->threats - 1)) == 0 && ((a->threats >> move_square(m)) & 1);
+    }
+    const u64 line =
+        line_from(move_square(m), move_direction(m), __builtin_popcount(move_pattern(m)));
+    for (int i = 0; i < a->count; i++) {
+        if (!(line & a->needs[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool movegen_is_legal(const Board *b, Move m) {
     const int sq = move_square(m);
     const int us = board_stm(b);

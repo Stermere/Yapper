@@ -20,6 +20,24 @@ int movegen_count(const Board *b);
  * is played. */
 bool movegen_road_spread(const Board *b, int color, const u64 ends[4]);
 
+/* What a move has to touch to stop the roads `color` could finish by placing on `threats`: for
+ * each of those squares, the square itself or a stone of a group it would join. A move that
+ * misses one leaves that road to be placed, and with two such squares no placement can stop
+ * both. */
+#define ANSWER_NEEDS 8
+typedef struct RoadAnswer {
+    u64 threats;
+    u64 needs[ANSWER_NEEDS];
+    int count;
+} RoadAnswer;
+
+void movegen_road_answer(const Board *b, int color, u64 threats, RoadAnswer *a);
+
+/* False for a move that leaves one of those roads to be placed. It knows nothing of the mover's
+ * own wins, so the side to move must have no road of its own to finish, and stones and squares
+ * enough that a placement cannot end the game on flats. */
+bool movegen_may_answer(const RoadAnswer *a, Move m);
+
 /* Is `m` legal here? For moves that did not come from the generator: a transposition
  * table entry can be stale or collided, and making one unchecked corrupts the board. */
 bool movegen_is_legal(const Board *b, Move m);

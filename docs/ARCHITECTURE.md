@@ -103,7 +103,15 @@ stronger at a node expected to cut, and move-count pruning comes sooner when the
 evaluation has fallen since its last move. The table move and the killers are tried
 before a move list exists, because most nodes cut on one of them. The rest go by history: of the
 whole move, so each spread a stack can make keeps its own, and of its square and kind by what
-answered the move before. A node answering a road skips the placements that cannot stop it.
+answered the move before. On top of that goes what the roads and tops say: a flat or capstone that
+leaves a road to finish next move, one on a square where the other side would leave one, and a
+spread by the tops it takes less those it gives up, read off the stack's bits. Each alone measured
+about +5, too little to settle, and together they passed: E50.
+
+A node answering a road plays only what can stop it, which `movegen_road_answer()` works out from
+the squares the road would be placed on: a placement on the one such square, a spread that lands on
+each of them or on a stone of a group each would join, and no placement at all when there are two.
+Anything else leaves a road to be placed, which selftest holds for every move it turns away.
 
 The clock is shared out over the moves the game has left, worked out from the shorter reserve, so
 it runs down towards the end of the game rather than being spent early and left over. Moving time
@@ -112,6 +120,8 @@ towards the end passed where moving it towards the opening did not: EXPERIMENTS.
 The tree's shape is still the textbook one. Treating spreads as threats, sparing moves that
 threaten a road from reductions, and the improving flag in reverse futility and reductions were
 tested and dropped, E23 and E36, and reverse futility's margin was measured and left alone, E19.
+A prover for forced roads, pruning spreads that leave the same tops as one that failed, and a leaf
+that answers a road by spread with only the moves that could stop it all lost, E50.
 The aspiration window has not been measured. It runs on one worker thread, and every piece of
 per-search state lives in `Worker`, so Lazy SMP is a matter of having more of them.
 
