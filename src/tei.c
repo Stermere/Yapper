@@ -15,6 +15,7 @@
 #include "perft.h"
 #include "search.h"
 #include "tt.h"
+#include "tune.h"
 
 #define DEFAULT_SIZE 6
 #define MIN_HASH     1
@@ -40,6 +41,14 @@ static void send_identity(void) {
     printf("option name HalfKomi type spin default 0 min %d max %d\n", MIN_HALFKOMI, MAX_HALFKOMI);
     printf("option name Hash type spin default %d min %d max %d\n", TT_DEFAULT_MB, MIN_HASH,
            MAX_HASH);
+#ifdef YAPPER_TUNE
+    for (int i = 0; i < tune_count(); i++) {
+        const char *name;
+        int value, min, max;
+        tune_info(i, &name, &value, &min, &max);
+        printf("option name %s type spin default %d min %d max %d\n", name, value, min, max);
+    }
+#endif
     printf("teiok\n");
 }
 
@@ -115,6 +124,10 @@ static void handle_setoption(char *args) {
         if (number < MIN_HASH || number > MAX_HASH || !tt_resize(number)) {
             printf("info string cannot set Hash to %d\n", number);
         }
+#ifdef YAPPER_TUNE
+    } else if (tune_set(name, length, number)) {
+        /* Set, or clamped to its range: tools/tune.py never sends a value outside it. */
+#endif
     } else {
         printf("info string unknown option %.*s\n", (int)length, name);
     }

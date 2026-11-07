@@ -3,6 +3,7 @@
 #include "eval.h"
 
 #include "bitboard.h"
+#include "tune.h"
 
 /* A game ends when a side runs out of stones or the board fills, whichever is first. */
 static inline int stones_left(const Board *b) {
@@ -31,12 +32,6 @@ void eval_net_inputs(const Board *b, NNInputs *in) {
     in->komi       = komi;
 }
 
-/* No position a fit reads has a road hanging, so what one is worth is set by hand. The side to
- * move has already had its chance to win on the spot, so a threat by the other side is one
- * this side still has to answer. */
-#define THREAT_ONE  (-60)
-#define THREAT_MANY (-220)
-
 /* Far inside the win bound, which a stand pat must never reach. */
 #define NET_SCORE_LIMIT 12000
 
@@ -44,8 +39,11 @@ int evaluate_frame(const Board *b, u64 threats, const NNFrame *frame) {
     NNInputs in;
     eval_net_inputs(b, &in);
     i64 score = nn_score(b->size, frame, &in) >> 6;
+    /* No position a fit reads has a road hanging, so what one is worth is set by hand. The side to
+     * move has already had its chance to win on the spot, so a threat by the other side is one
+     * this side still has to answer. */
     if (threats) {
-        score += (threats & (threats - 1)) ? THREAT_MANY : THREAT_ONE;
+        score -= (threats & (threats - 1)) ? ThreatMany : ThreatOne;
     }
     return (int)(score > NET_SCORE_LIMIT    ? NET_SCORE_LIMIT
                  : score < -NET_SCORE_LIMIT ? -NET_SCORE_LIMIT

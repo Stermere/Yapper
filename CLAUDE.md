@@ -32,6 +32,7 @@ make speed          # race move generation against external/engines
 make datacheck      # training data: readable without the engine, right by takref, repeatable
 make debug          # assertions, plus sanitizers on POSIX
 make release        # the engine alone: no datagen, fitting, GPU or selftest
+make TUNE=on        # every tunable in src/tune.h as a TEI option, for tools/tune.py
 make format         # apply .clang-format
 ```
 
@@ -103,6 +104,11 @@ than a bug: it makes every later result untrustworthy.
 15. **`make release` must bench the same as `make`.** It leaves the tools out, and the matching
     node count is what ties the binary that ships to the one the gates passed on.
 
+16. **Every number the search plays by is a line in `src/tune.h`, and `make TUNE=on` must bench
+    the same as `make`.** A constant left in the code is one no tuner can reach, and a tune build
+    that plays differently at its defaults tunes an engine that does not ship. Units are chosen so
+    a default gives exactly the integer arithmetic it stands for.
+
 ## Testing discipline
 
 Read [docs/TESTING.md](docs/TESTING.md). Record every result in
@@ -117,6 +123,8 @@ Read [docs/TESTING.md](docs/TESTING.md). Record every result in
   obviously good. Roughly half of obviously better patches in chess measure neutral or
   worse.
 - **One change per test.** Two at once tells you nothing about either.
+- **SPSA proposes, the SPRT decides.** `tools/tune.py` prints a candidate; it changes a default
+  in `src/tune.h` only after passing an SPRT against the values it started from.
 
 Do not weaken a failing test to make it pass, and never reseal a perft suite to make it
 pass.
@@ -145,12 +153,14 @@ pass.
 | `src/` | the engine, flat |
 | `src/net.h` | the network every size shares, written by `yapper nntrain`; a size it was not fitted on only counts flats |
 | `src/policy_net.h` | the move prior's network, written by `yapper policyfit`; a table of another shape is ignored and the prior is flat |
+| `src/tune.h` | every tunable, with its default and range: constants, or TEI options under `make TUNE=on` |
 | `src/test/` | selftest, in the binary on purpose |
 | `tests/perft/` | `published.perft` from other engines, `sealed.perft` from takref |
 | `tests/books/` | opening books, built by `tools/mkbook.py` |
 | `tools/takref.py` | the rules, written to be obviously right rather than fast |
 | `tools/perftdiff.py` | fuzz the engine against takref, seal suites |
 | `tools/match.py` | TEI match runner, referee and pentanomial SPRT |
+| `tools/tune.py` | SPSA over `src/tune.h` by self-play of a `TUNE=on` build; prints a candidate for an SPRT |
 | `tools/progress.py` | every match live, with ETAs: match.py's status files, `external/games/queue.txt`, fresh logs |
 | `tools/ptnlink.py` | a ptn.ninja link for a game |
 | `tools/play.py` | play the engine in a terminal |

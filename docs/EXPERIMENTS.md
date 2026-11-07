@@ -2179,6 +2179,35 @@ quarter and +119 -41 =39, +143 [+94, +190] against Topaz over 199 games, with E5
 at +236 -290 =74, -31 [-58, -4] and +120 -47 =33, +132 [+83, +180]: E52 4 and 11 ahead. The
 variants are in external/build/rv, the work notes in external/build/pa/notes.md.
 
+## E54: every tunable in one list, and a tuner
+
+No change to play. The 45 numbers the search plays by, its margins and depths, reductions,
+singular extension, aspiration, history, the prior's weight and depth, the hand-set order a ply
+from the leaves, the evaluation's price for a road threat and the clock, are each a line in
+`src/tune.h`: `X(name, default, min, max)`. A normal build makes them enum constants; `make
+TUNE=on` makes them variables and TEI spin options. Where a value wanted finer steps for a tuner,
+its units were chosen to give the old integer arithmetic exactly: reductions as hundredths
+divided out in floating point, which are the same doubles as 0.5 and 1.6, the singular margin in
+sixteenths a ply, and move-count pruning in quarters. `tools/tune.py` is SPSA on fishtest's
+schedule over match.py's referee, one pair an iteration, with workers that do not wait for each
+other. Nothing has been tuned.
+
+| Check | Result |
+|---|---|
+| bench, `make`, `make release`, `make TUNE=on` | 1060614 each, as before |
+| `setoption name LmrDivisor value 200` in a fresh tune build | 1250165, E52's bench, before E53's `/ 1.6` |
+| Speed, five benches each, alternated | old 1.900 M nps, `make` 1.902 M, `make TUNE=on` 1.846 M |
+| 60 pairs at 2000 nodes, four at once | played, state and history written |
+| 400 pairs at 10,000 nodes, killed at 21 and resumed | 400 pairs, one history row each |
+| 16 pairs at 1+0.01, the clock's tunables | no time losses |
+
+**Found on the way.** A bench in a process that has already searched reads 974794, not 1060614:
+only the first position differs, and only on the first search a process makes. `policy_context()`
+reads the network's bias before `rows_now()` installs the compiled network, so the first prior a
+process computes has no bias. Every bench since E52 counts it, and so does the first search of
+every engine in a match. Reading the bias after the install gives 974794 on every pass. It moves
+bench, so it is left for a change of its own.
+
 ## Mistakes worth not repeating
 
 - **A racetrack run can hang with both engines idle.** E52's Topaz gauntlet stopped on its last

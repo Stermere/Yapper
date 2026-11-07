@@ -6,7 +6,8 @@
 #    make ARCH=generic    no CPU assumptions, runs anywhere the compiler targets
 #    make ARCH=popcnt     x86-64 with POPCNT, which is what CI uses
 #    make release         the engine alone, with no datagen, fitting or selftest
-#    make debug           unoptimised + assertions (+ sanitizers on POSIX)
+#    make TUNE=on         every tunable in src/tune.h as a TEI option, for tools/tune.py
+#    make debug          unoptimised + assertions (+ sanitizers on POSIX)
 #    make bench           build, then run the deterministic node-count benchmark
 #    make perft           build, then run the sealed perft suites
 #    make selftest        build, then run the board and rule invariants
@@ -86,6 +87,15 @@ ifneq ($(findstring release,$(MAKECMDGOALS)),)
     SRC     := $(filter-out $(TOOL_SRC),$(SRC))
     CFLAGS  += -DYAPPER_RELEASE -ffunction-sections -fdata-sections
     LDFLAGS += -Wl,--gc-sections
+endif
+
+# Off, each tunable is a constant the compiler folds, so the option costs a normal build nothing.
+# On, it must bench the same at its defaults, or a tuning run tunes another engine.
+TUNE ?= off
+ifeq ($(TUNE),on)
+    CFLAGS += -DYAPPER_TUNE
+else ifneq ($(TUNE),off)
+    $(error Unknown TUNE '$(TUNE)': use on or off)
 endif
 
 # A stamp of the flags, so switching ARCH rebuilds instead of handing back the

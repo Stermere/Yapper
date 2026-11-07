@@ -34,6 +34,9 @@ typedef struct SearchReport {
 
 void search_init(void);
 
+/* Rebuilds what search_init() works out from the tunables, after one has changed. */
+void search_retune(void);
+
 /* Forgets everything carried between searches: table, history, killers. Results must not
  * depend on what was searched before. */
 void search_clear(void);

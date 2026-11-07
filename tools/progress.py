@@ -8,7 +8,8 @@ progress.py - a live view of every match: where each stands, and when the queue 
 What it reads, all under external/games/:
 
 - live/*.json, which tools/match.py writes after every pair, however it was started. Whether its
-  process still runs tells a match that is playing from one that was killed.
+  process still runs tells a match that is playing from one that was killed. tools/tune.py writes
+  one too, with the parameters that have moved furthest.
 - queue.txt, if there is one: the runs planned, in the order they play, so it can say when each
   should start and end. One run a line, then a label:
 
@@ -122,6 +123,12 @@ def read_log(path: Path) -> dict | None:
     return info
 
 
+def moved(spsa: list, count: int = 6) -> str:
+    """A tools/tune.py run's parameters that have travelled furthest for their range."""
+    far = sorted(spsa, key=lambda p: -abs(p[2] - p[1]) / max(1, p[4] - p[3]))[:count]
+    return "  ".join(f"{name} {start:g}>{now:.1f}" for name, start, now, _, _ in far)
+
+
 def read_status(path: Path) -> dict | None:
     hit = _statuses.get(path)
     try:
@@ -140,6 +147,8 @@ def read_status(path: Path) -> dict | None:
         return hit[1] if hit else None  # caught mid-write: the last good read stands
     if s.get("llr") is not None:
         run.update(llr=s["llr"], lower=s["lower"], upper=s["upper"])
+    if s.get("spsa"):
+        run["moved"] = moved(s["spsa"])
     run["dir"] = folder(Path(run["ptn"]).parent) if run["ptn"] else ""
     _statuses[path] = (key, run)
     return run
@@ -390,6 +399,8 @@ def render_text(model: dict, colour: bool) -> str:
             out.append(f"    {score(run)}" + (f"  pairs {run['pairs']}" if run.get("pairs") else ""))
         if run.get("llr") is not None:
             out.append(f"    LLR {gauge(run['llr'], run['lower'], run['upper'])}  {run['llr']:+.2f}")
+        if run.get("moved"):
+            out.append(f"    moved {run['moved'][:cols - 12]}")
         if run["status"] == "stalled":
             out.append(paint("1;33", f"    no game for {duration(now - run['touched'])}: hung?"))
         elif run.get("eta"):
@@ -497,7 +508,8 @@ function live(r, now) {
     ${r.planned ? '' : '<span class="extra">not queued</span>'}
     <span class="tag ${r.status}">${r.status.toUpperCase()}</span></div>${bar}
     <div class="facts" style="margin-top:${r.cap ? 0 : 8}px">${facts.join('')}</div>
-    <div class="facts num" style="margin-top:4px">${score(r)}${r.pairs ? ' &nbsp; pairs [' + r.pairs.join(', ') + ']' : ''}</div>${llr}</div>`;
+    <div class="facts num" style="margin-top:4px">${score(r)}${r.pairs ? ' &nbsp; pairs [' + r.pairs.join(', ') + ']' : ''}</div>${llr}
+    ${r.moved ? '<div class="facts num" style="margin-top:4px">moved ' + esc(r.moved) + '</div>' : ''}</div>`;
 }
 function render(m) {
   const now = m.now, runs = m.runs;

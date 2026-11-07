@@ -9,6 +9,7 @@
 | **speed** | Are we still ahead of the baselines? | Any change to the hot path |
 | **datacheck** | Is training data right, and repeatable? | Any change to datagen |
 | **SPRT** | Does this actually gain Elo? | Every behavioural change |
+| **SPSA** | Where might the tunables be better? | Before an SPRT, never instead of one |
 
 ## Three independent opinions on the rules
 
@@ -96,7 +97,8 @@ search; a changed one means it is behavioural and needs an SPRT.
 
 `make release` leaves selftest, datagen and the fitting tools out of the binary, so its gates
 cannot run on it. Its bench must equal the full build's, and that is what says it is the engine
-the gates passed on.
+the gates passed on. `make TUNE=on` must bench the same too, at its defaults: otherwise a tuning
+run tunes another engine.
 
 ## speed
 
@@ -156,6 +158,32 @@ external/engines/racetrack.exe --engine path=external/baselines/base.exe --engin
 
 It draws on threefold repetition, as does `tools/match.py`. The USTAK rules have no
 repetition rule, so that is a tournament convention rather than a rule of the game.
+
+## SPSA
+
+```sh
+make TUNE=on EXE=yapper-tune
+python tools/tune.py --list
+python tools/tune.py --name lmr --params LmrBase,LmrDivisor --pairs 20000 --tc 2+0.02 \
+    --book tests/books/6s_4ply.txt
+python tools/tune.py --name lmr --report
+```
+
+Every number the search plays by is in `src/tune.h`, one line each with its default and range.
+A normal build folds them as constants; `make TUNE=on` makes each a TEI spin option, so one
+binary can play any set of values. `tools/tune.py` reads the list from the engine, plays pairs
+between the values either side of where it stands, and moves every parameter at once along the
+result: fishtest's schedule, one pair an iteration, on every core. It saves after every pair to
+`external/tune/<name>.json`, `--resume` carries on, and `tools/progress.py` shows the run.
+
+SPSA does not measure. It walks wherever its noise leads and reports where it ended, so what it
+prints is a candidate. `--report` gives the SPRT that decides it: the tune build against itself,
+with the candidate's values on one side. Pass that, confirm it at another time control, and only
+then change the defaults in `src/tune.h`. Travel goes as `--r-end` times `--pairs`, so a short
+run at the default 0.002 barely moves and looks like a confirmation of the defaults.
+
+A run at `--nodes` never sees the `Time` tunables, and one at a clock tunes for that clock: keep
+them out of a run whose conditions cannot reach them, with `--params` or `--exclude`.
 
 ## Viewing games
 

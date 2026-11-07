@@ -131,7 +131,10 @@ threaten a road from reductions, and the improving flag in reverse futility and 
 tested and dropped, E23 and E36, and reverse futility's margin was measured and left alone, E19.
 A prover for forced roads, pruning spreads that leave the same tops as one that failed, and a leaf
 that answers a road by spread with only the moves that could stop it all lost, E50.
-The aspiration window has not been measured. It runs on one worker thread, and every piece of
+The aspiration window has not been measured. Every number the search plays by, its margins,
+depths, reductions, history, prior weight, hand-set order, the evaluation's price for a road
+threat and the clock, is a line in `src/tune.h`, which `tools/tune.py` can reach in a
+`make TUNE=on` build. The search runs on one worker thread, and every piece of
 per-search state lives in `Worker`, so Lazy SMP is a matter of having more of them.
 
 ## The evaluation

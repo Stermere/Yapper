@@ -10,7 +10,7 @@ read from racetrack's `src/game.rs` and `src/engine.rs`, and PTN Ninja's `src/bo
 |---|---|
 | `tei` | Answers `id name`, `id author`, `option` lines, `teiok` |
 | `isready` | Answered at once, even during a search |
-| `setoption name <n> value <v>` | `HalfKomi`, `Hash` |
+| `setoption name <n> value <v>` | `HalfKomi`, `Hash`, and the tunables in a `TUNE=on` build |
 | `teinewgame <size>` | racetrack's form |
 | `teinewgame size <s> halfkomi <k>` | PTN Ninja's TEI 1 form |
 | `position startpos [moves ...]` | |
@@ -28,6 +28,8 @@ Not TEI, for tools and people: `print`, `moves`, `perft <n>`, `divide <n>`, `ben
   is 2 komi. The USTAK rules have no komi, which is why the default is 0.
   racetrack's `--komi 2` sends `setoption name HalfKomi value 4`.
 - `Hash`: spin, in megabytes, default 64.
+- In a `make TUNE=on` build only, every tunable in `src/tune.h`, as a spin with its name, default
+  and range. A value outside the range is clamped to it.
 
 ## Output
 
