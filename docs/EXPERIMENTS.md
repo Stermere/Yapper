@@ -2208,6 +2208,220 @@ process computes has no bias. Every bench since E52 counts it, and so does the f
 every engine in a match. Reading the bias after the install gives 974794 on every pass. It moves
 bench, so it is left for a change of its own.
 
+## E55: quiet spreads pruned by their own count
+
+The night of 2026-11-06, five ideas from Tak's own structure were built and tested side by side,
+E55 to E60. This is the first: a tree that is wide only where Tak is tactical. E21 found that
+moves past the 32nd were two thirds of the work and that cutting them all gained nothing, and E51
+that the rare late moves which do cut are three in five spreads that win tops, with placements
+most of the rest. So a *quiet spread*, one that wins no tops and lands on no square where a
+placement would leave either side a road to finish, is skipped after `(8 + 2 d^2) / 4` moves at
+depth 10 and below, twice that when improving, while placements and the other spreads go on to
+the usual move-count limit. A skipped move still counts towards the limits, since E50's
+silhouettes showed that skips which do not let later moves in. The *gate* applies it only at
+nodes where neither side is within two placements of a road, where the rare late move that
+matters, a defence against a road, cannot exist. Each knob is a tunable: `QuietDepth`,
+`QuietBase`, `QuietSlope`, `QuietDanger`, `QuietReduce`, `FutilityDepth`, `FutilityMargin`.
+
+Measured first on bench: road-free nodes are 84% of interior nodes, 176,543 of 209,632, so the
+gate is not what limits this. With it, only 15,145 quiet spreads were skipped in 1.07M nodes: at
+depth 1 and 2 the move-count limit already stops before the quiet spreads, which the order puts
+last, and deeper nodes are few.
+
+Against E54 (master, bench 1060614), 2+0.02, [0, 10], 7 games at once:
+
+| Variant | Bench | Result |
+|---|---|---|
+| b: the gate off, quiet spreads pruned everywhere | 1004912 | **FAILED**, 1048 games, +339 -379 =330, **-13.3 +/- 16.9**, pairs [60, 129, 176, 109, 50] |
+| a: with the gate, on a quiet machine | 1074788 | INCONCLUSIVE at the cap, 2000 games, +695 -691 =614, **+0.7 +/- 12.4**, pairs [114, 204, 360, 208, 114] |
+| d: a, and futility to depth 4: a quiet spread or a placement off those squares is skipped when the evaluation plus 150 a ply is still below alpha | 1041602 | **FAILED**, 1880 games, +648 -688 =544, **-7.4 +/- 12.6**, pairs [118, 184, 345, 206, 87] |
+| c: a, and quiet spreads reduced a ply more | 1081948 | **FAILED**, 762 games, +235 -292 =235, **-26.0 +/- 20.0**, pairs [56, 84, 131, 81, 29] |
+
+Pruning the quiet spreads everywhere lost, as did reducing them more and the futility margin;
+the gate keeps the pruning away from the nodes where it could cost a defence, and there it barely
+prunes at all, and is neutral. The quiet spreads are not where the tree's width is: by the order
+they are already last, and E42's move count already stops before them below depth 6. What is
+left is the same lesson as E21 and E36: the spreads the search still reaches are the ones it
+needs.
+
+A first run of `a` read INCONCLUSIVE at the cap, +8.9 +/- 14.0 at 1648 games, and is void: 368 of
+its 2000 games were lost on time, 185 by one side and 183 by the other, because the cutoff logger
+of E59 and the prototype of E58 shared the machine with it. `b` had none. TESTING.md says to run
+nothing beside a match, and the `endings` line of a match's log is where that shows; the rest of
+the night's matches ran one stage at a time with the heavy work between them.
+
+## E56: history by the prior's features
+
+Whole-move history was the largest search gain, +121.7 in E40, and halving it so the prior leads
+gave +26 more, E52: within a game the search learns what the fitted prior cannot know. But a
+16-bit key means a spread earns its reputation on every square separately. Here each of the
+prior's 1314 features has a history entry of its own, by side: on a cutoff from a node's list,
+the cutting move's features earn the bonus and the tried moves' features the malus, with the
+same gravity as history and a limit of 2048 an entry, and a move's order adds the sum over its
+features. `policy_logits_history()` sums the entries over the same shared parts that the prior's
+rows are summed over, so the order costs one more lane; the updates cost `policy_features()` for
+each tried move at those cutoffs. Halved at the start of every search as history is. Bench
+1012552, and about 10% slower on the bench, alternated with master under load.
+
+Against E54, 2+0.02, [0, 10]: **FAILED**, 378 games, +106 -176 =96, **-65.1 +/- 29.5**, pairs
+[39, 43, 68, 27, 12], 4 of them lost on time. Far more than the speed costs. The flaw is in how
+the malus lands: a feature that twenty tried moves share sinks twenty times at a cutoff for the
+once it rises when such a move cuts, so the features that placements share sink furthest and the
+order drifts towards the spreads with rare features. `e56b` shares one malus over the tried
+moves, `-bonus * 2 / (i + 1)` each, bench 1015544: **FAILED** too, 842 games, +268 -327 =247,
+**-24.4 +/- 19.4**, pairs [62, 95, 142, 84, 38]. Better by 40 and still well below zero. A
+move's sum over its features also grows with how many it has, which favours spreads over
+placements, and the 10% of speed is there either way. History by the whole move, with the prior
+for what it has not seen, is the better division of labour; dropped.
+
+## E57: roads and reach as inputs to the evaluation's head
+
+The network is a sum of per-square templates, squared and pooled, so it cannot compute
+connectivity. Four exact quantities now reach the head beside the lead, reserves and komi: each
+side's fewest placements to a road, from the policy's flood, and how many empty squares finish
+one at that distance, up to 8 (`NN_TAK_INPUTS`, `policy_road_summary()`). The head's skip rows
+widen from 3 to 7 (`NN_SKIP_INPUTS`), a `net.h` carries `NET_SKIP_INPUTS`, the trainer reads the
+inputs through `eval_net_inputs()` as the engine does, and selftest holds the evaluation to the
+eight symmetries and the colour swap with random weights on the new rows: 987,124,428 checks, 0
+failures. The flood runs at every evaluated node: bench nodes unchanged with the new rows at
+zero, and the bench 15% slower, 1.55M against 1.31M nps alternated under load.
+
+Fits, each beside a control of the same recipe without the inputs:
+
+| Fit | Control | With the inputs |
+|---|---|---|
+| E49's warm recipe again, 2 epochs at 0.0005 on all games, 6x6 gen 11 held out | 0.415905 | 0.415704 |
+| The same, 6x6 gen 10 | 0.419801 | 0.419597 |
+| The same, 8x8 gen 11 | 0.504538 | 0.504112 |
+| From nothing on 6x6 gens 10-11, 14.7M positions, 5 epochs, held out against the target | 0.494441 | **0.492990** |
+| The same, against results | 0.419360 | **0.416874** |
+| The same, 6x6 gen 10 | 0.421626 | 0.419325 |
+| The same, 6x6 gen 11 | 0.416686 | 0.413983 |
+| Warm at 0.002 for 3 epochs, against results | 0.458833 | 0.458823 |
+| The same, 6x6 gen 11 | 0.415905 at 0.0005 | 0.415956 |
+
+Learned from nothing the inputs are worth about 0.0025 against results, two and a half times a
+seed's spread; a warm fine-tune from zero rows never learns to use them at either rate, and the
+higher rate only disturbs a converged network. By E42's rule 0.0025 is about 25 at equal nodes,
+against about 20 to 25 lost to the flood's cost: a wash unless the flood gets cheaper. So two
+networks were fitted from nothing on all the games with E48's 15-epoch recipe, one with the
+inputs and one without, to be played against each other so that the inputs are measured and not
+the lineage:
+
+| From nothing, all games, 15 epochs, against results | Control | With the inputs |
+|---|---|---|
+| All held out | 0.459165 | 0.459313 |
+| 6x6 gen 11 | 0.416171 | 0.416575 |
+| 6x6 gen 10 | 0.420054 | 0.419991 |
+| 7x7 gen 11 | 0.463586 | 0.462881 |
+| 8x8 gen 11 | 0.507679 | 0.507512 |
+
+Nothing: every difference is inside a seed's spread. Given 254M positions and 15 epochs, the
+filters learn what the inputs say by themselves, and the 14.7M-position fit had only found a
+shortcut. The match was not played, since it could only measure the flood's cost. The idea
+stands only in a form that costs nothing, such as a bucket the search already knows the key of,
+and the e57 build, its fits and the flood are in `external/build/e57`.
+
+## E58: a local feature-map network, as a prototype
+
+Each square gets a hidden vector from a kernel over the 5x5 window around it: an occupied
+neighbour adds the row of its token, as the viewer's own or the other side's, an empty neighbour
+the empty row and a square off the board the off-board row. The squares' clipped squares are
+pooled per channel in each side's view, 64 channels a view, and the engine's head reads the 128
+pools with the lead, reserves and komi, as it reads the pools now. 947,424 parameters.
+`external/build/e58/proto.c` fits it on the CPU with Adam, the trainer's batch, rate schedule
+and lambda, on the same 14.7M positions and the same held-out games as the control, which is the
+engine's own network fitted from nothing by `nntrain` on those files for the same 5 epochs.
+Nothing ties the kernel under the board's symmetries here: this measures capacity.
+
+| Epoch | Control, held out / against results | Feature map |
+|---|---|---|
+| 1 | 0.497270 / 0.427063 | 0.495780 / 0.424536 |
+| 2 | 0.494831 / 0.421339 | 0.493131 / 0.419164 |
+| 3 | 0.494526 / 0.420205 | 0.491777 / 0.416126 |
+| 4 | 0.494449 / 0.419392 | 0.491561 / 0.415850 |
+| 5, the control's weights averaged | 0.494441 / 0.419360 | **0.491422 / 0.415588** |
+
+Locality alone is worth 0.0030 against the target and 0.0038 against results, more than the
+head gave in E48. An engine version must tie the kernel under the eight symmetries, which at
+equal cost leaves far fewer pooled features: `proto_tied.c` fits that, F base filters each seen
+through the eight orientations of the window, 8F units a square, pooled over squares and
+orientations to F pools a view, so turning the board cannot change the score. The same games,
+epochs and recipe, 4 threads beside the gen 12 datagen:
+
+| Epoch | Control | Untied, 64 channels, 128 pools | Tied, F 16, 128 units a square, 32 pools | Tied, F 8, 64 units a square, 16 pools |
+|---|---|---|---|---|
+| 1 | 0.497270 / 0.427063 | 0.495780 / 0.424536 | 0.497847 / 0.429348 | 0.494089 / 0.422553 |
+| 3 | 0.494526 / 0.420205 | 0.491777 / 0.416126 | 0.491713 / 0.417898 | 0.489160 / 0.413202 |
+| 5 | 0.494441 / 0.419360 | 0.491422 / 0.415588 | 0.490807 / 0.416761 | **0.488298 / 0.412087** |
+
+The tied networks, with the symmetries built in and a quarter or an eighth of the pooled
+features, beat the engine's own architecture, and the smaller one beats everything: F 8 is
+**0.0061 better against the target and 0.0073 against results** than the control, 123,000
+parameters against the control's 2.4M, which on 14.7M positions is the difference between
+learning and memorising. The sharing across translations and orientations is where the capacity
+is, and there is no symmetry tax to speak of. By E42's rule 0.007 is about 70 at equal nodes,
+more than E44's two views. What it would cost in play at F 8: a changed square touches 25
+squares' vectors of 64 units, 1600 adds against today's 1024, the frame is 36 squares by 64
+units by two views, 9 KB against 2 KB, and the pooling runs over 4608 units against 1024;
+against that, the prior could be read off the same accumulator for a few hundred cycles and run
+at depth 1, where E51 found it too dear. The prototype has no weight averaging and the control
+has, which flatters the control if anything. Not measured: whether the gain holds on all 254M
+positions, where E57's did not, and what the right F is there; the untied run suggests that more
+width is not what the data wants.
+
+## E59: the prior fitted on the search's own cutoffs
+
+The prior is fitted on the moves the search chose at the root, and read in the tree, where its
+job is to find the refutation. `yapper cutlog` in `external/build/e59` searches one position in
+20 of the 6x6 gen 10 and 11 games at 20,000 nodes and records one in 32 of the cutoffs by a
+move from a node's list where the prior orders, each as a game in docs/DATA.md's format: the
+game's moves to the position, then the search's path to the node, unscored, and the cutting move
+scored, so `policyfit` fits it as it fits a played move. The records read as games cut off at the
+ply limit; takref accepts every move. Six files were logged before the SPRTs needed the machine:
+184,217 searches, 1,334,407 cutoffs, 310 MB. Fitted with `policyfit`'s recipe, every record, 4
+epochs: held out 1.25M positions, loss 2.0927, **top 1 37.4%**, top 3 65.6%, top 8 88.0%, mean
+rank 4.05, and the engine's own prior on the rounded weights 2.0930. E52's prior predicted the
+root's choice first 21.9% of the time; a cutoff is an easier target, since the order that found
+it is in the data. Built in place of E52's prior, bench 1195823. Against E54, 2+0.02, [0, 10]:
+**FAILED**, 1836 games, +623 -665 =548, **-7.9 +/- 13.0**, pairs [114, 192, 331, 184, 97].
+
+A prior that predicts the cutoffs of the old order better does not order better: what it learned
+is largely the old order itself, the first move that happened to reach beta, and the root's
+choice carries something the cutoffs do not. Fitting on both at once, or on cutoffs recorded
+with the order scrambled, was not tried.
+
+## E60: a generation from the opponents' openings
+
+All training data is self-play from random plies, and E37 noted the limit: it only adds the
+structures the engine's own play reaches. `tools/mkopenings.py` takes the games against syntaks
+and Topaz in `external/games`, 19,663 of them, and writes the first 10 to 30 plies of each, every
+4, as a book of 111,258 openings; `yapper datagen` plays a line of the book in place of the
+random plies, the book plies unscored as random plies are, and the format is unchanged. Gen 12:
+50,000 games of 6x6 at 20,000 nodes from E54's search and E49's network, on 11 jobs beside the
+prototypes, 3.7 games a second, 4.8M positions; takref replayed 250 with no failures. They read
+unlike self-play from random plies: a median of 98 plies to gen 11's 93, roads end 5.9% of them
+to 8%, and **22.8% are drawn** to 13%, since a position syntaks or Topaz reached by ply 10 to 30
+is a level one, and white scores 47.8%.
+
+E49's warm recipe again, 2 epochs at 0.0005, with gen 11 and gen 12 each listed four times:
+
+| Held out, against results | E49 refitted the same way without gen 12 | With gen 12 |
+|---|---|---|
+| 6x6 gen 11 | 0.415905 | **0.413993** |
+| 6x6 gen 10 | 0.419801 | **0.418240** |
+| 7x7 gen 11 | 0.462945 | 0.462982 |
+| 8x8 gen 11 | 0.504538 | 0.504712 |
+| 6x6 gen 12 | | 0.489052 |
+
+A fifth as many games as gen 11 moved 6x6's older groups by 0.0016 to 0.0019, about what gen 11
+itself moved gen 10 in E49, and the other sizes not at all, as they had none of it. The engine
+reads within 0.50 of the fit on average, 2 at worst. Bench 1301784. Against E54, 2+0.02, [0, 10]:
+INCONCLUSIVE at the cap, 2000 games, +750 -681 =569, **+12.0 +/- 12.5**, pairs [104, 201, 348,
+216, 131], no time losses. The same shape as the data steps before it, E42's +11.8 and E49's
++23.4, from a fifth of gen 11's games: a source worth drawing on in the next generation, mixed
+with self-play from random plies so the roads do not go the way of E17's gen 2.
+
 ## Mistakes worth not repeating
 
 - **A racetrack run can hang with both engines idle.** E52's Topaz gauntlet stopped on its last

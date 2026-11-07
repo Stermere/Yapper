@@ -13,6 +13,7 @@
 
 #include "bitboard.h"
 #include "movegen.h"
+#include "notation.h"
 #include "search.h"
 #include "tt.h"
 
@@ -47,6 +48,13 @@ static u64 DataRngState;
 
 /* How often a deviation was searched and how often it was played, for the progress line. */
 static u64 DeviationsTried, DeviationsPlayed;
+
+/* The book, if there is one: the file's text with each line ended, and where each line starts.
+ * A game reached by another engine's play leaves structures self-play never builds, and random
+ * plies can only put stones down at random. */
+static char *Book;
+static char **BookLines;
+static u64 BookCount;
 
 /* xorshift64*. The seed goes through a multiply so that seeds 1, 2, 3 start far apart. */
 static u64 data_rng(void) {
@@ -117,6 +125,65 @@ static Move deviation(Board *b, const u64 *keys, int plies, const SearchLimits *
     return close ? m : MOVE_NONE;
 }
 
+static bool book_read(const char *path) {
+    FILE *in = fopen(path, "rb");
+    if (!in) {
+        return false;
+    }
+    fseek(in, 0, SEEK_END);
+    const long length = ftell(in);
+    fseek(in, 0, SEEK_SET);
+    Book = malloc((size_t)length + 1);
+    if (!Book || length < 0 || fread(Book, 1, (size_t)length, in) != (size_t)length) {
+        fclose(in);
+        return false;
+    }
+    fclose(in);
+    Book[length] = '\0';
+    u64 lines    = 1;
+    for (long i = 0; i < length; i++) {
+        lines += Book[i] == '\n';
+    }
+    BookLines = malloc(lines * sizeof(char *));
+    if (!BookLines) {
+        return false;
+    }
+    for (char *line = Book; *line;) {
+        char *end = strchr(line, '\n');
+        if (end) {
+            *end = '\0';
+        }
+        if (strspn(line, " \t\r") < strlen(line) && line[0] != '#') {
+            BookLines[BookCount++] = line;
+        }
+        line = end ? end + 1 : line + strlen(line);
+    }
+    return BookCount > 0;
+}
+
+/* Plays a line of the book onto `board`, as this game's unscored plies. False on a line that
+ * is not legal here, or that ends the game. */
+static bool play_book(Board *board, DataGame *game, u64 *keys, int *plies) {
+    char line[DATA_MAX_PLIES * MOVE_BUFFER];
+    strncpy(line, BookLines[data_rng() % BookCount], sizeof(line) - 1);
+    line[sizeof(line) - 1] = '\0';
+    Undo undo;
+    for (char *token = strtok(line, " \t\r"); token; token = strtok(NULL, " \t\r")) {
+        const Move m = move_parse(token);
+        if (*plies >= 255 || !movegen_is_legal(board, m)) {
+            return false;
+        }
+        game->plies[*plies] = (DataPly){m, DATA_NO_SCORE};
+        keys[*plies]        = board->hash;
+        board_make(board, m, &undo);
+        (*plies)++;
+        if (board_outcome_after(board, &undo) != ONGOING) {
+            return false;
+        }
+    }
+    return *plies > 0;
+}
+
 /* False if the opening was rejected, which leaves `game` unused. */
 static bool play_game(DataGame *game, const DataConfig *config) {
     static u64 keys[DATA_MAX_PLIES + 1];
@@ -130,15 +197,23 @@ static bool play_game(DataGame *game, const DataConfig *config) {
     board_clear(&board, config->size, halfkomi);
     search_clear();
 
-    const int random_plies =
-        OPENING_MIN_PLIES + (int)(data_rng() % (OPENING_MAX_PLIES - OPENING_MIN_PLIES + 1));
-    for (; plies < random_plies; plies++) {
-        const Move m       = random_move(&board);
-        game->plies[plies] = (DataPly){m, DATA_NO_SCORE};
-        keys[plies]        = board.hash;
-        board_make(&board, m, &undo);
-        if (board_outcome_after(&board, &undo) != ONGOING) {
+    int random_plies;
+    if (Book) {
+        if (!play_book(&board, game, keys, &plies)) {
             return false;
+        }
+        random_plies = plies;
+    } else {
+        random_plies =
+            OPENING_MIN_PLIES + (int)(data_rng() % (OPENING_MAX_PLIES - OPENING_MIN_PLIES + 1));
+        for (; plies < random_plies; plies++) {
+            const Move m       = random_move(&board);
+            game->plies[plies] = (DataPly){m, DATA_NO_SCORE};
+            keys[plies]        = board.hash;
+            board_make(&board, m, &undo);
+            if (board_outcome_after(&board, &undo) != ONGOING) {
+                return false;
+            }
         }
     }
 
@@ -196,6 +271,10 @@ int datagen_run(const DataConfig *config) {
 
     DataRngState = (config->seed + 1) * 0x9E3779B97F4A7C15ULL;
     tt_resize(DATA_HASH_MB);
+    if (config->openings && !book_read(config->openings)) {
+        printf("cannot read openings from %s\n", config->openings);
+        return 1;
+    }
 
     static DataGame game;
     struct timespec start, now;

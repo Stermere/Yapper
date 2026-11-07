@@ -45,6 +45,19 @@ stronger late move reductions passed: **+42.8 +/- 22.0** on a fresh run after +1
 syntaks at a quarter and **+134 [+85, +182]** to +155 against Topaz: inside the noise, and leaning
 the other way.
 
+The night of 2026-11-06 tried five ideas from Tak's own structure side by side, E55 to E60. In
+play, none passed: quiet spreads pruned by their own count lost everywhere and were neutral behind
+a road-danger gate, E55; history by the prior's features lost 65 as first written and 24 with the
+malus shared, E56; a prior fitted on the search's own cutoffs lost 8, E59; a generation of 50,000
+games from the openings of the games against syntaks and Topaz, refitted warm, read **+12.0 +/-
+12.5** at the cap, the shape of the data steps before it, E60. Two fits told more. Roads and
+reach as inputs to the head were worth 0.0025 of held-out loss on 14.7M positions and nothing on
+all 254M, so the filters learn connectivity by themselves given the data, E57. A local
+feature-map network, each square's hidden vector from a 5x5 kernel tied under the board's eight
+symmetries, with 8 base filters and 123,000 parameters, beat the engine's own architecture fitted
+the same way on the same games by **0.0073 against results**, twice what two views gave in E44;
+untied and wider it gained half as much, E58. That is the direction: see Next.
+
 ## Done and verified
 
 | Piece | State | Evidence |
@@ -131,7 +144,20 @@ has to be the one of its commit's day: `topaz-tei.exe` is dcb8cd2 on branch `bac
    neutral alone and paid with history halved at each search; reductions by it lost, and so did
    keeping it from depth 3. Its cost is a list of 3.9 us where E51's took 1.9, so the order is a
    quarter of the search: making it cheaper is worth about the speed it takes. A fit on every
-   size helps 7x7 and 8x8 offline and has not played.
+   size helps 7x7 and 8x8 offline and has not played. E55 found that quiet spreads, those that
+   win no tops and lead to no road, are not where the width is: pruning them lost, and a prior
+   fitted on cutoffs ordered worse than one fitted on root choices, E59. A per-feature history
+   lost as first written because shared features drown in maluses, E56; the shared-malus form is
+   the open question there.
+7. The feature-map network, E58: the first architecture to beat the global templates on the
+   same games, and the tied, smaller form beat them most, by 0.0073 against results with 16
+   pools a view. What it needs next: the same comparison on all 254M positions with the full
+   recipe, since E57's gain on the subset vanished there, and the right F; then an engine design
+   that keeps a frame of 36 squares by 64 units by two views, updates the 25 squares a change
+   touches, pools 4608 units, and reads the policy off the same accumulator so the prior costs
+   nothing and can run at depth 1. The cost in play is about 1.6 times today's update and 4.5
+   times the pooling, against a gain the fit puts near 70 at equal nodes. E60's openings from
+   the opponents' games belong in the next generation's mix.
 5. Run on real ARM and measure it, since that is a stated target.
 6. Make and unmake have plateaued at about 3 ns a node on the start position and 8.5 ns on the
    endgame: E7 lists what no longer helps. Any further lead has to come from an idea that is not

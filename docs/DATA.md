@@ -29,6 +29,12 @@ point of the opening. The longer openings leave structures on the board that the
 play would never build. A game is thrown away if its first search already calls it decided, which
 costs no search of its own: that search's move is the game's first.
 
+Random plies only reach the structures the engine's own play builds. `--openings <book>` plays
+a line of a book in place of them, one opening a line as PTN moves, the same form the match
+books take; the book plies are stored unscored, as random plies are, and the format does not
+change. `tools/mkopenings.py` writes such a book from the first plies of games against other
+engines, so a generation can start from what they build: E60.
+
 On about one ply in ten, a random move is searched as well, and played in place of the search's
 choice if it comes within 0.4 of a flat of it. That is about one such deviation in 110 plies, for
 8% more search. It takes games off the lines one network keeps to, and the margin keeps it from

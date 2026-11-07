@@ -47,6 +47,9 @@ typedef struct DataConfig {
     u64 nodes;
     int size;
     int generation;
+    /* A book of openings, one a line as PTN moves, played in place of the random plies; NULL
+     * for random plies. tools/mkopenings.py writes one from games against other engines. */
+    const char *openings;
 } DataConfig;
 
 /* Appends this many games to the file. The same seed and build give the same games. Non-zero

@@ -93,7 +93,8 @@ int main(int argc, char **argv) {
                                    .seed       = strtoull(argv[4], NULL, 10),
                                    .nodes      = strtoull(argv[5], NULL, 10),
                                    .size       = argc > 6 ? atoi(argv[6]) : 6,
-                                   .generation = argc > 7 ? atoi(argv[7]) : 0};
+                                   .generation = argc > 7 ? atoi(argv[7]) : 0,
+                                   .openings   = argc > 8 ? argv[8] : NULL};
         return datagen_run(&config);
     }
     if (strcmp(command, "nntrain") == 0 && argc >= 8) {
@@ -154,7 +155,7 @@ int main(int argc, char **argv) {
     }
     printf("usage: yapper [tei | bench [depth] | selftest | perfttest <suite> [max depth] |\n"
            "               perft <size> <depth> [position] |\n"
-           "               datagen <out> <games> <seed> <nodes> [size] [generation] |\n"
+           "               datagen <out> <games> <seed> <nodes> [size] [generation] [openings] |\n"
            "               nntrain <net.h> <keep one in> <lambda> <epochs> <threads> [--cpu]\n"
            "                       [--seed n] [--rate r] [--warm] [--share size=part]...\n"
            "                       [--lambda size=lambda]...\n"

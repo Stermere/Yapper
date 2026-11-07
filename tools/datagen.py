@@ -32,6 +32,7 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=1, help="jobs use this and the next ones")
     # A budget in nodes cannot flag, so unlike a match this can use every logical core.
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 1))
+    parser.add_argument("--openings", help="a book from tools/mkopenings.py, in place of random plies")
     args = parser.parse_args()
 
     out = Path(args.out)
@@ -45,6 +46,8 @@ def main() -> int:
         path = out.with_name(f"{out.name}-{args.seed + job}.ydg")
         command = [engine, "datagen", str(path), str(games), str(args.seed + job),
                    str(args.nodes), str(args.size), str(args.generation)]
+        if args.openings:
+            command.append(str(Path(args.openings).resolve()))
         jobs.append((path, subprocess.Popen(command, stdout=subprocess.PIPE, text=True)))
 
     failed = False
