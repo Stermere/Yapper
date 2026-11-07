@@ -103,13 +103,19 @@ stronger at a node expected to cut, and move-count pruning comes sooner when the
 evaluation has fallen since its last move. The table move and the killers are tried
 before a move list exists, because most nodes cut on one of them. The rest go by history: of the
 whole move, so each spread a stack can make keeps its own, and of its square and kind by what
-answered the move before. On top of that goes a prior. From depth 2 it is `policy.c`'s: a weight
-for each feature a move has, of what a placement touches and leaves for the roads and what a
-spread takes and gives up, all read the same under the board's symmetries and from either side,
-fitted by `yapper policyfit` to the moves the search chose in self-play, E51. A node a ply from the
-leaves cannot pay for scoring every move that way, and there the prior is set by hand: a flat or
-capstone that leaves a road to finish next move, one on a square where the other side would leave
-one, and a spread by the tops it takes less those it gives up, read off the stack's bits, E50.
+answered the move before. On top of that goes a prior. From depth 2 it is `policy.c`'s, a small
+network fitted by `yapper policyfit` to the moves the search chose in self-play. A move's features,
+all read the same under the board's symmetries and from either side, say what a placement touches
+and leaves for the roads, how many placements each side's best road through its square still
+needs, what a spread takes, covers and gives up, and how either answers the last two moves. Each
+indexes a row of 16 lanes, summed with the position's own: 15 are clipped units weighed into the
+prior and the last is linear, E52. A node scores its moves at once, so what they share, a
+placement's square, a spread's source and carry and the squares it lands on, is summed once.
+History is halved at the start of every search, so the prior leads until the search has evidence
+of its own, which pays only with the network prior, E52. A node a ply from the leaves cannot pay
+for scoring every move that way, and there the prior is set by hand: a flat or capstone that leaves
+a road to finish next move, one on a square where the other side would leave one, and a spread by
+the tops it takes less those it gives up, read off the stack's bits, E50.
 
 A node answering a road plays only what can stop it, which `movegen_road_answer()` works out from
 the squares the road would be placed on: a placement on the one such square, a spread that lands on

@@ -276,11 +276,11 @@ static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *move
     return best;
 }
 
-/* Besides the history, a prior. From depth 2 it is the fitted one of policy.c, at 1024 a nat,
- * which beat E50's by 42 and by 20 more once depth 1 was left to E50's: E51. A node a ply from the
- * leaves has too little below its moves to pay for scoring them all. There a placement that leaves
- * a road to finish, or takes a square where the other side would leave one, is far more likely to
- * cut than the rest, and a spread is worth the tops it wins: E50. */
+/* Besides the history, a prior. From depth 2 it is policy.c's network, which also reads each
+ * move against the last two, at 1536 a nat: E52. A node a ply from the leaves has too little below
+ * its moves to pay for scoring them all, E51. There a placement that leaves a road to finish, or
+ * takes a square where the other side would leave one, is far more likely to cut than the rest,
+ * and a spread is worth the tops it wins: E50. */
 static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Move tt_move, int ply,
                         int depth, u64 threats, const u64 ends[4], const u64 their_ends[4]) {
     const Board *b        = &w->board;
@@ -296,7 +296,9 @@ static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Mo
     PolicyContext ctx;
     const bool prior = b->ply >= 2 && depth >= 2;
     if (prior) {
-        policy_context(b, ends, their_ends, &ctx);
+        policy_context(b, ends, their_ends, ply >= 1 ? w->played[ply - 1] : MOVE_NONE,
+                       ply >= 2 ? w->played[ply - 2] : MOVE_NONE, &ctx);
+        policy_logits(b, &ctx, moves, count, scores);
     }
 
     for (int i = 0; i < count; i++) {
@@ -313,7 +315,7 @@ static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Mo
             if (move_is_place(m) && ((threats >> move_square(m)) & 1)) {
                 score += 1 << 26;
             }
-            scores[i] = score + 4 * policy_logit(b, &ctx, m);
+            scores[i] = score + 6 * scores[i];
             continue;
         }
         if (move_is_place(m)) {
@@ -705,6 +707,18 @@ static SearchReport run_search(const Board *root, const u64 *history, int histor
     memcpy(w->keys, history, sizeof(u64) * (size_t)w->key_count);
     set_time_budget(w, limits);
     tt_new_search();
+    /* History from earlier moves was earned in other positions. Halved, the prior leads until this
+     * search has evidence of its own: +26 with the network prior, though -9 with E51's: E52. */
+    for (int c = 0; c < 2; c++) {
+        for (int m = 0; m < 65536; m++) {
+            w->history[c][m] /= 2;
+        }
+        for (int p = 0; p < 256; p++) {
+            for (int q = 0; q < 256; q++) {
+                w->replies[c][p][q] /= 2;
+            }
+        }
+    }
 
     /* The root never changes during a search, and every frame is carried from it at worst. A
      * root left to its own evaluation would go unbuilt whenever the table answers for it. */

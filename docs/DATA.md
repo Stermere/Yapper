@@ -194,13 +194,17 @@ The search's prior over moves, `policy.c`, is fitted on the same games, aimed at
 scored ply played, which is the search's own choice:
 
 ```sh
-yapper policyfit src/policy_net.h 2 3 external/data/gen10/6s/*.ydg external/data/gen11/6s/*.ydg
+yapper policyfit src/policy_net.h 8 4 16 external/data/gen10/6s/*.ydg external/data/gen11/6s/*.ydg
 make
 ```
 
-The arguments are the output, the one-in-N games to fit on, and the epochs, then the games. One
-game in 16 is held out. It fits on one thread, 9M positions in about 5 minutes, and ends by
-scoring the held-out games with the engine's own `policy_logit()` on the rounded weights, beside
-the hand-set prior the search used before, E51. A `policy_net.h` written for another set of
-features is ignored and the prior is flat, so after changing the features, build, fit and build
-again.
+The arguments are the output, the one-in-N games to fit on, the epochs and the threads, then the
+games; `--seed n` and `--rate r` (0.003) are optional. One game in 16 is held out, and a quarter of
+those are scored. Every thread reads its share of the files into memory first: the command above
+fits 2.25M positions on 7.8 GB of features, about a minute and a half on 16 threads. It ends by
+scoring the held-out games with the engine's own `policy_logits()` on the rounded weights, which
+must match the last epoch. Files go to threads by their place in the list, so a fit repeats to the
+byte for the same seed and thread count. The staged network came from E52's work-copy fitter on
+this recipe and two threads, which shared files out as they finished, so this command fits one
+like it rather than the same bytes. A `policy_net.h` written for another set of features is
+ignored and the prior is flat, so after changing the features, build, fit and build again.

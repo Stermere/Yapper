@@ -1994,7 +1994,140 @@ flats to 130.
 The prior was fitted on 6x6 alone and plays every size; no other size has been played with it. The
 variants are kept in `external/build/pol/search-variants-e51.diff`.
 
+## E52: the move prior as a network, and history halved each search
+
+**Where E51's prior stood.** On 231k held-out 6x6 positions of gens 10-11, 99.3 legal moves each,
+22.6 placements and 76.7 spreads. The searched move was a spread 42.7% of the time, and that was
+where the prior was weakest:
+
+| Target | Share | Top 1 | Mean rank |
+|---|---|---|---|
+| Flat | 48.5% | 17.5% | 5.8 |
+| Wall | 7.4% | 10.5% | 15.3 |
+| Capstone | 1.4% | 41.2% | 7.6 |
+| Spread | 42.7% | 11.0% | 14.7 |
+
+It cost 17 ns a node and 20 ns a move, 2.0 us a position. On 150 held-out positions searched to
+1M nodes, half the nodes that reach the move loop build a list; a list costs 0.6 us at depth 1 with
+E50's hand-set terms and 1.9 us from depth 2, 12.5% of the search's time.
+
+**Capacity.** A fitter that reads every position into memory on all threads and fits minibatches by
+Adam made a fit 18 seconds, on 2.25M positions (one game in 8 of gens 10-11) and 281k held out.
+Added to E51's 262 features, one group at a time, in its linear form:
+
+| Linear, held out | Loss | Top 1 | Mean rank |
+|---|---|---|---|
+| E51's features | 3.249 | 14.4% | 10.41 |
+| + how many placements each side's best road through the square needs | 3.111 | 16.6% | 9.47 |
+| + where the last move was: on, beside, two away | 3.180 | 16.3% | 9.87 |
+| + the line of road stones through it, ours and theirs it cuts | 3.224 | 15.0% | 10.21 |
+| + how a spread lands: stones dropped last, landings on empty, ours, theirs, height, ours carried | 3.231 | 14.5% | 10.17 |
+| + ten square classes | 3.246 | 14.4% | 10.36 |
+| All five | 3.017 | 18.5% | 8.70 |
+
+Then a hidden layer of clipped units beside the linear term, the position's own features (phase,
+race, each side's road distance, lead, capstones in hand, empty squares) summed into every move's
+units:
+
+| Hidden layer | Loss |
+|---|---|
+| E51's features, 16 units | 3.109 |
+| All five groups, 16 units | 2.836 |
+| + the position's features | 2.829 |
+| 8 / 32 / 64 units | 2.851 / 2.814 / 2.804 |
+| 16 units, + our own last move, + the last move's kind | 2.804 |
+
+Squared activation and 8 epochs fitted no better. Taking one group out of the 16-unit fit cost
+0.067 for the last move, 0.061 for the road distance, 0.022 for the spread's landing, 0.018 for the
+lines, 0.011 for the classes and 0.006 for the position. Small features that always come together,
+crossed into one (a placement's five road flags by stone and phase, a spread's landing counts, its
+hops by its last drop, the last two moves with the last one's kind), fitted slightly better and
+read 15% fewer features. Rings and corners are subsumed by the classes and went.
+
+**As staged**, `policy.c` is 1314 features, each a row of 16 lanes: 15 clipped units and a linear
+lane, in 16 bits at 128 a unit. Fitted on 6x6 gens 10-11, one game in 8, 4 epochs: held-out loss
+2.7987, and the engine's own integer prior 2.7990, top 1 21.9%, top 3 44.8%, top 8 71.6%, mean
+rank 7.36. It was never fitted on the other sizes:
+
+| Held out | E52 | E51 | E52 fitted on every size |
+|---|---|---|---|
+| 5x5 | 2.540 | 2.946 | 2.535 |
+| 6x6 | 2.778 | 3.234 | 2.780 |
+| 7x7 | 3.166 | 3.560 | 3.058 |
+| 8x8 | 3.505 | 3.815 | 3.313 |
+
+The fit on every size added gen 11's 5x5, 7x7 and 8x8 and has not played.
+
+**Cost.** Read naively the features took 40 ns of the 47 a move, the road distance 14 of them and
+185 ns a node. Every step below left every logit the same, checked by a checksum over all held-out
+moves and by bench:
+
+- The road distance as bitboards: for each side and edge, what k placements reach, flooding at
+  each level only from what it added, then the squares within 0, 1 and 2 of the side's best as
+  three sets a node, so a move's distance is three bit tests.
+- Both sides' eight edges flooded at once in one 8-lane GCC vector: the node's context 38% less.
+- A node's moves scored at once, `policy_logits()`, with what they share summed once: a
+  placement's square (10.9 squares for 22.9 placements), a spread's source (12.2) and carry
+  (17.5), the squares a stack's spread lands on, kept per source and direction and hops (14.9 for
+  48.9 spreads), and a single stone's step, which depends only on where it lands (19.8 for 27.5).
+
+On a quiet machine the prior costs 2.7 us a position against E51's 2.0, a list from depth 2 3.85
+us against 1.92, and the order 24.1% of the search's time against 16.7%. Bench nps fell from 2.13M
+to 1.98M, 0.93 times. Selftest holds scoring at once equal to scoring each move alone, and every
+prior unchanged under the eight symmetries and a colour swap, now with the last two moves turned
+with the board, on random weights.
+
+**In the tree.** At cuts by a move from the list at depth 2 or more, 150 positions to 300k nodes,
+each cleared before its search, the cutting move's rank:
+
+| Ranked by | First | Top 2 | Top 4 |
+|---|---|---|---|
+| E52's prior alone | 32.0% | 48.0% | 66.1% |
+| E51's prior alone | 22.1% | 35.3% | 53.0% |
+| History alone | 35.6% | 50.1% | 64.1% |
+| The search's order with E52 | 53.5% | 70.4% | 85.6% |
+| The search's order with E51, in its own tree | 52.0% | 68.6% | 83.9% |
+
+On the same tree, history with E52's prior at 1024 a nat put the cut first 53.5%, with E51's 47.4%,
+both best at 1024 to 2048. History already holds much of what the better prior knows, and the tree
+adapts to whichever order explores it. E52's logits spread 1.63 times E51's, a standard deviation of
+3.19 nats to 1.96. Weighing the prior up for moves whose history is near zero changed nothing.
+
+**In play**, 2+0.02, [0, 10], against E51 unless said:
+
+| Change | Bench | Result |
+|---|---|---|
+| c1: the network prior, a move at a time | 1493414 | **FAILED**, 916 games, -19.7 +/- 17.8 |
+| c2a: the same, a node's moves at once | 1493414 | INCONCLUSIVE at the cap, 2000 games, +0.3 +/- 12.2 |
+| c2b: c2a at 640 a nat | 1462328 | **FAILED**, 448 games, -51.6 +/- 26.4 |
+| d1: c2a, a ply more reduction for moves 4 nats below the best prior, a ply less within 1 | 1543852 | **FAILED**, 1468 games, -13.3 +/- 15.4 |
+| d2: d1's more reduction only | 1269633 | **FAILED**, 902 games, -20.8 +/- 18.1 |
+| d3: c2a from depth 3, E51's prior at depth 2 | 1364646 | **FAILED**, 1638 games, -10.0 +/- 13.9 |
+| h1: c2a with history and replies halved at the start of each search, against c2a | 1493414 | **PASSED**, 1218 games, **+26.0 +/- 16.4** |
+| c3: the staged features and fit, at 1024 a nat | 1465868 | INCONCLUSIVE at the cap, 2000 games, -0.7 +/- 12.3 |
+| h0: E51 with history halved | 1614296 | **FAILED**, 1798 games, -9.3 +/- 13.6 |
+| h3: c3 with history halved | 1465868 | INCONCLUSIVE at the cap, 2000 games, +10.9 +/- 12.5 |
+| h4: h3 at 1536 a nat | 1250165 | **PASSED**, 1002 games, **+28.1 +/- 17.3**, pairs [44, 81, 199, 104, 73] |
+
+History carried from earlier moves at full weight before this, cleared only by `teinewgame`, a
+komi change, bench and datagen. Halving it at each search lets the prior order a new position until
+the search has evidence of its own, which pays with this prior and costs 9 with E51's. Bench clears
+history before every position, so it cannot see the change. The heavier weight followed probes with
+history warm, every own ply of a game searched in turn, where 1536 to 2048 ordered best.
+
+Staged: h4, bench 1250165 from `make` and `make release`, binary external/baselines/e52.exe. The
+fitter is `yapper policyfit` with threads, DATA.md. Not yet run: the gauntlets against syntaks and
+Topaz, and the fit on every size. The work copy, the probes and the candidates are in
+external/build/pa, pc, pd, pf and ph.
+
 ## Mistakes worth not repeating
+
+- **A prior that predicts better does not order better by as much.** E52's ranked the cutting
+  move first a third more often than E51's, and the search's order gained 1.5 points, because
+  history already knew most of it; it paid only once history was halved at each search. Measure a
+  prior inside the tree, beside history, before paying for it.
+- **Two bits taken from a score change its ties.** Masked to carry a flag, they moved bench by
+  7.5%; shifting the score up to make room left it alone, E52.
 
 - **An idea that times slower may be the compiler's fault.** E32 dropped a single pass over the
   accumulator as slower. With the slice held in vector registers it is 5% faster, E43. Check

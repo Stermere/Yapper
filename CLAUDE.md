@@ -144,7 +144,7 @@ pass.
 |---|---|
 | `src/` | the engine, flat |
 | `src/net.h` | the network every size shares, written by `yapper nntrain`; a size it was not fitted on only counts flats |
-| `src/policy_net.h` | the move prior's weights, written by `yapper policyfit`; a table of another shape is ignored and the prior is flat |
+| `src/policy_net.h` | the move prior's network, written by `yapper policyfit`; a table of another shape is ignored and the prior is flat |
 | `src/test/` | selftest, in the binary on purpose |
 | `tests/perft/` | `published.perft` from other engines, `sealed.perft` from takref |
 | `tests/books/` | opening books, built by `tools/mkbook.py` |

@@ -135,8 +135,22 @@ int main(int argc, char **argv) {
         return nntrain_run(argv[2], atoi(argv[3]), lambda, atoi(argv[5]), atoi(argv[6]), !cpu, seed,
                            rate, warm, share, argv + first, argc - first);
     }
-    if (strcmp(command, "policyfit") == 0 && argc >= 6) {
-        return policyfit_run(argv[2], atoi(argv[3]), atoi(argv[4]), argv + 5, argc - 5);
+    if (strcmp(command, "policyfit") == 0 && argc >= 7) {
+        unsigned long long seed = 0;
+        double rate             = 0.0;
+        int first               = 6;
+        for (; first < argc; first++) {
+            if (strcmp(argv[first], "--seed") == 0 && first + 1 < argc) {
+                seed = strtoull(argv[++first], NULL, 10);
+            } else if (strcmp(argv[first], "--rate") == 0 && first + 1 < argc &&
+                       atof(argv[first + 1]) > 0.0) {
+                rate = atof(argv[++first]);
+            } else {
+                break;
+            }
+        }
+        return policyfit_run(argv[2], atoi(argv[3]), atoi(argv[4]), atoi(argv[5]), rate, seed,
+                             argv + first, argc - first);
     }
     printf("usage: yapper [tei | bench [depth] | selftest | perfttest <suite> [max depth] |\n"
            "               perft <size> <depth> [position] |\n"
@@ -145,7 +159,8 @@ int main(int argc, char **argv) {
            "                       [--seed n] [--rate r] [--warm] [--share size=part]...\n"
            "                       [--lambda size=lambda]...\n"
            "                       <games>...] |\n"
-           "               policyfit <policy_net.h> <keep one in> <epochs> <games>...]\n");
+           "               policyfit <policy_net.h> <keep one in> <epochs> <threads>\n"
+           "                         [--seed n] [--rate r] <games>...]\n");
 #else
     printf("usage: yapper [tei | bench [depth] | perft <size> <depth> [position]]\n");
 #endif

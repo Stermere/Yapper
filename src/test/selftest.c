@@ -254,32 +254,62 @@ static int compare_ints(const void *a, const void *b) {
     return (x > y) - (x < y);
 }
 
+/* `m` on the board board_transformed() makes, its square and direction turned the same way. */
+static Move move_transformed(Move m, int size, int transform) {
+    if (m == MOVE_NONE) {
+        return m;
+    }
+    const int last = size - 1;
+    int rank = move_square(m) >> 3, file = move_square(m) & 7;
+    rank = transform & 1 ? last - rank : rank;
+    file = transform & 2 ? last - file : file;
+    if (transform & 4) {
+        const int held = rank;
+        rank           = file;
+        file           = held;
+    }
+    if (move_is_place(m)) {
+        return move_place(rank * 8 + file, move_stone(m));
+    }
+    int dir = (int)move_direction(m);
+    dir     = transform & 1 && (dir == NORTH || dir == SOUTH) ? dir ^ 2 : dir;
+    dir     = transform & 2 && (dir == EAST || dir == WEST) ? dir ^ 2 : dir;
+    dir     = transform & 4 ? dir ^ 1 : dir;
+    return move_spread(rank * 8 + file, (Direction)dir, move_pattern(m));
+}
+
 /* The prior of every move of the position, sorted, which a turned or recoloured board must give
- * back unchanged without anything having to say which move became which. */
-static int sorted_priors(const Board *b, int *out) {
+ * back unchanged without anything having to say which move became which. Scoring a node's moves
+ * at once must give what scoring each alone does. */
+static int sorted_priors(const Board *b, Move prev, Move prev2, int *out) {
     static Move list[MAX_MOVES];
     const int count = movegen_all(b, list);
     u64 ends[4], their_ends[4];
     board_road_ends(b, board_stm(b), ends);
     board_road_ends(b, !board_stm(b), their_ends);
     PolicyContext ctx;
-    policy_context(b, ends, their_ends, &ctx);
+    policy_context(b, ends, their_ends, prev, prev2, &ctx);
+    static i32 batch[MAX_MOVES];
+    policy_logits(b, &ctx, list, count, batch);
     for (int i = 0; i < count; i++) {
         out[i] = policy_logit(b, &ctx, list[i]);
+        CHECK(out[i] == batch[i], "a node's priors at once differ from one by one");
     }
     qsort(out, (size_t)count, sizeof(int), compare_ints);
     return count;
 }
 
-static void check_policy(const Board *b) {
+/* `prev` and `prev2` are the moves that led here, turned with the board. */
+static void check_policy(const Board *b, Move prev, Move prev2) {
     static int base[MAX_MOVES], other[MAX_MOVES];
     char tps[TPS_BUFFER];
     show(b, tps, sizeof(tps));
-    const int count = sorted_priors(b, base);
+    const int count = sorted_priors(b, prev, prev2, base);
     Board turned;
     for (int transform = 1; transform < 8 + (b->halfkomi == 0); transform++) {
         board_transformed(b, &turned, transform & 7, transform == 8);
-        const int n = sorted_priors(&turned, other);
+        const int n = sorted_priors(&turned, move_transformed(prev, b->size, transform & 7),
+                                    move_transformed(prev2, b->size, transform & 7), other);
         CHECK(n == count && memcmp(base, other, sizeof(int) * (size_t)count) == 0,
               "transform %d changed the move priors: %s", transform, tps);
     }
@@ -309,16 +339,19 @@ static void random_games(int size, int games, int halfkomi) {
         Board board;
         board_clear(&board, size, halfkomi);
         Undo undo;
+        Move made[2] = {MOVE_NONE, MOVE_NONE};
         for (int ply = 0; ply < 400; ply++) {
             check_consistent(&board);
             check_tps_round_trip(&board);
             check_moves(&board);
             if (ply >= 2) {
                 check_eval(&board);
-                check_policy(&board);
+                check_policy(&board, made[0], made[1]);
             }
             const int count = movegen_all(&board, list);
-            board_make(&board, pick_move(list, count), &undo);
+            made[1]         = made[0];
+            made[0]         = pick_move(list, count);
+            board_make(&board, made[0], &undo);
             if (board_outcome_after(&board, &undo) != ONGOING) {
                 break;
             }
@@ -614,16 +647,21 @@ int selftest_run(void) {
     rules();
     towers();
     /* Random weights, so that a prior that tells a turned board from the original shows it. */
-    static i16 priors[1024];
-    for (int i = 0; i < policy_feature_count() && i < 1024; i++) {
-        priors[i] = (i16)(rng() % 2001) - 1000;
+    static i16 rows[4096 * POLICY_LANES];
+    i16 bias[POLICY_LANES], out[POLICY_LANES];
+    for (int i = 0; i < policy_feature_count() * POLICY_LANES && i < 4096 * POLICY_LANES; i++) {
+        rows[i] = (i16)(rng() % 201) - 100;
     }
-    policy_install(priors);
+    for (int i = 0; i < POLICY_LANES; i++) {
+        bias[i] = (i16)(rng() % 129);
+        out[i]  = i < POLICY_HIDDEN ? (i16)(rng() % 513) - 256 : 0;
+    }
+    policy_install(rows, bias, out);
     for (int size = MIN_SIZE; size <= MAX_SIZE; size++) {
         random_games(size, size <= 6 ? 400 : 200, 0);
     }
     random_games(6, 200, 4);
-    policy_install(NULL);
+    policy_install(NULL, NULL, NULL);
     for (int size = MIN_SIZE; size <= MAX_SIZE; size++) {
         network_games(size, 60, 0);
     }

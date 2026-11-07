@@ -246,10 +246,11 @@ bool data_replay(const char *path, DataVisitor visit, void *context) {
         printf("cannot read %s\n", path);
         return false;
     }
-    static char buffer[1 << 20];
+    /* A thread each: policyfit reads its files on every core. */
+    static _Thread_local char buffer[1 << 20];
     setvbuf(in, buffer, _IOFBF, sizeof(buffer));
 
-    static DataGame game;
+    static _Thread_local DataGame game;
     u64 index   = 0;
     bool intact = true;
     while (intact && data_read(in, &game)) {

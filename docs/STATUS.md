@@ -34,7 +34,11 @@ its own session. E51 fitted a prior over moves to the moves the search chose in 
 weight for each of 262 Tak features of a move, and ordered by it from depth 2: **+42.5 +/- 22.0**
 over E50 from depth 1, and **+20.1 +/- 14.0** more from depth 2. Against E50 run beside it,
 **-36 [-62, -9]** to -52 against syntaks at a quarter and **+119 [+68, +168]** to +57 against
-Topaz.
+Topaz. E52 made the prior a small network over richer Tak features, read against the last two
+moves: it fits far better, top-1 21.9% where E51 had 14.4%, and transfers to the other sizes, yet
+alone it only paid for its cost, +0.3 and -0.7 at the cap, since history already holds much of
+what it knows. Halving history at the start of each search, the user's idea, made it pay:
+**+26.0 +/- 16.4** over the network prior alone, and **+28.1 +/- 17.3** over E51 at 1536 a nat.
 
 ## Done and verified
 
@@ -46,7 +50,7 @@ Topaz.
 | TEI | Done | 40 games through the real racetrack with no protocol faults |
 | Match runner and SPRT | Done | Known-answer tests, EXPERIMENTS.md E1-E3 |
 | Evaluation | One network for every size, a view for each side, a head of two layers | E48 fine-tuned on gen 11: **+23.4 +/- 15.4** at 2+0.02, +150 at k=8 and +103 against Topaz, E49. A head of 16 and 32 units on the pooled filters: **+54.0 +/- 24.7** at 2+0.02, +86.0 at equal nodes, E48. Two views of 64 filters, for one of 128 that the other side subtracted from: **+87.7 +/- 31.9** in self-play, +83 at k=8 and +17 against Topaz, E44, after E43 found one view could weigh only the difference between the sides. Before that, 128 filters, from 32 in E39: +79.4 +/- 21.8 for 64 at 100,000 nodes, and 128 led 64 by 45 against syntaks at k=8, E40. Filters on an 8x8 grid every board shares, and each size's own bias, output and skip. Against E38's networks of each size's own at 100,000 nodes: **8x8 +130, 7x7 +203, 5x5 +64**, passed SPRTs for its lambda 0.5 forerunner, then **+77 and +70 more on 8x8 and 7x7** from lambda 0.7; **4x4 +14.3 +/- 8.8**, passed, and +7.3 +/- 8.2 at 2+0.02; **6x6 +16.9 +/- 13.8 against v2, and +23.7 +/- 13.9 at 2+0.02**, both at the cap with their intervals above zero; 3x3 is decided by who moves first at every budget tried: E39. The hand-written evaluation went in E38. Refitted with gen 10, E42: +11.8 +/- 13.5 on E40 in self-play. A second layer fitted better and lost 37 on speed, playing only +14.5 at equal nodes, and the same as F1 against both other engines |
-| Search | Second pass done | **+116 [+92, +140] against Tiltak over 800 games at 5+0.05**, from -38: EXPERIMENTS.md E25. It sees roads by spread, and most of the gain is speed in real middlegames. With the network, stronger reductions, move-count pruning to depth 6 and singular extensions: **+82.5 +/- 31.3 on v2's search at 2+0.02**, E36. History by the whole move rather than square and kind: **+121.7 +/- 26.5** at 100,000 nodes, E40. Move-count pruning at half: **+19.7 +/- 12.9** at the cap, and a quarter or deeper gained nothing more, E42. Only the moves that can stop a road answer it, and road-making placements, the other side's road squares and spreads by the tops they win go first: **+29.3 +/- 17.6**, E50. A prior over moves fitted to the search's own choices orders from depth 2: **+42.5 +/- 22.0** and then **+20.1 +/- 14.0**, E51 |
+| Search | Second pass done | **+116 [+92, +140] against Tiltak over 800 games at 5+0.05**, from -38: EXPERIMENTS.md E25. It sees roads by spread, and most of the gain is speed in real middlegames. With the network, stronger reductions, move-count pruning to depth 6 and singular extensions: **+82.5 +/- 31.3 on v2's search at 2+0.02**, E36. History by the whole move rather than square and kind: **+121.7 +/- 26.5** at 100,000 nodes, E40. Move-count pruning at half: **+19.7 +/- 12.9** at the cap, and a quarter or deeper gained nothing more, E42. Only the moves that can stop a road answer it, and road-making placements, the other side's road squares and spreads by the tops they win go first: **+29.3 +/- 17.6**, E50. A prior over moves fitted to the search's own choices orders from depth 2: **+42.5 +/- 22.0** and then **+20.1 +/- 14.0**, E51. A network prior with history halved at each search: **+28.1 +/- 17.3** over E51, E52 |
 | Time management | Done for now | Budgets on the moves left, from the shorter reserve. One time loss in 5242 games, and it does not use the whole clock yet: E25. More time in the opening, as syntaks spends it, lost 22; less lost 9, and a later stop lost 7: E42 |
 | Training data | Every size | Gen 11, two rounds over 5x5 to 8x8 at 20,000 nodes from E48: 202,000 games, 21.5M positions, E49. 6x6: gens 1-10, 228.8M positions, gen 10 being 120,000 games at 20,000 nodes from E40, E42; every one recoverable from about four bytes a ply, repeatable, checked by takref: docs/DATA.md, E34, E38. 150,000 to 400,000 games of each other size from Gen-1Big. Openings of up to 16 random plies and margin-checked deviations from E37 on. At equal time, 20,000 nodes a move taught a 6x6 network far more than 5000, E38. The network is fitted on 6x6's gens 7-8 and gen 9's 20,000-node games: gens 1-6 can go and gen 7 cannot, E39 |
 | Fitting a network | On the GPU | An RTX 3070 fits about 18M positions a second to the CPU's 1.05M, the same network to within float rounding and repeatable to the byte; nothing is needed to build it: E37. Every size in one fit of minutes, the weights averaged over its last tenth. Two fits of the same games that differ only in seed play 15 to 35 apart, so a fit is chosen from several: E39 |
@@ -118,9 +122,11 @@ has to be the one of its commit's day: `topaz-tei.exe` is dcb8cd2 on branch `bac
    move-count pruning, both lose. E50 found that hand-set priors each gain too little to measure,
    and that a tinue prover, pruning spreads by the tops they leave, and leaves that answer roads by
    spread all lose. E51's fitted prior gained through the order, and asking it again where
-   move-count pruning stops, to spare a move or to skip one, did not. Its fit stopped improving
-   after one epoch, so a prior that reads the position, the network's pooled units say, is the
-   next step for it, and so is a fit for the other sizes, which it plays untested.
+   move-count pruning stops, to spare a move or to skip one, did not. E52's network prior was
+   neutral alone and paid with history halved at each search; reductions by it lost, and so did
+   keeping it from depth 3. Its cost is a list of 3.9 us where E51's took 1.9, so the order is a
+   quarter of the search: making it cheaper is worth about the speed it takes. A fit on every
+   size helps 7x7 and 8x8 offline and has not played.
 5. Run on real ARM and measure it, since that is a stated target.
 6. Make and unmake have plateaued at about 3 ns a node on the start position and 8.5 ns on the
    endgame: E7 lists what no longer helps. Any further lead has to come from an idea that is not
