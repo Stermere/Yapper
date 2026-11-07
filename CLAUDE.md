@@ -151,6 +151,7 @@ pass.
 | `tools/takref.py` | the rules, written to be obviously right rather than fast |
 | `tools/perftdiff.py` | fuzz the engine against takref, seal suites |
 | `tools/match.py` | TEI match runner, referee and pentanomial SPRT |
+| `tools/progress.py` | every match live, with ETAs: match.py's status files, `external/games/queue.txt`, fresh logs |
 | `tools/ptnlink.py` | a ptn.ninja link for a game |
 | `tools/play.py` | play the engine in a terminal |
 | `tools/speedcmp.py` | race move generation against the baselines |

@@ -284,15 +284,15 @@ void nn_derive(const Board *b, NNFrame *frame, const NNFrame *from, u64 touched)
 #define NN_Z_SHIFT 8 /* a third-layer unit, NN_QY * NN_Q3 to 1, down to NN_QY */
 _Static_assert(NN_QU << NN_POOL_SHIFT == 1 << 16, "a pooled 1 stands for 2^16 of the squares");
 _Static_assert(NN_POOLED_MAX <= 32767, "a pooled filter fits 16 bits");
-_Static_assert((i64)NN_POOLS *NN_POOLED_MAX * 127 < 1LL << 31, "the straight sum fits 32 bits");
-_Static_assert((i64)NN_POOLS *NN_POOLED_MAX *NN_L2_LIMIT < (1LL << 31) - (1LL << 28),
+_Static_assert(((i64)NN_POOLS) * NN_POOLED_MAX * 127 < 1LL << 31, "the straight sum fits 32 bits");
+_Static_assert(((i64)NN_POOLS) * NN_POOLED_MAX * NN_L2_LIMIT < (1LL << 31) - (1LL << 28),
                "a second-layer sum fits 32 bits, with room for its skip inputs and bias");
-_Static_assert((i64)NN_L2 *NN_QY *NN_L3_LIMIT < (1LL << 31) - (1LL << 28),
+_Static_assert(((i64)NN_L2) * NN_QY * NN_L3_LIMIT < (1LL << 31) - (1LL << 28),
                "a third-layer sum fits 32 bits, with room for its bias");
 _Static_assert((NN_QU * NN_Q2) >> NN_Y_SHIFT == NN_QY && (NN_QY * NN_Q3) >> NN_Z_SHIFT == NN_QY,
                "each unit is cut to NN_QY");
 _Static_assert(NN_QY *NN_Q4 % (NN_QB * NN_QU) == 0, "the straight sum scales to the head's units");
-_Static_assert((i64)NN_L3 *NN_QY *NN_L4_LIMIT < 1LL << 31, "the head's output fits 32 bits");
+_Static_assert(((i64)NN_L3) * NN_QY * NN_L4_LIMIT < 1LL << 31, "the head's output fits 32 bits");
 
 typedef u16 NNUVec __attribute__((vector_size(NN_VEC_BYTES), may_alias));
 #define NN_LANES ((int)(sizeof(NNVec) / sizeof(i16)))

@@ -11,6 +11,8 @@ fewer games than counting wins would. Every move is refereed by tools/takref.py 
 trusted, and an illegal move or a crash loses the game on the spot.
 
 Games are written as PTN: open the file in https://ptn.ninja, or use tools/ptnlink.py.
+Progress goes to external/games/live/<name>.json as well, named after the PTN, which
+tools/progress.py shows live however the match was started.
 
 Read docs/TESTING.md before trusting a result. One change per test, and do not read the
 number early: stopping when it looks good is what the SPRT exists to replace.
@@ -22,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import math
 import multiprocessing
 import os
@@ -42,6 +45,8 @@ MAX_PLIES = 1000
 
 # How long past its clock an engine is given before it is presumed hung.
 HANG_SECONDS = 5.0
+
+LIVE = Path(__file__).resolve().parent.parent / "external" / "games" / "live"
 
 
 def score_of_elo(elo: float) -> float:
@@ -308,6 +313,23 @@ def write_ptn(path: Path, result: GameResult, white: str, black: str, size: int,
         out.write("\n".join(lines) + "\n\n")
 
 
+def write_status(path: Path, status: dict, tally: Tally, llr: float | None) -> bool:
+    """For tools/progress.py. A reader holding the file must never cost the match a game, so a
+    write that fails is skipped and the next pair writes again."""
+    elo, error = pair_elo(tally.pairs)
+    status.update(updated=time.time(), games=tally.games, w=tally.wins, l=tally.losses,
+                  d=tally.draws, pairs=tally.pairs, elo=elo, err=error, llr=llr,
+                  endings=tally.endings)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix(".tmp")
+        temp.write_text(json.dumps(status), encoding="utf-8")
+        os.replace(temp, path)
+        return True
+    except OSError:
+        return False
+
+
 class Tally:
     def __init__(self):
         self.wins = self.losses = self.draws = 0
@@ -429,6 +451,8 @@ def main() -> int:
     parser.add_argument("--alpha", type=float, default=0.05)
     parser.add_argument("--beta", type=float, default=0.05)
     parser.add_argument("--ptn", help="append every game here, in PTN")
+    parser.add_argument("--label", help="what tools/progress.py calls it; default dev vs base")
+    parser.add_argument("--status", help="progress as JSON; default external/games/live/<name>.json")
     parser.add_argument("--seed", type=int, default=1)
     args = parser.parse_args()
 
@@ -467,7 +491,18 @@ def main() -> int:
     upper = math.log((1.0 - args.beta) / args.alpha)
     lower = math.log(args.beta / (1.0 - args.alpha))
     verdict = None
+    llr = None
     started = time.monotonic()
+
+    name = ptn_path.stem if ptn_path else f"match-{os.getpid()}"
+    status_path = Path(args.status) if args.status else LIVE / f"{name}.json"
+    status = {"label": args.label or f"{Path(args.dev).stem} vs {Path(args.base).stem}",
+              "pid": os.getpid(), "dev": args.dev, "base": args.base, "tc": args.tc,
+              "ptn": str(ptn_path.resolve()) if ptn_path else None, "cap": games,
+              "sprt": [args.elo0, args.elo1] if args.sprt else None,
+              "lower": lower if args.sprt else None, "upper": upper if args.sprt else None,
+              "started": time.time(), "finished": False, "verdict": None}
+    write_status(status_path, status, tally, llr)
 
     with multiprocessing.Pool(args.concurrency, worker_start, (config,)) as pool:
         # Leaving this block kills the workers, and an engine exits when its stdin closes.
@@ -491,6 +526,7 @@ def main() -> int:
                 if llr >= upper or llr <= lower:
                     verdict = "PASSED" if llr >= upper else "FAILED"
             print(line, flush=True)
+            write_status(status_path, status, tally, llr)
             if verdict:
                 break
 
@@ -500,6 +536,11 @@ def main() -> int:
         print(f"endings: {tally.endings}")
     if args.sprt:
         print(f"SPRT [{args.elo0}, {args.elo1}]: {verdict or 'INCONCLUSIVE'}")
+    status.update(finished=True, verdict=verdict or ("INCONCLUSIVE" if args.sprt else None))
+    for _ in range(20):
+        if write_status(status_path, status, tally, llr):
+            break
+        time.sleep(0.1)
     return 0
 
 

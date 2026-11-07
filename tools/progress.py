@@ -1,0 +1,582 @@
+"""
+progress.py - a live view of every match: where each stands, and when the queue should end.
+
+    python tools/progress.py                  # redrawn in the terminal every 5 seconds
+    python tools/progress.py --serve 8765     # the same as a page, http://localhost:8765
+    python tools/progress.py --once           # print it once
+
+What it reads, all under external/games/:
+
+- live/*.json, which tools/match.py writes after every pair, however it was started. Whether its
+  process still runs tells a match that is playing from one that was killed.
+- queue.txt, if there is one: the runs planned, in the order they play, so it can say when each
+  should start and end. One run a line, then a label:
+
+      # Review of E52, 2026-11-06
+      games 600   external/games/tak/e52-k4.log   E52 vs syntaks at 1/4
+      sprt  2000  external/games/pol2/r1.log      r1 flat win on the spot, vs E52
+
+  `sprt` may stop before its cap and `games` plays them all. The path names the run: the match.py
+  run whose PTN has that directory and name, or else a log, racetrack's or match.py's printout.
+  The first comment is the title.
+- Any other log written in the last ten minutes, such as racetrack's, which keeps no status of
+  its own. How long such a run will be is unknown.
+
+A run is stalled when it has been quiet for ten games' time and at least three minutes, as when
+racetrack hangs between two idle engines. An SPRT is expected to end where its LLR is heading at
+the rate it plays; one not yet started gets the median length of the finished SPRTs beside it, and
+the rate of the last run of its kind and length. "At the latest" plays every SPRT to its cap.
+Finished runs outside the queue stay listed for a day.
+
+Stdlib only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ctypes
+import datetime
+import http.server
+import json
+import math
+import os
+import re
+import shutil
+import statistics
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+GAMES = ROOT / "external" / "games"
+LIVE = GAMES / "live"
+QUEUE = GAMES / "queue.txt"
+
+MATCH_RE = re.compile(
+    r"^\s*(\d+) games\s+\+(\d+) -(\d+) =(\d+)\s+Elo\s+([+-]?[\d.]+) \+/-\s+([\d.]+)\s+"
+    r"pairs \[([\d, ]+)\](?:\s+LLR ([+-]?[\d.]+) \[([+-]?[\d.]+), ([+-]?[\d.]+)\])?",
+    re.M,
+)
+VERDICT_RE = re.compile(r"^SPRT \[[^\]]*\]: (\w+)", re.M)
+FINISHED_RE = re.compile(r"^\d+s, \d+ concurrent", re.M)
+RACE_RE = re.compile(r": \+(\d+)-(\d+)=(\d+), ([+-]?\d+) elo \[([+-]?\d+), ([+-]?\d+)\]")
+START_RE = re.compile(r"\Astart \S+ (\d\d):(\d\d):(\d\d)")
+
+STALL_GAMES = 10
+STALL_FLOOR = 180.0
+EARLY_GAMES = 200  # before this, an SPRT's LLR says little about where it is heading
+DISCOVER = 600.0
+RECENT = 86400.0
+SPRT_CAP = 2000  # match.py's default under SPRT, for a printout found without a queue line
+ENDED = ("done", "stopped")
+LIVELY = ("running", "stalled")
+
+_logs: dict[Path, tuple[tuple[int, int], dict]] = {}
+_statuses: dict[Path, tuple[tuple[int, int], dict]] = {}
+
+
+def folder(path: Path | str) -> str:
+    return os.path.normcase(str(Path(path).resolve()))
+
+
+def started_at(text: str, born: float, touched: float) -> float:
+    """sprts.sh opens each log with the clock time, which outlives a file reused by name."""
+    m = START_RE.match(text)
+    if not m:
+        return born
+    t = datetime.datetime.fromtimestamp(touched).replace(
+        hour=int(m[1]), minute=int(m[2]), second=int(m[3]), microsecond=0
+    )
+    if t.timestamp() > touched + 1:
+        t -= datetime.timedelta(days=1)
+    return t.timestamp()
+
+
+def read_log(path: Path) -> dict | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    key = (st.st_mtime_ns, st.st_size)
+    hit = _logs.get(path)
+    if hit and hit[0] == key:
+        return hit[1]
+    text = path.read_text(encoding="utf-8", errors="replace")
+    born = getattr(st, "st_birthtime", st.st_ctime)
+    info: dict = {"source": "log", "start": started_at(text, born, st.st_mtime),
+                  "touched": st.st_mtime, "games": 0}
+    for m in MATCH_RE.finditer(text):
+        games, w, l, d, elo, err, pairs, llr, lower, upper = m.groups()
+        info.update(games=int(games), w=int(w), l=int(l), d=int(d), elo=float(elo),
+                    err=float(err), pairs=[int(x) for x in pairs.split(",")])
+        if llr:
+            info.update(llr=float(llr), lower=float(lower), upper=float(upper))
+    races = RACE_RE.findall(text)
+    if races:
+        w, l, d, elo, lo, hi = (int(x) for x in races[-1])
+        info.update(games=w + l + d, w=w, l=l, d=d, elo=float(elo), lo=lo, hi=hi)
+    verdict = VERDICT_RE.search(text)
+    info["verdict"] = verdict[1] if verdict else None
+    info["finished"] = bool(verdict or FINISHED_RE.search(text))
+    _logs[path] = (key, info)
+    return info
+
+
+def read_status(path: Path) -> dict | None:
+    hit = _statuses.get(path)
+    try:
+        st = path.stat()
+        key = (st.st_mtime_ns, st.st_size)
+        if hit and hit[0] == key:
+            return hit[1]
+        s = json.loads(path.read_text(encoding="utf-8"))
+        run = {"source": "status", "label": s.get("label") or path.stem, "pid": s.get("pid"),
+               "kind": "sprt" if s.get("sprt") else "games", "cap": s.get("cap"),
+               "tc": s.get("tc"), "ptn": s.get("ptn"), "start": s["started"],
+               "touched": s["updated"], "games": s["games"], "w": s["w"], "l": s["l"],
+               "d": s["d"], "pairs": s["pairs"], "elo": s["elo"], "err": s["err"],
+               "verdict": s.get("verdict"), "finished": bool(s.get("finished"))}
+    except (OSError, ValueError, KeyError, TypeError):
+        return hit[1] if hit else None  # caught mid-write: the last good read stands
+    if s.get("llr") is not None:
+        run.update(llr=s["llr"], lower=s["lower"], upper=s["upper"])
+    run["dir"] = folder(Path(run["ptn"]).parent) if run["ptn"] else ""
+    _statuses[path] = (key, run)
+    return run
+
+
+def alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+    # Never os.kill on Windows: there it terminates the process whatever the signal.
+    kernel = ctypes.WinDLL("kernel32")
+    kernel.OpenProcess.restype = ctypes.c_void_p
+    kernel.GetExitCodeProcess.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
+    kernel.CloseHandle.argtypes = (ctypes.c_void_p,)
+    handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    code = ctypes.c_ulong()
+    ok = kernel.GetExitCodeProcess(handle, ctypes.byref(code))
+    kernel.CloseHandle(handle)
+    return bool(ok) and code.value == 259  # STILL_ACTIVE
+
+
+def load_queue(path: Path) -> tuple[str, list[dict]]:
+    title, runs = "", []
+    if not path.exists():
+        return title, runs
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("#"):
+            title = title or line.lstrip("#").strip()
+        elif line:
+            kind, cap, log, *label = line.split(maxsplit=3)
+            runs.append({"kind": kind, "cap": int(cap), "log": log,
+                         "label": label[0] if label else Path(log).stem})
+    return title, runs
+
+
+def own_rate(run: dict) -> float | None:
+    span = run["touched"] - run["start"]
+    return run["games"] / span if run.get("games") and span > 0 else None
+
+
+def settle(run: dict, later: bool, now: float) -> str:
+    if "source" not in run:
+        return "queued"
+    if run.get("finished") or (run.get("cap") and run["games"] >= run["cap"]):
+        return "done"
+    if run["source"] == "status":
+        if not alive(run["pid"]):
+            return "stopped"
+    elif later:
+        return "stopped"
+    rate = own_rate(run)
+    limit = max(STALL_GAMES / rate if rate else 600.0, STALL_FLOOR)
+    return "stalled" if now - run["touched"] > limit else "running"
+
+
+def median_sprt(directory: str, statuses: list[dict]) -> float | None:
+    lengths = {p.stem: i["games"] for p in Path(directory).glob("*.log")
+               if (i := read_log(p)) and i["verdict"]}
+    done = [s for s in statuses if s["kind"] == "sprt" and s["finished"]]
+    lengths.update({Path(s["ptn"]).stem: s["games"] for s in done if s["dir"] == directory})
+    if not lengths:
+        lengths = {str(i): s["games"] for i, s in enumerate(done)}
+    return statistics.median(lengths.values()) if lengths else None
+
+
+def expected_left(run: dict, statuses: list[dict]) -> float:
+    games, left = run.get("games", 0), run["cap"] - run.get("games", 0)
+    if run["kind"] != "sprt":
+        return left
+    llr = run.get("llr")
+    if llr and games >= EARLY_GAMES:
+        drift = llr / games
+        need = (run["upper"] - llr) / drift if drift > 0 else (llr - run["lower"]) / -drift
+        return min(left, max(0.0, need))
+    median = median_sprt(run["dir"], statuses)
+    return min(left, max(0.0, median - games)) if median else left
+
+
+def build(queue: Path) -> dict:
+    now = time.time()
+    title, entries = load_queue(queue)
+    statuses = {p: s for p in LIVE.glob("*.json") if (s := read_status(p))}
+    by_ptn = {(s["dir"], Path(s["ptn"]).stem): p for p, s in statuses.items() if s["ptn"]}
+    used, listed, plan = set(), set(), []
+    for e in entries:
+        target = ROOT / e["log"]
+        listed.add(folder(target))
+        run = {"kind": e["kind"], "cap": e["cap"], "dir": folder(target.parent), "planned": True}
+        found = by_ptn.get((run["dir"], target.stem))
+        if found:
+            used.add(found)
+            run.update(statuses[found])
+        elif info := read_log(target):
+            run.update(info)
+        run["label"] = e["label"]
+        plan.append(run)
+    for i, run in enumerate(plan):
+        run["status"] = settle(run, any("source" in r for r in plan[i + 1:]), now)
+
+    others = []
+    for p, s in statuses.items():
+        run: dict = dict(s, planned=False)
+        run["status"] = settle(run, False, now)
+        if p not in used and (run["status"] in LIVELY or now - run["touched"] < RECENT):
+            others.append(run)
+    covered = {(s["dir"], Path(s["ptn"]).stem) for s in statuses.values() if s["ptn"]}
+    for p in [*GAMES.glob("*.log"), *GAMES.glob("*/*.log")]:
+        try:
+            fresh = now - p.stat().st_mtime < DISCOVER
+        except OSError:
+            continue
+        if not fresh or folder(p) in listed or (folder(p.parent), p.stem) in covered:
+            continue
+        info = read_log(p)
+        if info and info["games"]:
+            run = dict(info, label=p.stem, planned=False, dir=folder(p.parent),
+                       kind="sprt" if "llr" in info else "games",
+                       cap=SPRT_CAP if "llr" in info else None)
+            run["status"] = settle(run, False, now)
+            others.append(run)
+
+    all_statuses = list(statuses.values())
+    fallback = {(s["kind"], s["cap"]): r for s in all_statuses if (r := own_rate(s))}
+    rates: dict[tuple, float] = {}
+    cursor = latest = now
+    known = True
+    for run in plan:
+        group = (run["kind"], run["cap"], run["dir"])
+        if (rate := own_rate(run) if "source" in run else None):
+            rates[group] = rate
+        run["rate"] = rates.get(group) or fallback.get((run["kind"], run["cap"]))
+        if run["status"] in ENDED:
+            continue
+        if not run["rate"] or not known:
+            known = False
+            continue
+        run["starts"] = cursor
+        run["eta"] = cursor + expected_left(run, all_statuses) / run["rate"]
+        run["worst"] = latest + (run["cap"] - run.get("games", 0)) / run["rate"]
+        cursor, latest = run["eta"], run["worst"]
+    for run in others:
+        run["rate"] = own_rate(run)
+        if run["status"] in LIVELY and run["rate"] and run["cap"]:
+            run["eta"] = now + expected_left(run, all_statuses) / run["rate"]
+            run["worst"] = now + (run["cap"] - run["games"]) / run["rate"]
+    others.sort(key=lambda r: r["touched"])
+
+    runs = [{k: (None if isinstance(v, float) and not math.isfinite(v) else v)
+             for k, v in r.items()} for r in plan + others]
+    pending = any(r["status"] not in ENDED for r in plan)
+    return {"now": now, "title": title, "runs": runs,
+            "end": cursor if known and pending else None,
+            "latest": latest if known and pending else None}
+
+
+def clock(t: float | None) -> str:
+    return time.strftime("%H:%M", time.localtime(t)) if t else "?"
+
+
+def duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    m = seconds // 60
+    return f"{m // 60}h {m % 60:02d}m" if m >= 60 else f"{m}m"
+
+
+def score(run: dict, short: bool = False) -> str:
+    if run.get("w") is None:
+        return ""
+    if "lo" in run:
+        return f"+{run['w']} -{run['l']} ={run['d']}  {run['elo']:+.0f} [{run['lo']:+d}, {run['hi']:+d}]"
+    elo = f"Elo {run['elo'] or 0:+.1f} ±{run['err'] or 0:.1f}"
+    return elo if short else f"+{run['w']} -{run['l']} ={run['d']}  {elo}"
+
+
+def bar(fraction: float, width: int = 30) -> str:
+    filled = round(width * max(0.0, min(1.0, fraction)))
+    return "█" * filled + "░" * (width - filled)
+
+
+def gauge(llr: float, lower: float, upper: float, width: int = 31) -> str:
+    cells = ["─"] * width
+    cells[round(-lower / (upper - lower) * (width - 1))] = "┼"
+    cells[max(0, min(width - 1, round((llr - lower) / (upper - lower) * (width - 1))))] = "●"
+    return f"{lower:+.2f} ├{''.join(cells)}┤ {upper:+.2f}"
+
+
+def summary(model: dict) -> str:
+    now, runs = model["now"], model["runs"]
+    plan = [r for r in runs if r["planned"]]
+    ended = sum(r["status"] in ENDED for r in plan)
+    busy = sum(r["status"] in LIVELY for r in runs if not r["planned"])
+    parts = []
+    if plan:
+        parts.append(f"all {len(plan)} queued runs done" if ended == len(plan)
+                     else f"{ended} of {len(plan)} queued runs done")
+    if model["end"]:
+        parts.append(f"the queue ends ~{clock(model['end'])}, {duration(model['end'] - now)} "
+                     f"from now, {clock(model['latest'])} at the latest")
+    if busy:
+        parts.append(f"{busy} other match{'es' if busy > 1 else ''} running")
+    return ". ".join(p[:1].upper() + p[1:] for p in parts) if parts else "Nothing running"
+
+
+def render_text(model: dict, colour: bool) -> str:
+    def paint(code: str, s: str) -> str:
+        return f"\x1b[{code}m{s}\x1b[0m" if colour else s
+
+    now, runs = model["now"], model["runs"]
+    out = [paint("1", model["title"] or "Matches") + "   " + time.strftime("%H:%M:%S"),
+           summary(model), ""]
+    if not runs:
+        return "\n".join(out)
+    cols = shutil.get_terminal_size((110, 40)).columns
+    width = max(16, min(max(len(r["label"]) for r in runs), cols - 64))
+    ended = [r for r in runs if r["status"] in ENDED]
+    for run in ended:
+        label = run["label"][:width].ljust(width)
+        if run.get("verdict"):
+            tag = paint({"PASSED": "32", "FAILED": "31"}.get(run["verdict"], "33"),
+                        f"{run['verdict']:<12}")
+        else:
+            tag = paint("33", "stopped     ") if run["status"] == "stopped" else "done        "
+        count = str(run["games"]) if run["status"] == "done" or not run["cap"] \
+            else f"{run['games']}/{run['cap']}"
+        out.append(f"  {label}  {tag} {count:>8}  {score(run, True):<30} "
+                   f"{duration(run['touched'] - run['start']):>7}")
+    for run in (r for r in runs if r["status"] in LIVELY):
+        hue = "36" if run["status"] == "running" else "1;33"
+        games, cap = run["games"], run["cap"]
+        out += ["", f"  {paint('1', run['label'])}  {paint(hue, run['status'].upper())}"
+                + ("" if run["planned"] else paint("2", "  (not queued)"))]
+        rate = f"  {run['rate'] * 60:.0f}/min" if run["rate"] else ""
+        progress = f"{paint(hue, bar(games / cap))} {games}/{cap}" if cap else f"{games}"
+        out.append(f"    {progress} games{rate}  started {clock(run['start'])}")
+        if run.get("w") is not None:
+            out.append(f"    {score(run)}" + (f"  pairs {run['pairs']}" if run.get("pairs") else ""))
+        if run.get("llr") is not None:
+            out.append(f"    LLR {gauge(run['llr'], run['lower'], run['upper'])}  {run['llr']:+.2f}")
+        if run["status"] == "stalled":
+            out.append(paint("1;33", f"    no game for {duration(now - run['touched'])}: hung?"))
+        elif run.get("eta"):
+            line = f"    ends ~{clock(run['eta'])}, {duration(run['eta'] - now)} left"
+            if run["worst"] - run["eta"] > 60:
+                line += f", {clock(run['worst'])} at the cap"
+            out.append(line)
+    queued = [r for r in runs if r["status"] == "queued"]
+    if queued:
+        out.append("")
+    for run in queued:
+        label = run["label"][:width].ljust(width)
+        when = f"starts ~{clock(run['starts'])}, ends ~{clock(run['eta'])}" if run.get("eta") else ""
+        out.append(paint("2", f"  {label}  queued       {when}"))
+    return "\n".join(out)
+
+
+PAGE = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Match Queue</title>
+<style>
+:root { --bg:#f6f6f3; --card:#fff; --ink:#1c1c1a; --mute:#6c6b66; --line:#e2e1dc; --track:#ebeae5;
+  --run:#2b6cd4; --ok:#1d8048; --bad:#c0362d; --warn:#a86f12; }
+@media (prefers-color-scheme: dark) { :root { --bg:#141413; --card:#1d1d1b; --ink:#ecebe6;
+  --mute:#9b9a93; --line:#2d2c29; --track:#2a2926; --run:#6fa2ff; --ok:#4fc27f; --bad:#ff6e64;
+  --warn:#e2b04c; } }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink);
+  font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+main { max-width:880px; margin:0 auto; padding:22px 16px 48px; }
+h1 { font-size:20px; margin:0; }
+.sub { color:var(--mute); margin:2px 0 18px; }
+.num { font-variant-numeric:tabular-nums; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px;
+  padding:14px 16px; margin-bottom:12px; }
+.head { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
+.head b { flex:1 1 240px; }
+.tag { font-size:12px; font-weight:700; letter-spacing:.04em; }
+.running { color:var(--run); } .stalled { color:var(--warn); } .PASSED { color:var(--ok); }
+.FAILED { color:var(--bad); } .INCONCLUSIVE, .stopped { color:var(--warn); }
+.extra { color:var(--mute); font-size:12px; }
+.bar { position:relative; height:8px; background:var(--track); border-radius:99px; margin:10px 0 8px; }
+.bar i { position:absolute; left:0; top:0; bottom:0; background:var(--run); border-radius:99px; }
+.bar u { position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--mute); }
+.stalled .bar i { background:var(--warn); }
+.facts { display:flex; gap:6px 18px; flex-wrap:wrap; color:var(--mute); }
+.facts span b { color:var(--ink); font-weight:600; }
+.llr { position:relative; height:8px; margin:14px 0 4px; border-radius:99px;
+  background:linear-gradient(90deg, var(--bad), var(--track) 50%, var(--ok)); opacity:.85; }
+.llr i { position:absolute; top:-4px; width:4px; height:16px; margin-left:-2px; border-radius:2px;
+  background:var(--ink); }
+.llr u { position:absolute; top:0; bottom:0; width:1px; background:var(--ink); opacity:.4; }
+.ends { display:flex; justify-content:space-between; color:var(--mute); font-size:12px; }
+table { width:100%; border-collapse:collapse; }
+td { padding:7px 6px; border-top:1px solid var(--line); vertical-align:baseline; }
+tr:first-child td { border-top:0; }
+td.r { text-align:right; white-space:nowrap; }
+.queued td { color:var(--mute); }
+h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:22px 0 8px; }
+.warn { color:var(--warn); font-weight:600; }
+#stale { color:var(--warn); }
+@media (max-width:560px) { .hide { display:none; } }
+</style></head>
+<body><main>
+<h1 id="title">Matches</h1>
+<div class="sub num"><span id="summary"></span> <span id="stale" hidden>· the server is not answering</span></div>
+<div id="live"></div>
+<h2 id="qh">Queued</h2><div class="card"><table id="queued"></table></div>
+<h2 id="dh">Done</h2><div class="card"><table id="done"></table></div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const clock = t => t ? new Date(t * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '?';
+const dur = s => { s = Math.max(0, Math.round(s)); if (s < 60) return s + 's';
+  const m = Math.floor(s / 60); return m >= 60 ? Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm' : m + 'm'; };
+const sign = x => (x >= 0 ? '+' : '') + x;
+const ended = r => r.status === 'done' || r.status === 'stopped';
+function score(r, short) {
+  if (r.w === undefined || r.w === null) return '';
+  if (r.lo !== undefined) return `+${r.w} −${r.l} =${r.d} &nbsp; <b>${sign(r.elo)}</b> [${sign(r.lo)}, ${sign(r.hi)}]`;
+  const elo = `<b>${sign((r.elo || 0).toFixed(1))}</b> ± ${(r.err || 0).toFixed(1)}`;
+  return short ? elo : `+${r.w} −${r.l} =${r.d} &nbsp; Elo ${elo}`;
+}
+function live(r, now) {
+  let bar = '', facts = [];
+  if (r.cap) {
+    const mark = r.eta && r.rate ? `<u style="left:${Math.min(100, 100 * (r.games + (r.eta - now) * r.rate) / r.cap)}%" title="expected end"></u>` : '';
+    bar = `<div class="bar"><i style="width:${100 * r.games / r.cap}%"></i>${mark}</div>`;
+    facts.push(`<span><b class="num">${r.games}</b> / ${r.cap} games</span>`);
+  } else facts.push(`<span><b class="num">${r.games}</b> games</span>`);
+  if (r.rate) facts.push(`<span><b class="num">${Math.round(r.rate * 60)}</b>/min</span>`);
+  facts.push(`<span>started <b>${clock(r.start)}</b></span>`);
+  if (r.status === 'stalled') facts.push(`<span class="warn">no game for ${dur(now - r.touched)}: hung?</span>`);
+  else if (r.eta) facts.push(`<span>ends ~<b>${clock(r.eta)}</b>, ${dur(r.eta - now)} left` +
+    (r.worst - r.eta > 60 ? `, ${clock(r.worst)} at the cap` : '') + '</span>');
+  let llr = '';
+  if (r.llr !== undefined && r.llr !== null) {
+    const at = x => 100 * (x - r.lower) / (r.upper - r.lower);
+    llr = `<div class="llr"><u style="left:${at(0)}%"></u><i style="left:${Math.max(0, Math.min(100, at(r.llr)))}%"></i></div>
+      <div class="ends num"><span>${r.lower.toFixed(2)} fail</span><span>LLR <b>${sign(r.llr.toFixed(2))}</b></span><span>pass ${sign(r.upper.toFixed(2))}</span></div>`;
+  }
+  return `<div class="card ${r.status}"><div class="head"><b>${esc(r.label)}</b>
+    ${r.planned ? '' : '<span class="extra">not queued</span>'}
+    <span class="tag ${r.status}">${r.status.toUpperCase()}</span></div>${bar}
+    <div class="facts" style="margin-top:${r.cap ? 0 : 8}px">${facts.join('')}</div>
+    <div class="facts num" style="margin-top:4px">${score(r)}${r.pairs ? ' &nbsp; pairs [' + r.pairs.join(', ') + ']' : ''}</div>${llr}</div>`;
+}
+function render(m) {
+  const now = m.now, runs = m.runs;
+  $('#title').textContent = m.title || 'Matches';
+  document.title = m.title ? 'Queue: ' + m.title : 'Match Queue';
+  $('#summary').textContent = m.summary + ` · updated ${new Date(now * 1000).toLocaleTimeString()}`;
+  $('#live').innerHTML = runs.filter(r => r.status === 'running' || r.status === 'stalled').map(r => live(r, now)).join('');
+  const queued = runs.filter(r => r.status === 'queued');
+  $('#qh').hidden = $('#queued').parentNode.hidden = !queued.length;
+  $('#queued').innerHTML = queued.map(r => `<tr class="queued"><td>${esc(r.label)}</td>
+    <td class="r num">${r.eta ? '~' + clock(r.starts) + ' – ' + clock(r.eta) : ''}</td></tr>`).join('');
+  const done = runs.filter(ended);
+  $('#dh').hidden = $('#done').parentNode.hidden = !done.length;
+  $('#done').innerHTML = done.slice().reverse().map(r => {
+    const tag = r.verdict || r.status;
+    return `<tr><td>${esc(r.label)}</td><td class="tag ${tag}">${tag.toUpperCase()}</td>
+      <td class="r num hide">${r.status === 'stopped' && r.cap ? r.games + '/' + r.cap : r.games} g</td>
+      <td class="r num">${score(r, true)}</td><td class="r num hide">${dur(r.touched - r.start)}</td></tr>`;
+  }).join('');
+}
+async function tick() {
+  try { render(await (await fetch('data', {cache: 'no-store'})).json()); $('#stale').hidden = true; }
+  catch (e) { $('#stale').hidden = false; }
+}
+tick(); setInterval(tick, 3000);
+</script></body></html>
+"""
+
+
+def serve(queue: Path, host: str, port: int) -> None:
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path.split("?")[0] == "/data":
+                model = build(queue)
+                model["summary"] = summary(model)
+                body, kind = json.dumps(model).encode(), "application/json"
+            else:
+                body, kind = PAGE.encode(), "text/html; charset=utf-8"
+            self.send_response(200)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args) -> None:
+            pass
+
+    server = http.server.ThreadingHTTPServer((host, port), Handler)
+    print(f"serving at http://{'localhost' if host == '127.0.0.1' else host}:{port}", flush=True)
+    server.serve_forever()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--queue", type=Path, default=QUEUE)
+    parser.add_argument("--interval", type=float, default=5.0, help="seconds between redraws")
+    parser.add_argument("--once", action="store_true", help="print once and exit")
+    parser.add_argument("--serve", type=int, metavar="PORT", help="serve a page instead")
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="0.0.0.0 lets other machines on the network see the page")
+    args = parser.parse_args()
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    try:
+        if args.serve:
+            serve(args.queue, args.host, args.serve)
+        elif args.once:
+            print(render_text(build(args.queue), sys.stdout.isatty()))
+        else:
+            os.system("")  # lets a Windows console take ANSI escapes
+            while True:
+                text = render_text(build(args.queue), True).replace("\n", "\x1b[K\n")
+                sys.stdout.write("\x1b[H" + text + "\x1b[K\n\x1b[J")
+                sys.stdout.flush()
+                time.sleep(args.interval)
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
