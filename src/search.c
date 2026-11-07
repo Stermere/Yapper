@@ -88,7 +88,7 @@ static i64 now_ms(void) {
 void search_init(void) {
     for (int depth = 1; depth < 64; depth++) {
         for (int moves = 1; moves < 64; moves++) {
-            LmrTable[depth][moves] = (int)(0.5 + log((double)depth) * log((double)moves) / 2.0);
+            LmrTable[depth][moves] = (int)(0.5 + log((double)depth) * log((double)moves) / 1.6);
         }
     }
     Search.arena        = malloc(ARENA_MOVES * sizeof(Move));

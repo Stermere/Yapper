@@ -2115,12 +2115,76 @@ the search has evidence of its own, which pays with this prior and costs 9 with 
 history before every position, so it cannot see the change. The heavier weight followed probes with
 history warm, every own ply of a game searched in turn, where 1536 to 2048 ordered best.
 
-Staged: h4, bench 1250165 from `make` and `make release`, binary external/baselines/e52.exe. The
-fitter is `yapper policyfit` with threads, DATA.md. Not yet run: the gauntlets against syntaks and
-Topaz, and the fit on every size. The work copy, the probes and the candidates are in
-external/build/pa, pc, pd, pf and ph.
+Committed: h4, bench 1250165 from `make` and `make release`, binary external/baselines/e52.exe.
+The fitter is `yapper policyfit` with threads, DATA.md. Its gauntlets are in E53. Not yet run: the
+fit on every size. The work copy, the probes and the candidates are in external/build/pa, pc, pd,
+pf and ph.
+
+## E53: a review without the history, and stronger reductions
+
+**How the changes were found.** A subagent read `src/` and the rules but not this file, STATUS.md
+or ARCHITECTURE.md, so that what earlier experiments concluded could not steer it. Nine of its
+suggestions were built, each one change on E52. Two of them are Tak's own, r1 and r2, and the rest
+are generic search and time knobs. The one defect it found was real: a road to answer skips the
+moves that cannot stop it, and history still penalised them as if they had failed (r4).
+
+**Against E52**, 2+0.02, [0, 10]:
+
+| Change | Bench | Result |
+|---|---|---|
+| r1: a side that ends the game on the count, by a flat on its last stone or on the last empty square, scores the win at once in search and quiescence | 1248872 | INCONCLUSIVE at the cap, 2000 games, +728 -712 =560, +2.8 +/- 12.3, pairs [113, 190, 379, 204, 114] |
+| r2: r1, and no reverse futility, null move or move-count pruning while the side to move is on its last stones, against r1 | 1247270 | **FAILED**, 422 games, +120 -181 =121, -50.6 +/- 26.0, pairs [31, 56, 81, 29, 14] |
+| r3: no null move | 1232932 | INCONCLUSIVE at the cap, 2000 games, +744 -714 =542, +5.2 +/- 12.5, pairs [114, 199, 348, 221, 118] |
+| r4: history spares the moves a road answer skipped | 1273229 | INCONCLUSIVE at the cap, 2000 games, +703 -699 =598, +0.7 +/- 12.3, pairs [111, 212, 343, 230, 104] |
+| r5: the stand pat 50 lower when the other side can finish a road by a spread | 1290195 | **FAILED**, 1078 games, +365 -426 =287, -19.7 +/- 17.7, pairs [78, 125, 182, 88, 66] |
+| r6: a quarter more of the clock a move | 1250165 | INCONCLUSIVE at the cap, 2000 games, +763 -669 =568, +16.3 +/- 12.3, pairs [92, 200, 364, 210, 134] |
+| r7: the killers moved two plies toward the root at each search | 1250165 | **FAILED**, 1596 games, +564 -614 =418, -10.9 +/- 14.3, pairs [101, 183, 281, 131, 102] |
+| r8: reductions `/ 1.6`, for `/ 2.0` | 1060614 | INCONCLUSIVE at the cap, 2000 games, +754 -671 =575, +14.4 +/- 12.4, pairs [103, 181, 378, 206, 132] |
+| r9: at the first leaf ply with no road to answer, spreads that win two tops or more are searched | 1388465 | INCONCLUSIVE at the cap, 2000 games, +721 -731 =548, -1.7 +/- 12.4, pairs [117, 195, 387, 183, 118] |
+
+r6 and r8 ended with their intervals above zero, so each ran again from nothing, with another
+opening order (`--seed 2`) and a cap of 4000:
+
+| Again | Result |
+|---|---|
+| r8 | **PASSED**, 694 games, +291 -206 =197, **+42.8 +/- 22.0**, pairs [31, 59, 111, 86, 60] |
+| r6 | INCONCLUSIVE at the cap, 4000 games, +1456 -1404 =1140, +4.5 +/- 8.7, pairs [231, 366, 749, 428, 226] |
+
+r8 passed on its second run, which is a second chance to pass, so the size to believe is the two
+runs together: 2694 games, **+21.7 +/- 10.8**. r6's two runs make 6000 games at +8.5 +/- 7.1,
+which [0, 10] cannot pass at the cap. E42 found `/ 1.75` neutral against F1, -1.2 +/- 12.9. E52's
+prior has come since, and a guess, not measured, is that a better order leaves the late moves less
+often best, so reducing them harder costs less. Bench fell 15%, to 1060614.
+
+In r1's 2000 games one was lost on time. The engine averaged 0.06 s a move on the 0.02 increment
+until its clock sat near the 20 ms it keeps back, and then one slow reply flagged. Nothing in r1
+touches the clock, and older match logs hold the same kind of loss.
+
+**As staged**, r8, bench 1060614 from `make` and `make release`, binary
+external/baselines/e53.exe, against E52 run beside it:
+
+| Match | Result |
+|---|---|
+| syntaks at 1/4 of 5+0.05, 600 games, nothing else running | +285 -245 =70, **+23 [-3, +49]** |
+| E52 again, straight after, the same | +289 -226 =85, +36 [+10, +63], where E52's own run read -27 |
+| Topaz at 5+0.05, 200 games, the same | +121 -47 =32, **+134 [+85, +182]** |
+| E52 again, the same | +119 -35 =46, +155 [+107, +201], where E52's own run read +143 |
+
+13 and 21 behind E52 run beside it, both inside either interval and both the other way from
+self-play: against other engines the gain is not seen yet. E52 itself moved 63 against syntaks
+between the afternoon and the evening of one day, so only a run beside it compares.
+
+E52's own gauntlets, that afternoon, read +238 -285 =77, -27 [-53, +0] against syntaks at a
+quarter and +119 -41 =39, +143 [+94, +190] against Topaz over 199 games, with E51 straight after
+at +236 -290 =74, -31 [-58, -4] and +120 -47 =33, +132 [+83, +180]: E52 4 and 11 ahead. The
+variants are in external/build/rv, the work notes in external/build/pa/notes.md.
 
 ## Mistakes worth not repeating
+
+- **A racetrack run can hang with both engines idle.** E52's Topaz gauntlet stopped on its last
+  game for four hours, neither engine thinking, and everything queued behind it waited. Run
+  racetrack under `timeout`, and watch the queue in `tools/progress.py`, which marks a run
+  stalled.
 
 - **A prior that predicts better does not order better by as much.** E52's ranked the cutting
   move first a third more often than E51's, and the search's order gained 1.5 points, because
