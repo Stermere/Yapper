@@ -117,7 +117,7 @@ make format && make
 
 That is the fit of E48's network: two views of 64 filters and a head of 16 and 32 units. E44's
 was the same without the head, E42's at one view of 128 filters, E40's that without gen 10, and
-E39's that at 32 filters. E49's, which plays now, is E48's carried on, built with E48's `net.h`:
+E39's that at 32 filters. E49's is E48's carried on, built with E48's `net.h`:
 
 ```sh
 G="external/data/gen11/[5678]s/gen11-20k-*.ydg"
@@ -125,10 +125,13 @@ yapper nntrain src/net.h 1 0.7 2 15 --warm --rate 0.0005 --share 7=0.33 --share 
     --lambda 3=0.5 --lambda 4=0.5 <E48's games, as above> $G $G $G $G
 ```
 
+E69's, which plays now, is the same from E49's `net.h`, with gen 13 listed four times after gen 11,
+one file a cell: `external/data/gen13/joined/gen13-*.ydg`.
+
 Gen 11 is listed four times, which weighs it four times as heavily: listed once, as a twentieth of
 the positions, it hardly moved the network. Windows starts no command longer than 32,767
-characters, and the recipe above is 28,000; join a run's files into one before listing it again,
-since joining files joins datasets (E69). The arguments are the
+characters, and E49's recipe is 28,000; join a run's files into one before listing it again,
+since joining files joins datasets, E69. The arguments are the
 output, the one-in-N positions to keep, `lambda`, the epochs and the threads, then the options,
 then the games. A size is in the network when the games have some of it, and a size they do not
 have counts flats. The engine picks up `net.h` the next time it is built. After swapping one in by

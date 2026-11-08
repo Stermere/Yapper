@@ -2965,12 +2965,14 @@ which are all they have), and on gen 13's 60k games alone for 6x6, the other siz
 | The 60k half against the 20k half | **FAILED**, 976 games, +313 -368 =295, **-19.6 +/- 17.8**, pairs [63, 117, 166, 96, 46] |
 | 20k+ fine-tune against all | INCONCLUSIVE at the cap, 2000 games, +749 -683 =568, **+11.5 +/- 12.6**, LLR +1.56, pairs [105, 205, 345, 209, 136], bench 1350467 |
 | 60k fine-tune against all | **FAILED**, 1446 games, +504 -555 =387, **-12.3 +/- 14.9**, pairs [97, 155, 256, 132, 83] |
+| 20k+ fine-tune against all, `--seed 2` | INCONCLUSIVE at the cap, 2000 games, +716 -720 =564, **-0.7 +/- 12.3**, pairs [118, 198, 358, 222, 104], one loss on time |
+| The two 20k+ runs, pooled | 4000 games, **+5.4 +/- 8.8**, pairs [223, 403, 703, 431, 240] |
 
-None lost on time. For the same machine time, three times the games at 20k nodes beat a third of
-them at 60k: more positions teach more than deeper scores do, at these budgets. Finishing on the
-deeper games alone forgets; finishing on everything at 20k and up leans better, and gets a second
-SPRT at `--seed 2`. A fine-tune's held-out losses do not compare with the fits above: it reads
-other games.
+None of the others lost on time. For the same machine time, three times the games at 20k nodes beat
+a third of them at 60k: more positions teach more than deeper scores do, at these budgets.
+Finishing on the deeper games alone forgets, and finishing on everything at 20k and up gains too
+little to show. A fine-tune's held-out losses do not compare with the fits above: it reads other
+games. The fit on all of gen 13 is the network now, bench 1341109.
 
 ## Mistakes worth not repeating
 
