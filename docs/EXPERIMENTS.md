@@ -2745,6 +2745,83 @@ for one node a process.
 The variants are in `external/build/e65`, each tree with its own `src`, and `chain.sh` ran them;
 the cut's binary is `external/build/e65cut/e65cut.exe`.
 
+## E66: the first SPSA run, 38 tunables at once
+
+E54's tuner, run for the first time, on E65's engine (bench 902225). `tools/tune.py --name
+e66-test --pairs 10000 --tc 2+0.02 --book tests/books/6s_4ply.txt --concurrency 8 --r-end 0.004`,
+the seven `Time` tunables excluded since a test at 2+0.02 reaches them only as one clock. 10,000
+pairs in 3 h 32 m, seed 914742700, nothing else running, one game of 20,000 lost on time. Its own
+tally, +7299 -7259 =5442, is each pair's plus side against its minus side, so it measures nothing.
+
+Before the run, tune.py learned to pause: `--pause` lets the pairs in flight end and exits,
+`--resume` carries on, a run plays its own copy of the engine, and its workers die with it, where
+before a killed tuner left 8 workers and 16 engines playing. `tools/progress.py` shows an unfinished
+run as paused. A 300-pair test paused, was killed twice and resumed to the end, with the state and
+the per-pair history agreeing each time.
+
+Where it ended, rounded, for the 29 that moved a whole step; the other nine rounded back to their
+defaults (RfpDepth, the three null move numbers, LmpBase, LmrMoves, LmrCutNode, LmrPvNode,
+AspirationDepth):
+
+| Tunable | Was | Now | | Tunable | Was | Now |
+|---|---|---|---|---|---|---|
+| QuiesceDepth | 4 | 3 | | HistoryLimit | 16384 | 12966 |
+| RfpMargin | 90 | 49 | | HistoryKeep | 8 | 10 |
+| SingularDepth | 6 | 5 | | PriorWeight | 6 | 5 |
+| SingularTtDepth | 3 | 2 | | PriorDepth | 2 | 3 |
+| SingularMargin | 32 | 44 | | OrderFlatNear | 300 | 262 |
+| LmpDepth | 6 | 8 | | OrderFlat | 100 | 114 |
+| LmpSlope | 6 | 4 | | OrderCap | 150 | 197 |
+| LmpImprovingBase | 24 | 22 | | OrderRoadOurs | 8192 | 7710 |
+| LmpImprovingSlope | 12 | 7 | | OrderRoadTheirs | 4096 | 3916 |
+| LmrBase | 50 | 39 | | OrderSwing | 256 | 367 |
+| LmrDivisor | 160 | 170 | | AspirationWindow | 40 | 25 |
+| LmrDepth | 3 | 2 | | AspirationGrowth | 200 | 176 |
+| HistoryBonusMul | 16 | 19 | | AspirationLimit | 500 | 482 |
+| HistoryBonusMax | 4000 | 3983 | | ThreatOne | 60 | 36 |
+| | | | | ThreatMany | 220 | 217 |
+
+The largest moves for their range: reverse futility's margin nearly halved, the price of one road
+threat down by 40%, the aspiration window narrowed, move-count pruning out to depth 8 with a
+gentler slope, one ply less of quiescence, and the prior used from depth 3 rather than 2.
+
+| Match | Result |
+|---|---|
+| The candidate against the defaults, the same tune build both sides, 2+0.02, [0, 5] | **PASSED**, 982 games, +431 -288 =263, **+51.0 +/- 17.6**, pairs [32, 77, 182, 116, 84], no game on time |
+| Against syntaks at full strength, 8+0.08 each, 2 komi, racetrack, stopped at 509 of 1000 | +49 -434 =26, **-343 [-387, -297]**; white +10 -228 =17, black +39 -206 =9 |
+
+Bench 1485338 from `make`, `make release` and `make TUNE=on`, and from the tune build that played
+the SPRT given the candidate's options, so what is staged is what was tested. `make check` passes.
+Not yet done: a confirmation against the old defaults at another time control, which TESTING.md
+asks for, and a run with the clock's tunables. The binary is `external/baselines/e66.exe`.
+
+**Where the 434 losses come from**, read from the PTN by `tools/gamestats.py` and a scratch script
+over the scores racetrack keeps. The user heard on the Tak Discord that syntaks is the strongest
+engine by a wide margin, so this is the gap at the top rather than a fault.
+
+- Not the clock. Each side used about 10 s a game, the median 10.1 for Yapper and 10.3 for syntaks;
+  syntaks spends more in the opening, mean 0.44 s a move before ply 20 against 0.19, and less after.
+  On that time it reports depth 15, 14 and 12 by phase against 13, 13 and 11, though two engines'
+  depths need not mean the same.
+- Mostly flats, by a little. 300 losses on flats with a median margin of 2 flats, 134 by road, 130
+  of them finished by a spread. syntaks ended all 300 flat losses itself, placing its last stone;
+  by then Yapper scored itself near -10. In 82 losses Yapper scored itself above +1 in the last
+  third of the game.
+- Decided in the middle game, at level flats. Taking the turn as the ply after which syntaks scores
+  Yapper below -1 for good, 428 losses have one: 80 before ply 20, 188 from 20 to 49, 160 at 50 or
+  later, median ply 40. At the turn the flat count with komi is level (median 0) and Yapper's own
+  score just before it is -0.18; Yapper's score falls below -1 a median of 6 plies later (p90 21).
+- syntaks foresees the result better at every stage. Where a score is past 0.3 either way, its sign
+  matches the result for syntaks at 56, 70, 77, 83 and 89% at plies 20, 30, 40, 50 and 60, and for
+  Yapper at 44, 52, 61, 70 and 76%. Yapper loses 85% of these games, so its numbers say it is too
+  hopeful, not that it is worse than chance.
+- Too hopeful as black. Of 41 losses turned between plies 20 and 50 with Yapper above +0.3 just
+  before, 32 had Yapper as black, which with 2 komi is the side the score already favours.
+
+So the gap is judgement more than speed: positions that count level and that syntaks already
+reads as lost, about three of Yapper's moves before Yapper does. The scripts are
+`external/analysis/analyse.py` and `analyse2.py`; the games are `external/games/tak/e66-stc.ptn`.
+
 ## Mistakes worth not repeating
 
 - **Bench is not a tree-size measure.** Its 13 positions are mostly openings and other sizes. E62's

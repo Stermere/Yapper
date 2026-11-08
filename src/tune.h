@@ -19,61 +19,61 @@
 /* clang-format off */
 #define TUNABLES(X)                                                                         \
     /* The leaf search: how many plies of forced replies it follows. */                    \
-    X(QuiesceDepth,        4,     1,    8)                                                  \
+    X(QuiesceDepth,        3,     1,    8)                                                  \
     /* Reverse futility: below this depth, by this margin a ply. */                        \
     X(RfpDepth,            6,     1,    12)                                                 \
-    X(RfpMargin,           90,    20,   300)                                                \
+    X(RfpMargin,           49,    20,   300)                                                \
     /* Null move: from this depth, reduced by base + depth / divisor. */                   \
     X(NmpDepth,            3,     1,    8)                                                  \
     X(NmpBase,             3,     1,    8)                                                  \
     X(NmpDivisor,          4,     1,    12)                                                 \
     /* Singular extension: from this depth, on a table entry at most this much shallower,  \
      * by a margin in sixteenths a ply. */                                                  \
-    X(SingularDepth,       6,     3,    12)                                                 \
-    X(SingularTtDepth,     3,     1,    6)                                                  \
-    X(SingularMargin,      32,    0,    160)                                                \
+    X(SingularDepth,       5,     3,    12)                                                 \
+    X(SingularTtDepth,     2,     1,    6)                                                  \
+    X(SingularMargin,      44,    0,    160)                                                \
     /* Move-count pruning: below this depth, after (base + slope * depth^2) / 4 moves, and \
      * its own pair when improving. Quarters, so a slope of 1.5 is exact. */               \
-    X(LmpDepth,            6,     1,    12)                                                 \
+    X(LmpDepth,            8,     1,    12)                                                 \
     X(LmpBase,             12,    0,    48)                                                 \
-    X(LmpSlope,            6,     1,    24)                                                 \
-    X(LmpImprovingBase,    24,    0,    96)                                                 \
-    X(LmpImprovingSlope,   12,    1,    48)                                                 \
+    X(LmpSlope,            4,     1,    24)                                                 \
+    X(LmpImprovingBase,    22,    0,    96)                                                 \
+    X(LmpImprovingSlope,   7,     1,    48)                                                 \
     /* Late move reductions: base + ln(depth) ln(moves) / divisor, both in hundredths,     \
      * from this depth and move, more at a cut node and less at a PV node. */              \
-    X(LmrBase,             50,    0,    200)                                                \
-    X(LmrDivisor,          160,   100,  400)                                                \
-    X(LmrDepth,            3,     1,    8)                                                  \
+    X(LmrBase,             39,    0,    200)                                                \
+    X(LmrDivisor,          170,   100,  400)                                                \
+    X(LmrDepth,            2,     1,    8)                                                  \
     X(LmrMoves,            4,     1,    12)                                                 \
     X(LmrCutNode,          1,     0,    3)                                                  \
     X(LmrPvNode,           1,     0,    3)                                                  \
     /* History: a cutoff earns min(depth^2 * mul, max), entries level off at the limit,    \
      * and a search starts with this many sixteenths of what the last one left. */          \
-    X(HistoryBonusMul,     16,    1,    64)                                                 \
-    X(HistoryBonusMax,     4000,  500,  16000)                                              \
-    X(HistoryLimit,        16384, 4096, 65536)                                              \
-    X(HistoryKeep,         8,     0,    16)                                                 \
+    X(HistoryBonusMul,     19,    1,    64)                                                 \
+    X(HistoryBonusMax,     3983,  500,  16000)                                              \
+    X(HistoryLimit,        12966, 4096, 65536)                                              \
+    X(HistoryKeep,         10,    0,    16)                                                 \
     /* The move prior, from this depth: history units for each 256th of a nat. */          \
-    X(PriorWeight,         6,     0,    24)                                                 \
-    X(PriorDepth,          2,     1,    6)                                                  \
+    X(PriorWeight,         5,     0,    24)                                                 \
+    X(PriorDepth,          3,     1,    6)                                                  \
     /* Below it, the order by hand, in history units: a flat beside our road stones or     \
      * not, a capstone, a placement that leaves our road to finish or takes a square       \
      * that would leave theirs, and a spread for each top it wins. */                       \
-    X(OrderFlatNear,       300,   0,    2000)                                               \
-    X(OrderFlat,           100,   0,    1000)                                               \
-    X(OrderCap,            150,   0,    1500)                                               \
-    X(OrderRoadOurs,       8192,  0,    32768)                                              \
-    X(OrderRoadTheirs,     4096,  0,    16384)                                              \
-    X(OrderSwing,          256,   0,    2048)                                               \
+    X(OrderFlatNear,       262,   0,    2000)                                               \
+    X(OrderFlat,           114,   0,    1000)                                               \
+    X(OrderCap,            197,   0,    1500)                                               \
+    X(OrderRoadOurs,       7710,  0,    32768)                                              \
+    X(OrderRoadTheirs,     3916,  0,    16384)                                              \
+    X(OrderSwing,          367,   0,    2048)                                               \
     /* Aspiration: from this depth, a window that grows by this percent at each fail,      \
      * until it is past the limit and the search opens fully. */                            \
     X(AspirationDepth,     4,     1,    10)                                                 \
-    X(AspirationWindow,    40,    5,    200)                                                \
-    X(AspirationGrowth,    200,   120,  400)                                                \
-    X(AspirationLimit,     500,   100,  2000)                                               \
+    X(AspirationWindow,    25,    5,    200)                                                \
+    X(AspirationGrowth,    176,   120,  400)                                                \
+    X(AspirationLimit,     482,   100,  2000)                                               \
     /* What the evaluation takes off for one road threat by the other side, and for more. */ \
-    X(ThreatOne,           60,    0,    400)                                                \
-    X(ThreatMany,          220,   0,    1000)                                               \
+    X(ThreatOne,           36,    0,    400)                                                \
+    X(ThreatMany,          217,   0,    1000)                                               \
     /* The clock. A move gets the time left over moves + stones * per-stone / 100, at      \
      * least min, and this percent of the increment. The hard limit is a percent of that,  \
      * capped at a percent of the time left, and no iteration starts past a percent of     \
