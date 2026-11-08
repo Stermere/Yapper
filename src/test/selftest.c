@@ -369,7 +369,7 @@ static void check_frame(const Board *b, NNFrame *frames, const Move *made, int p
     u64 touched    = 0;
     int base       = ply - 1;
     while (base >= 0 && ply - base <= 8) {
-        touched |= nn_move_squares(made[base]);
+        touched |= move_squares(made[base]);
         if (frames[base].computed) {
             break;
         }

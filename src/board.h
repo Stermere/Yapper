@@ -197,6 +197,18 @@ static inline StoneType board_top(const Board *b, int sq) {
     return (b->walls >> sq) & 1 ? WALL : (b->caps >> sq) & 1 ? CAP : FLAT;
 }
 
+/* Komi in half flats for `color`, which is black's. */
+static inline int board_komi(const Board *b, int color) {
+    return color == BLACK ? b->halfkomi : -b->halfkomi;
+}
+
+/* Half flats ahead for `color` with komi, as a game ending now would be counted. */
+static inline int board_flat_lead(const Board *b, int color) {
+    return 2 * (__builtin_popcountll(board_flats(b, color)) -
+                __builtin_popcountll(board_flats(b, !color))) +
+           board_komi(b, color);
+}
+
 /* For a position being written by hand, then finished with board_refresh(). The stones
  * are given bottom first. */
 void board_set_stack(Board *b, int sq, const u8 *colors, int height, StoneType top);

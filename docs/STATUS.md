@@ -56,7 +56,20 @@ all 254M, so the filters learn connectivity by themselves given the data, E57. A
 feature-map network, each square's hidden vector from a 5x5 kernel tied under the board's eight
 symmetries, with 8 base filters and 123,000 parameters, beat the engine's own architecture fitted
 the same way on the same games by **0.0073 against results**, twice what two views gave in E44;
-untied and wider it gained half as much, E58. That is the direction: see Next.
+untied and wider it gained half as much, E58.
+
+E61 measured where the search's time goes and where the evaluation and the prior fall short. The
+two networks take 57% of the search, the value network 39% and the prior 17%, and a list scored by
+the prior costs as much as 11 evaluations. On every 6x6 game, 150.7M positions fitted on the GPU,
+E58's lead was gone: the 8-filter map trails the engine's network by 0.0011 against results, a
+16-filter map ties it, and the two side by side gain nothing, so no shape within reach makes the
+evaluation much better on these games. The prior is the weak part: it names the 20,000-node
+search's move 21.8% of the time, where the value network's best child one ply down names 25.4% and
+a depth 1 search 34.0%, and twice the games move it 0.1. A prior read off a small feature map's
+trunk named 23.4% to its 21.1%. E62 fitted a prior on the GPU to 28.3%, short of a depth 1 search's
+32.4% on quiet positions and seven times today's cost, and ordering near the root by a depth 1
+search lost 25 to 32 in three forms: it cost a sixth more nodes on real positions and ordered no
+better than history and the prior. See Next.
 
 ## Done and verified
 
@@ -149,15 +162,14 @@ has to be the one of its commit's day: `topaz-tei.exe` is dcb8cd2 on branch `bac
    fitted on cutoffs ordered worse than one fitted on root choices, E59. A per-feature history
    lost as first written because shared features drown in maluses, E56; the shared-malus form is
    the open question there.
-7. The feature-map network, E58: the first architecture to beat the global templates on the
-   same games, and the tied, smaller form beat them most, by 0.0073 against results with 16
-   pools a view. What it needs next: the same comparison on all 254M positions with the full
-   recipe, since E57's gain on the subset vanished there, and the right F; then an engine design
-   that keeps a frame of 36 squares by 64 units by two views, updates the 25 squares a change
-   touches, pools 4608 units, and reads the policy off the same accumulator so the prior costs
-   nothing and can run at depth 1. The cost in play is about 1.6 times today's update and 4.5
-   times the pooling, against a gain the fit puts near 70 at equal nodes. E60's openings from
-   the opponents' games belong in the next generation's mix.
+7. The order, E61 and E62. The prior names the 20,000-node search's move 21.8% of the time, the
+   value network one ply down 25.4%, a depth 1 search 34.0%, and a prior fitted on the GPU with a
+   trunk of its own 28.3%, at seven times today's cost. None of that is the order inside the
+   tree: ordering by a depth 1 search from depth 6 cost a sixth more nodes to a depth on real
+   positions and lost 25 to 32 in three forms, E62, as E52 found a better-predicting prior ordered
+   little better. History already holds what refutes in the tree; a prior is worth pursuing for
+   its cost, not its top 1. The feature map as an evaluation does not pay either, E61. E60's
+   openings from the opponents' games belong in the next generation's mix.
 5. Run on real ARM and measure it, since that is a stated target.
 6. Make and unmake have plateaued at about 3 ns a node on the start position and 8.5 ns on the
    endgame: E7 lists what no longer helps. Any further lead has to come from an idea that is not

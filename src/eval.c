@@ -23,13 +23,12 @@ static inline int output_bucket(int left) {
 }
 
 void eval_net_inputs(const Board *b, NNInputs *in) {
-    const int us   = board_stm(b);
-    const int komi = us == WHITE ? -b->halfkomi : b->halfkomi;
-    in->stm        = us;
-    in->bucket     = output_bucket(stones_left(b));
-    in->lead       = (popcount(board_flats(b, us)) - popcount(board_flats(b, !us))) * 2 + komi;
-    in->reserve    = b->flats[us] + b->capstones[us] - b->flats[!us] - b->capstones[!us];
-    in->komi       = komi;
+    const int us = board_stm(b);
+    in->stm      = us;
+    in->bucket   = output_bucket(stones_left(b));
+    in->lead     = board_flat_lead(b, us);
+    in->reserve  = b->flats[us] + b->capstones[us] - b->flats[!us] - b->capstones[!us];
+    in->komi     = board_komi(b, us);
 }
 
 /* Far inside the win bound, which a stand pat must never reach. */

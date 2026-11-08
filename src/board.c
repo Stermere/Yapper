@@ -495,8 +495,7 @@ static inline Outcome flat_outcome(const Board *b) {
         (b->flats[BLACK] | b->capstones[BLACK]) != 0) {
         return ONGOING;
     }
-    const int lead =
-        2 * (popcount(board_flats(b, WHITE)) - popcount(board_flats(b, BLACK))) - b->halfkomi;
+    const int lead = board_flat_lead(b, WHITE);
     return lead > 0 ? WHITE_FLATS : lead < 0 ? BLACK_FLATS : DRAW;
 }
 

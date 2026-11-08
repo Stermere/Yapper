@@ -69,4 +69,22 @@ static inline StoneType move_stone(Move m) { return (StoneType)(move_kind(m) - 1
 static inline Direction move_direction(Move m) { return (Direction)move_kind(m); }
 static inline int move_carry(Move m) { return 32 - __builtin_clz(move_pattern(m)); }
 
+/* The squares a move changes: a spread's source and every square it drops on. A pass changes
+ * none. */
+static inline u64 move_squares(Move m) {
+    if (m == MOVE_NONE) {
+        return 0;
+    }
+    int sq   = move_square(m);
+    u64 bits = 1ULL << sq;
+    if (!move_is_place(m)) {
+        const int step = DirectionStep[move_direction(m)];
+        for (int hops = __builtin_popcount((unsigned)move_pattern(m)); hops > 0; hops--) {
+            sq += step;
+            bits |= 1ULL << sq;
+        }
+    }
+    return bits;
+}
+
 #endif

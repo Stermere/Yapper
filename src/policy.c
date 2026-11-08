@@ -200,22 +200,10 @@ static inline int dist_bucket(int d) { return d <= 1 ? 0 : d >= 4 ? 3 : d - 1; }
 
 /* The squares a move touched, those beside them and those two away. */
 static void touched(const Board *b, Move m, u64 rings[3]) {
-    if (m == MOVE_NONE) {
-        rings[0] = rings[1] = rings[2] = 0;
-        return;
-    }
-    int sq   = move_square(m);
-    u64 bits = 1ULL << sq;
-    if (!move_is_place(m)) {
-        const int step = DirectionStep[move_direction(m)];
-        for (int hops = __builtin_popcount((unsigned)move_pattern(m)); hops > 0; hops--) {
-            sq += step;
-            bits |= 1ULL << sq;
-        }
-    }
-    rings[0] = bits;
-    rings[1] = neighbours(bits) & b->mask & ~bits;
-    rings[2] = neighbours(rings[1]) & b->mask & ~bits & ~rings[1];
+    const u64 bits = move_squares(m);
+    rings[0]       = bits;
+    rings[1]       = neighbours(bits) & b->mask & ~bits;
+    rings[2]       = neighbours(rings[1]) & b->mask & ~bits & ~rings[1];
 }
 
 static inline int ring_index(const u64 rings[3], u64 bit) {
@@ -246,10 +234,9 @@ void policy_context(const Board *b, const u64 ends[4], const u64 their_ends[4], 
     const int left  = ours < other ? ours : other;
     const int part  = 4 * left / start;
     ctx->phase      = part >= 3 ? 0 : 3 - part;
+    ctx->lead       = board_flat_lead(b, us);
     if (left <= 6 || popcount(empty) <= 6) {
-        const int lead = 2 * (popcount(board_flats(b, us)) - popcount(board_flats(b, !us))) +
-                         (us == BLACK ? b->halfkomi : -b->halfkomi);
-        ctx->race = lead < 0 ? 0 : lead == 0 ? 1 : 2;
+        ctx->race = ctx->lead < 0 ? 0 : ctx->lead == 0 ? 1 : 2;
     } else {
         ctx->race = 3;
     }
@@ -280,15 +267,14 @@ int policy_context_features(const Board *b, const PolicyContext *ctx, u16 *out) 
     out[n++]       = (u16)(C_RACE + ctx->race);
     out[n++]       = (u16)(C_DIST_OURS + dist_bucket(ctx->dist[0]));
     out[n++]       = (u16)(C_DIST_THEIRS + dist_bucket(ctx->dist[1]));
-    const int lead = 2 * (popcount(board_flats(b, us)) - popcount(board_flats(b, !us))) +
-                     (us == BLACK ? b->halfkomi : -b->halfkomi);
-    out[n++] = (u16)(C_LEAD + (lead <= -4   ? 0
-                               : lead <= -2 ? 1
-                               : lead < 0   ? 2
-                               : lead == 0  ? 3
-                               : lead < 2   ? 4
-                               : lead < 4   ? 5
-                                            : 6));
+    const int lead = ctx->lead;
+    out[n++]       = (u16)(C_LEAD + (lead <= -4   ? 0
+                                     : lead <= -2 ? 1
+                                     : lead < 0   ? 2
+                                     : lead == 0  ? 3
+                                     : lead < 2   ? 4
+                                     : lead < 4   ? 5
+                                                  : 6));
     if (b->capstones[us]) {
         out[n++] = (u16)C_CAPS;
     }

@@ -128,21 +128,4 @@ void nn_derive(const Board *b, NNFrame *frame, const NNFrame *from, u64 touched)
 /* The score in 64ths of a hundredth of a flat, for the side to move. */
 i64 nn_score(int size, const NNFrame *frame, const NNInputs *in);
 
-/* The squares a move changes. */
-static inline u64 nn_move_squares(Move m) {
-    if (m == MOVE_NONE) {
-        return 0;
-    }
-    int sq   = move_square(m);
-    u64 bits = 1ULL << sq;
-    if (!move_is_place(m)) {
-        const int step = DirectionStep[move_direction(m)];
-        for (int hops = __builtin_popcount((unsigned)move_pattern(m)); hops > 0; hops--) {
-            sq += step;
-            bits |= 1ULL << sq;
-        }
-    }
-    return bits;
-}
-
 #endif

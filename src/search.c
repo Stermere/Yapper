@@ -177,7 +177,7 @@ static int node_eval(Worker *w, int ply, u64 threats) {
         u64 touched = 0;
         int base    = ply - 1;
         while (base >= 0) {
-            touched |= nn_move_squares(w->played[base]);
+            touched |= move_squares(w->played[base]);
             if (w->frames[base].computed) {
                 break;
             }
@@ -289,22 +289,25 @@ static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *move
  * and a spread is worth the tops it wins: E50. */
 static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Move tt_move, int ply,
                         int depth, u64 threats, const u64 ends[4], const u64 their_ends[4]) {
-    const Board *b        = &w->board;
-    const int us          = board_stm(b);
-    const Move killer_a   = w->killers[ply][0];
-    const Move killer_b   = w->killers[ply][1];
-    const u64 near_mine   = neighbours(board_road_stones(b, us));
-    const i32 *replies    = w->replies[us][ply ? w->played[ply - 1] & 0xFF : 0];
-    const u64 empty       = board_empty(b);
-    const u64 near_ours   = b->ply >= 2 ? board_road_near(ends, empty) : 0;
-    const u64 near_theirs = b->ply >= 2 ? board_road_near(their_ends, empty) : 0;
+    const Board *b      = &w->board;
+    const int us        = board_stm(b);
+    const Move killer_a = w->killers[ply][0];
+    const Move killer_b = w->killers[ply][1];
+    const i32 *replies  = w->replies[us][ply ? w->played[ply - 1] & 0xFF : 0];
 
+    /* The prior, or what the order by hand reads. */
     PolicyContext ctx;
     const bool prior = b->ply >= 2 && depth >= PriorDepth;
+    u64 near_mine = 0, near_ours = 0, near_theirs = 0;
     if (prior) {
         policy_context(b, ends, their_ends, ply >= 1 ? w->played[ply - 1] : MOVE_NONE,
                        ply >= 2 ? w->played[ply - 2] : MOVE_NONE, &ctx);
         policy_logits(b, &ctx, moves, count, scores);
+    } else {
+        const u64 empty = board_empty(b);
+        near_mine       = neighbours(board_road_stones(b, us));
+        near_ours       = b->ply >= 2 ? board_road_near(ends, empty) : 0;
+        near_theirs     = b->ply >= 2 ? board_road_near(their_ends, empty) : 0;
     }
 
     for (int i = 0; i < count; i++) {

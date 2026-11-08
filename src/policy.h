@@ -23,6 +23,7 @@ typedef struct PolicyContext {
     u64 prev2[3];        /* the same for this side's own last move */
     int dist[2];         /* fewest placements to a road, up to 2 * POLICY_LEVELS */
     int us;
+    int lead;  /* board_flat_lead() for the side to move */
     int phase; /* by the smaller reserve, 0 at the start to 3 at the end */
     int race; /* with the end in sight, 0 behind on flats, 1 level, 2 ahead, komi counted; else 3 */
     int prev_kind; /* the last move: flat, wall, capstone or spread, or 4 for none */

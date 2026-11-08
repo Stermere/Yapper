@@ -2422,7 +2422,264 @@ INCONCLUSIVE at the cap, 2000 games, +750 -681 =569, **+12.0 +/- 12.5**, pairs [
 +23.4, from a fifth of gen 11's games: a source worth drawing on in the next generation, mixed
 with self-play from random plies so the roads do not go the way of E17's gen 2.
 
+## E61: where a node's time goes, and where the network and the prior fall short
+
+The user's view after E55 to E60: search changes keep failing because the evaluation and the
+prior are not good enough yet for a sharper search to trust, so the architecture is where to look.
+Everything here is measured on E54's build, master at bench 1060614, from an instrumented copy
+in `external/build/diag` (`yapper diag search | value | policy | depth`, under `-DDIAG`, and
+`-DDIAG_TIME` for cycle counters). Its three builds bench 1060614 like master; the counters cost
+11% of the speed.
+
+**Time.** 300 positions from gen 11's held-out 6x6 games, every 7th scored ply from the 12th,
+each searched to 200,000 nodes from an empty table: 2787 cycles a node with the counters.
+
+| Part | Share of the search | Cycles a node |
+|---|---|---|
+| The network: bringing the accumulator up to date | 19.4% | 540 |
+| The network: scoring it, pooling and head | 19.9% | 555 |
+| The prior's network, `policy_logits()` | 16.6% | 461 |
+| The prior's context | 0.8% | 23 |
+| The rest of the order: history, hand order | 4.4% | 123 |
+| Picking the next move | 5.1% | 142 |
+| Road ends, gaps and placements | 8.9% | 247 |
+| Roads by spread | 4.6% | 129 |
+| Make and unmake | 4.8% | 134 |
+| Table 1.4%, movegen 1.0%, legality 0.5%, road answers 0.1% | 3.0% | 86 |
+| Everything else | 12.5% | |
+
+The two networks take 57% of the search. 86% of nodes evaluate, at 628 cycles to update and 645
+to score. A list scored by the prior costs **14,600 cycles for 89.5 moves, 163 a move**, as much
+as 11 evaluations; 2.0M lists had the prior and 2.4M, a ply from the leaves, the hand order.
+
+**The order.** 78.4% of cuts come on the first move searched. Killers make 60.3% of all cuts, the
+table move 14.4% and the list 25.3%. When the cut comes from the list, after the table move and
+the killers have failed, it is the list's first move far less often:
+
+| A cut from the list, at depth 2 to 4: ranked first by | Share |
+|---|---|
+| The prior alone | 33% to 35% |
+| History alone | 29% to 32% (17% to 20% of cut moves have no history at all) |
+| History plus prior, as the search orders | **47% to 49%** |
+
+Null move cut on 1.4% of 1.13M tries, reverse futility returned at 21.0M of the 36M interior
+nodes, and 1.0% of reduced moves were searched again. A node that refutes nothing searched 55
+moves at depth 4 and 78 at 5 and 6. Each iteration took 1.9 to 2.3 times the one before up to
+depth 9, where E42 put syntaks at 1.5.
+
+**The prior's accuracy**, against the move the search chose, on half of gen 11's held-out games:
+
+| Held out | Plies | Top 1 | Top 3 | Top 5 | Top 10 | Mean rank |
+|---|---|---|---|---|---|---|
+| 5x5 | 41,001 | 24.5% | 50.0% | 65.1% | 84.1% | 4.6 |
+| 6x6 | 258,246 | **21.6%** | 44.5% | 58.2% | 77.2% | 6.4 |
+| 7x7 | 155,785 | 17.9% | 37.4% | 49.6% | 67.8% | 9.3 |
+| 8x8 | 148,304 | **14.4%** | 30.8% | 41.5% | 58.5% | 13.3 |
+| Flats, all sizes | 297,674 | 20.7% | 46.8% | 62.2% | 81.6% | 5.6 |
+| Walls | 39,392 | 10.0% | 26.4% | 38.5% | 58.7% | 12.8 |
+| Spreads | 254,648 | 18.4% | 33.5% | 43.2% | 60.2% | 11.6 |
+
+Those games are the ones the network holds out, which policyfit fits on; on the games policyfit
+holds out the prior reads the same, 21.7% top 1 on 6x6 and 14.6% on 8x8, so it does not overfit.
+
+**Where the network falls short of the search**, on the 225,948 positions of half of gen 11's
+held-out 6x6 games that a fit reads: the network scores 0.4163 against results and the stored
+20,000-node search 0.3918, 105 hundredths apart on average, 160 rms. By kind of position, the gap
+between the two:
+
+| Position | Fewest | | | | Most |
+|---|---|---|---|---|---|
+| Tallest stack, 1 to 7+ | 0.0054 | 0.0133 | 0.0203 | 0.0297 | **0.0495** |
+| Stacks of 3 or more, 0 to 8+ | 0.0096 | 0.0151 | 0.0238 | 0.0380 | **0.0740** |
+| Walls on the board, 0 to 8+ | 0.0112 | 0.0132 | 0.0213 | 0.0353 | **0.0529** |
+| Tops the best spread wins for the side to move, 1 to 4+ | 0.0176 | 0.0328 | 0.0340 | | **0.0485** |
+| Bucket, the start to the end | 0.0100 | 0.0188 | 0.0248 | 0.0342 | **0.0767** |
+
+Fewest placements to a road do not sort the gap: 0.012 to 0.028 at distances 2 to 5, and 0.030
+where neither side has a road within six, which are the crowded boards. The network is also
+shrunk towards level: 46 hundredths above the search when 7 or more half flats behind, and 50
+below it when as far ahead. The gap grows with what a stack can do to its neighbours and along
+its lines, which is what a sum of per-square templates cannot see: E43 found every unit weighs a
+square's token alone, and E57 that given the data the templates learn road distance by
+themselves.
+
+**What search adds to the network**, on 1200 of those positions, each searched from an empty
+table to a fixed depth:
+
+| Depth | Static | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | Stored 20k |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Against results | 0.4365 | 0.4347 | 0.4269 | 0.4232 | 0.4193 | 0.4162 | 0.4125 | 0.4078 | 0.4060 | 0.4010 | 0.3973 | 0.4064 |
+
+A ply is worth 0.002 to 0.005 here, and the second ply most, 0.0078: the reply.
+
+**The network has stopped learning, and its shape is not why.** E57's control, E48's recipe fitted
+from nothing on all 254M positions for 15 epochs, held out 0.4609 against results after the first
+epoch, 0.4599 after the second, and 0.4592 after the fifteenth, while its fit loss fell from 0.4987
+to 0.4914. More epochs, inputs that say where the roads are (E57), 256 filters (E42) and buckets
+(E45) all land within a seed of it. On 14.7M positions it overfits outright, 0.4816 fitted against
+0.4944 held out, where E58's tied feature map, with a twentieth of the parameters, fitted 0.4870 to
+0.4883. That read as the shape being the limit, so the shapes were fitted on every 6x6 game.
+
+A trainer for the feature maps on the GPU, `external/build/arch/gproto.c` with its kernels in
+`gproto.cu`, fits E58's networks, the engine's own and a hybrid of the two, by the same recipe,
+on the same 150.7M positions of gens 7 to 11 and the same 10.0M held out as `nntrain`. On a slice
+it matched the CPU prototype to the fifth decimal, and its version of the engine's network matched
+`nntrain`'s fit epoch by epoch, 0.448714 against 0.448732 after the third. Each block is a position;
+the kernel's gradient for the map goes through shared memory before it reaches the card's memory,
+since every position adds to the same few rows of empty squares and lone flats: written as one
+scatter a unit, a step took 66 ms, and 24 ms gathered. An epoch takes 4 to 6 minutes, where the CPU
+prototype took 19. Three epochs each:
+
+| On every 6x6 game, held out | Parameters | Against the target | Against results | Fitted minus held out |
+|---|---|---|---|---|
+| The engine's network, `nntrain` | 2.4M | 0.499287 | 0.448732 | -0.003 |
+| The same, on the GPU prototype | 2.4M | 0.499333 | **0.448714** | -0.003 |
+| Feature map, 8 filters, the 3x3 box with the whole rank and file | 160k | 0.499195 | 0.449837 | 0.000 |
+| Feature map, 8 filters, the 5x5 box | 160k | 0.499303 | 0.449758 | 0.000 |
+| Both: the engine's network with the 8-filter map's pools beside its own | 2.5M | 0.499262 | 0.449050 | |
+| Feature map, 16 filters, the 3x3 box with the whole rank and file | 278k | **0.498524** | **0.448705** | 0.000 |
+
+E58's 0.0073 was the small set's. On every game the 8-filter map trails by 0.0011 against results,
+and the 16-filter one ties the engine's network against results and leads it by 0.0008 against the
+target, with a ninth of the parameters and still underfitting, so 32 filters would gain a little
+more. Added beside the engine's network, the map adds nothing. Every shape tried lands within
+0.0013 of the others: the network seems near what a static evaluation learns from these games, and
+the errors it keeps, in crowded positions with captures to make, may be ones only a search finds.
+
+**What a feature map would cost**, from `yapper diag fmcost` in the same copy: the 8-filter map
+in the engine's integer form on 300 positions, against the engine's network on the same moves.
+Its update adds the changed squares' rows to every square whose window holds them, keeps each
+square's pooled part, and moves the pools by the squares it changed:
+
+| Cycles | Today's network | Feature map, 8 filters |
+|---|---|---|
+| Update from three plies back, as the search's frames are | 906 to 936 | 2945 to 3184 |
+| Score | 570 | 537, with a head left unvectorised |
+| A whole list's prior | 14,800 to 15,100, `policy.c` | 4,970, read off the frame |
+
+About three times today's update, most of it the rows: each changed square reads 100 rows spread
+over a 1.85 MB table. Against a gain of nothing at 8 filters and of 0.0008 against the target at 16,
+it does not pay as an evaluation.
+
+**The prior is the weak part.** On 4000 positions of gen 11's 6x6 games that policyfit held out,
+how often each names the 20,000-node search's move (`diag vpol`, `diag nngrad`):
+
+| Chooser | Matches |
+|---|---|
+| `policy.c` | 21.8% |
+| The network's best child, its static score alone | 25.4% |
+| The same, with a child that leaves a road to finish scored as lost | 27.5% |
+| A depth 1 search, 2, 3 and 4 | 34.0%, 40.1%, 42.9%, 47.0% |
+| The network linearised at the node, each move scored by the gradient times its rows | 12.9% |
+
+The value network one ply down names the search's move more often than the prior made for the job.
+Linearising it would have scored a list for about the prior's cost, but a changed row moves the
+clipped units too far for a first-order estimate: it correlates 0.38 with the exact child scores.
+More games do not help the prior either: policyfit on one game in 4 of gens 10 and 11, twice what
+it fits now, held out 21.87% to one in 8's 21.75%, its fit loss level with its held-out loss. It is
+at the ceiling of its features.
+
+A prior read off the 8-filter map's trunk, fitted with the value on gens 10 and 11 for 5 epochs
+(`external/build/arch/proto3.c`, the side to move's units of a placement's square pooled over the
+orientations, a spread's source and landings read turned to its direction, and policy.c's road
+and last-move squares as flags), named 23.4% top 1 and 47.4% top 3 on the positions both held out,
+where policy.c names 21.1% and 43.5% there. A policy weight of 1.0 for 0.3 gained nothing and cost
+the value 0.008 of held-out loss. The trunk sized for the value is small for the prior; the gain is
+real but modest.
+
+So no shape within reach makes the evaluation much better on these games, and the prior is the
+weakest part measured: it ranks below what the evaluation knows one ply down, its features are
+spent, and it takes 17% of the search. Whether a better order is what the failed search changes
+were missing is for an SPRT to say; it is the lever this measurement leaves.
+
+## E62: a prior to match a depth 1 search, and ordering by one
+
+E61 left the prior below the value network one ply down. The user's plan: a prior that names the
+20,000-node search's move 30% to 35% of the time would match a depth 1 search more cheaply than
+searching every move; failing that, order by a depth 1 search where the tree can pay for it.
+
+**What there is to match.** On the 4000 positions of E61's `diag vpol`, split by whether a road
+hangs, since a win on the spot never reaches the order and a road to answer limits it to the
+answers:
+
+| Names the search's move | Quiet, 92.5% | A road to answer, 7.5% |
+|---|---|---|
+| `policy.c` | 20.9% | 32.8% |
+| The value network's best child | 26.7% | 37.1% |
+| A depth 1 search | **32.4%** | 52.6% |
+| A depth 2 search | 38.9% | 54.3% |
+
+The label itself is noisy: a fresh 20,000-node search of the same position names the stored move
+56.9% of the time and an 80,000-node one 59.7%, and the two fresh ones agree on 69.9%. The ceiling
+is far above any of these.
+
+**A prior fitted on the GPU.** `external/build/arch/gpolicy.c` with its kernels in `gpolicy.cu`,
+through a copy of `src/gpu.c` that adds dynamic shared memory: the feature map of E58 as a trunk,
+each square read in each of the eight orientations of the board by a layer of rectified units that
+also see policy.c's road and last-move squares and the lead, reserves, komi and bucket; a placement
+averages its square's frames, a spread reads its source and each landing in the two frames that turn
+north to its direction. Everything reads alike under the symmetries. Held out: the games policyfit
+holds out, where policy.c is scored on the same positions. Each step on a quarter of gens 10 and 11
+for 3 epochs, then all of them:
+
+| Prior | Top 1 | Top 3 |
+|---|---|---|
+| policy.c, on the same positions | 21.97% | 45.03% |
+| Trunk of 8 filters, 32 hidden units | 22.91% | 46.32% |
+| ... and what a spread does: the top it leaves at each landing against what it covers, what is left on the source, the tops it wins | 23.76% | 47.79% |
+| ... trunk of 16 | 24.28% | 48.65% |
+| ... and the value network's 128 pools beside the lead | 25.57% | 50.77% |
+| ... on all of gens 10 and 11, 16.7M positions | **28.33%**, quiet 27.54% | **54.76%** |
+| policy.c on all of them | 21.92%, quiet 21.10% | 44.99% |
+
+Games did most: four times as many gained 2.8 where every change to the network gained 0.5 to 1.3.
+It still underfits, fitted top 1 level with held out, so more games would gain more; the 20,000-node
+games not yet read, gen 9's and gen 12's, add about half again. It does not reach a depth 1 search
+on quiet positions, 27.5% to 32.4%, and it is not cheap: 288 frames by 256 inputs by 32 units is
+about 2.4M multiply-adds a list, 75,000 to 100,000 cycles, half of what a depth 1 search of the list
+costs and seven times today's prior. Where it could pay, it competes with the depth 1 search itself.
+
+**Ordering by a depth 1 search** (`external/build/e62`). From `OrderSearchDepth` in `src/tune.h`,
+remaining depth and so near the root, each move of the list is played and its reply searched by the
+leaf search, and the list goes by that score; the table move and killers stay first, and the old
+order breaks ties. Bench, a fixed depth, so fewer nodes is a smaller tree, the leaf searches counted:
+
+| From remaining depth | Never | 3 | 4 | 5 | 6 | 8 |
+|---|---|---|---|---|---|---|
+| Bench nodes | 1060614 | 2688287 | 1519656 | 1088682 | **974537** | 1003932 |
+
+Against E54, 2+0.02, [0, 10], one change each on the same work copy, `OrderSearchMode`:
+
+| From remaining depth 6 | Bench | Result |
+|---|---|---|
+| The leaf search's score replaces the order | 974537 | **FAILED**, 790 games, +258 -314 =218, **-24.7 +/- 19.4**, pairs [53, 87, 154, 65, 36] |
+| Its score added to the order, 32 history units a hundredth | 1032611 | **FAILED**, 700 games, +218 -278 =204, **-29.9 +/- 21.3**, pairs [55, 75, 125, 65, 30] |
+| Only its best move put first, after the table move and killers | 1125857 | **FAILED**, 692 games, +215 -279 =198, **-32.2 +/- 21.8**, pairs [59, 71, 121, 65, 30] |
+
+No game was lost on time. The bench misled: its 13 positions are openings and other sizes. On 180
+6x6 positions from these games, every 10th ply from the 14th, each searched to depth 10 from a new
+game (`external/build/e62/ttd.py`, over TEI):
+
+| Engine | Nodes to depth 10 | Time |
+|---|---|---|
+| E54 | 21.19M | 12.8 to 13.5 s |
+| Replaces the order | 25.82M, **+22%** | 15.3 s |
+| Best move first | 24.93M, +18% | 14.9 s |
+| Added to the order | 24.88M, +17% | 14.8 s |
+
+The leaf searches cost about a sixth of the search, and the order they give makes the main tree no
+smaller: the version that changes it most is the largest. Naming the deep search's move at the root
+is not what orders a node inside the tree, where history has seen which moves refute in this very
+search; a depth 1 search names the root move half again as often as the prior and still orders no
+better. That speaks against chasing the prior's top 1 as well: a better prior on that measure
+need not be a better order, and the one here costs seven times today's. Time to depth on real
+positions is the measure to take before an SPRT, not bench.
+
 ## Mistakes worth not repeating
+
+- **Bench is not a tree-size measure.** Its 13 positions are mostly openings and other sizes. E62's
+  leaf-search order benched 8% fewer nodes and took 17% to 22% more on real 6x6 middlegames, then
+  lost 25 to 32. Time to depth on positions from games (`external/build/e62/ttd.py`) first.
 
 - **A racetrack run can hang with both engines idle.** E52's Topaz gauntlet stopped on its last
   game for four hours, neither engine thinking, and everything queued behind it waited. Run
