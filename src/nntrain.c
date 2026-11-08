@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "bitboard.h"
 #include "board.h"
@@ -286,11 +287,17 @@ static inline void snap(NTModel *model, u64 i) {
 
 static inline float sigmoid(float x) { return 1.0f / (1.0f + expf(-x)); }
 
+/* The scale the loss reads a score through, by size, which can differ from NN_SCALE: a flat is
+ * worth more of a game on a small board. The engine's units stay put, since the search's score in
+ * the target ties the output to them. LossRatio is NN_SCALE over it, exactly 1 by default so that
+ * a default fit keeps its bytes. */
+static float LossScale[NT_SLOTS], LossRatio[NT_SLOTS];
+
 /* `lambda` is by size: how far to trust the search's score over the result varies with the board.
  */
 static inline float target_of(const NTSample *s, const double *lambda) {
     const double l = lambda[s->size];
-    return (float)(l * sigmoid((float)s->score / NN_SCALE) + (1.0 - l) * s->result / 2.0);
+    return (float)(l * sigmoid((float)s->score / LossScale[s->size]) + (1.0 - l) * s->result / 2.0);
 }
 
 /* `whose` is 0 for a stack of the view's own side and 1 for the other side's. */
@@ -520,7 +527,8 @@ static void pass_job(void *argument) {
         const NTSample *s   = &job->set->samples[job->order ? job->order[i] : i];
         const u16 *f        = job->set->features + s->first;
         const float out     = forward(job->model, s, f, &acts);
-        const float p       = sigmoid(out);
+        const float ratio   = LossRatio[s->size];
+        const float p       = sigmoid(out * ratio);
         const float t       = target_of(s, job->lambda);
         const double result = cross_entropy((float)s->result / 2.0f, p);
         loss += cross_entropy(t, p);
@@ -528,7 +536,7 @@ static void pass_job(void *argument) {
         job->group_loss[s->group] += result;
         job->group_count[s->group]++;
         if (job->gradient) {
-            backward(job->model, s, f, &acts, (p - t) * job->scale, job->gradient);
+            backward(job->model, s, f, &acts, (p - t) * job->scale * ratio, job->gradient);
         }
     }
     job->loss        = loss;
@@ -905,6 +913,115 @@ static double average_at(u64 step, u64 steps) {
 
 static u64 shuffle_seed(u64 seed) { return 0x853C49E6748FEA9BULL ^ seed * 0x9E3779B97F4A7C15ULL; }
 
+/* Where the fit stands, for tools/progress.py, which lists every long job. The file is rewritten
+ * in place at most every NT_STATUS_EVERY seconds, and a reader that catches it half written keeps
+ * its last good read. The clock goes only into this file, never into the fit. */
+#define NT_STATUS_EPOCHS 64
+#define NT_STATUS_EVERY  2.0
+
+static struct {
+    bool on;
+    int writes;
+    char path[1024], out[1024], device[160];
+    const char *phase;
+    double started, written, read_at, train_at, averaged[2];
+    bool scored;
+    int file, files, epoch, epochs, losses;
+    u64 positions, step, steps;
+    double loss[NT_STATUS_EPOCHS][3];
+} Status;
+
+static double wall_clock(void) {
+    struct timespec t;
+    timespec_get(&t, TIME_UTC);
+    return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
+}
+
+static void json_string(FILE *f, const char *s) {
+    fputc('"', f);
+    for (; *s; s++) {
+        if (*s == '"' || *s == '\\') {
+            fputc('\\', f);
+        }
+        fputc(*s, f);
+    }
+    fputc('"', f);
+}
+
+/* `code` is the exit code once the fit has ended, and -1 while it runs. */
+static void status_write(bool now, int code) {
+    const double t = wall_clock();
+    if (!Status.on || (!now && t - Status.written < NT_STATUS_EVERY)) {
+        return;
+    }
+    Status.written = t;
+    FILE *f        = fopen(Status.path, "w");
+    if (!f) {
+        Status.on = Status.writes > 0; /* no folder for it, rather than a reader in the way */
+        return;
+    }
+    Status.writes++;
+    fprintf(f, "{\"kind\": \"fit\", \"out\": ");
+    json_string(f, Status.out);
+    fprintf(f, ", \"device\": ");
+    json_string(f, Status.device);
+    fprintf(f,
+            ", \"pid\": %d, \"started\": %.3f, \"updated\": %.3f, \"phase\": \"%s\", "
+            "\"files\": [%d, %d], \"positions\": %llu, \"read_at\": %.3f, \"train_at\": %.3f, "
+            "\"epoch\": %d, \"epochs\": %d, \"step\": %llu, \"steps\": %llu, \"losses\": [",
+            process_id(), Status.started, t, Status.phase, Status.file, Status.files,
+            (unsigned long long)Status.positions, Status.read_at, Status.train_at, Status.epoch,
+            Status.epochs, (unsigned long long)Status.step, (unsigned long long)Status.steps);
+    for (int e = 0; e < Status.losses; e++) {
+        fprintf(f, "%s[%.6f, %.6f, %.6f]", e ? ", " : "", Status.loss[e][0], Status.loss[e][1],
+                Status.loss[e][2]);
+    }
+    fprintf(f, "]");
+    if (Status.scored) {
+        fprintf(f, ", \"averaged\": [%.6f, %.6f]", Status.averaged[0], Status.averaged[1]);
+    }
+    if (code >= 0) {
+        fprintf(f, ", \"finished\": true, \"code\": %d", code);
+    }
+    fprintf(f, "}\n");
+    fclose(f);
+}
+
+static void status_phase(const char *phase) {
+    Status.phase = phase;
+    status_write(true, -1);
+}
+
+/* With no path given, external/games/live/fit-<folder>-<file>.json after the network's last two
+ * path parts, which a fit run from anywhere but the repository's root has no folder for. */
+static void status_open(const char *path, const char *out, int epochs, int files) {
+    const char *base = out, *parent = out;
+    for (const char *c = out; *c; c++) {
+        if (*c == '/' || *c == '\\') {
+            parent = base;
+            base   = c + 1;
+        }
+    }
+    char name[256];
+    snprintf(name, sizeof(name), "%s", parent);
+    for (char *c = name; *c; c++) {
+        const bool plain = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+                           (*c >= '0' && *c <= '9') || *c == '-' || *c == '_';
+        *c = plain ? *c : '-';
+    }
+    if (path) {
+        snprintf(Status.path, sizeof(Status.path), "%s", path);
+    } else {
+        snprintf(Status.path, sizeof(Status.path), "external/games/live/fit-%s.json", name);
+    }
+    snprintf(Status.out, sizeof(Status.out), "%s", out);
+    Status.on      = true;
+    Status.started = wall_clock();
+    Status.epochs  = epochs;
+    Status.files   = files;
+    status_phase("reading");
+}
+
 /* For a fit on every size, each size's held out against results too, since one can run out of
  * games while the rest still learn. */
 static void report_epoch(const NTModel *model, const NTLoader *loader, const double *lambda,
@@ -913,6 +1030,13 @@ static void report_epoch(const NTModel *model, const NTLoader *loader, const dou
     score_set(model, &loader->held, lambda, threads, &held_loss, &held_result, by_group);
     printf("epoch %3d: fit %.6f, held out %.6f, against results %.6f\n", epoch, fit, held_loss,
            held_result);
+    if (Status.losses < NT_STATUS_EPOCHS) {
+        Status.loss[Status.losses][0] = fit;
+        Status.loss[Status.losses][1] = held_loss;
+        Status.loss[Status.losses][2] = held_result;
+        Status.losses++;
+    }
+    status_write(true, -1);
     {
         double sums[NT_SLOTS] = {0};
         u64 counts[NT_SLOTS]  = {0};
@@ -945,11 +1069,16 @@ static bool train_cpu(NTModel *model, const NTLoader *loader, const double *lamb
     u64 step        = 0;
     u64 shuffle     = shuffle_seed(seed);
     NTJob jobs[NT_MAX_THREADS];
+    Status.steps = steps;
+    status_phase("training");
     for (int epoch = 1; epoch <= epochs; epoch++) {
         const u64 total   = epoch_order(order, loader, seed, epoch, &shuffle);
         const u64 batches = batches_of(total);
         double loss       = 0.0;
+        Status.epoch      = epoch;
         for (u64 batch = 0; batch < batches; batch++, step++) {
+            Status.step = step;
+            status_write(false, -1);
             const u64 from = batch * NT_BATCH;
             const u64 to   = from + NT_BATCH < total ? from + NT_BATCH : total;
             for (int t = 0; t < threads; t++) {
@@ -1103,8 +1232,8 @@ static const char KernelBody[] =
     "        const float *skip = q + skip_from;\n"
     "        out = skip[0] * in0 + skip[1] * in1 + skip[2] * in2 + skip[3] + out;\n"
     "        for (int c = 0; c < L3; c++) out += q[l4 + c] * clipped(h[c]);\n"
-    "        const float p = 1.0f / (1.0f + expf(-out));\n"
-    "        const float slope = (p - s.target) * scale;\n"
+    "        const float p = 1.0f / (1.0f + expf(-out * LOSS_RATIO[s.size]));\n"
+    "        const float slope = (p - s.target) * scale * LOSS_RATIO[s.size];\n"
     "        shared_slope = slope;\n"
     "        const float c = p < 1e-7f ? 1e-7f : p > 1.0f - 1e-7f ? 1.0f - 1e-7f : p;\n"
     "        const float t = s.target;\n"
@@ -1208,6 +1337,11 @@ static const char KernelBody[] =
 /* The kernels with this build's constants, so the two sides cannot disagree on one. */
 static const char *kernel_source(void) {
     static char source[sizeof(KernelBody) + 2048];
+    char ratios[NT_SLOTS * 20] = "";
+    for (int n = 0; n < NT_SLOTS; n++) {
+        snprintf(ratios + strlen(ratios), sizeof(ratios) - strlen(ratios), "%s%.9g", n ? ", " : "",
+                 (double)LossRatio[n]);
+    }
     snprintf(source, sizeof(source),
              "#define NN_TOKENS %d\n#define NN_INPUTS %d\n#define NN_SIDES %d\n"
              "#define NN_FILTERS %d\n#define NN_ORIENTATIONS %d\n"
@@ -1220,14 +1354,15 @@ static const char *kernel_source(void) {
              "#define POOLS %d\n#define L2 %d\n#define L3 %d\n#define QU %.17g\n#define Q2 %.17g\n"
              "#define Q3 %.17g\n#define Q4 %.17g\n#define QY %.17g\n#define POOL ((float)%.9g)\n"
              "#define L2_LIMIT ((float)%.9g)\n#define L3_LIMIT ((float)%.9g)\n"
-             "#define L4_LIMIT ((float)%.9g)\n#define HEAD_BIAS_LIMIT ((float)%.9g)\n%s",
+             "#define L4_LIMIT ((float)%.9g)\n#define HEAD_BIAS_LIMIT ((float)%.9g)\n"
+             "__constant__ float LOSS_RATIO[%d] = {%s};\n%s",
              NN_TOKENS, NN_INPUTS, NN_SIDES, NN_FILTERS, NN_ORIENTATIONS, MAX_SIZE * MAX_SIZE,
              SQUARE_COUNT, NN_BUCKETS, (double)NN_QA, (double)NN_QB, (double)NN_SCALE,
              (double)NT_LEAD_UNIT, (double)NT_RESERVE_UNIT, (double)NT_KOMI_UNIT, NT_BETA1,
              NT_BETA2, (double)NT_FILTER_LIMIT, (double)NT_BIAS_LIMIT, (double)NT_OUTPUT_LIMIT,
              NN_POOLS, NN_L2, NN_L3, (double)NN_QU, (double)NN_Q2, (double)NN_Q3, (double)NN_Q4,
              (double)NN_QY, (double)NT_POOL, (double)NT_L2_LIMIT, (double)NT_L3_LIMIT,
-             (double)NT_L4_LIMIT, (double)NT_HEAD_BIAS_LIMIT, KernelBody);
+             (double)NT_L4_LIMIT, (double)NT_HEAD_BIAS_LIMIT, NT_SLOTS, ratios, KernelBody);
     return source;
 }
 
@@ -1330,9 +1465,12 @@ static bool train_gpu(NTModel *model, const NTLoader *loader, const double *lamb
     u64 step        = 0;
     u64 shuffle     = shuffle_seed(seed);
     NTPackJob jobs[NT_MAX_THREADS];
+    Status.steps = steps;
+    status_phase("training");
     for (int epoch = 1; epoch <= epochs; epoch++) {
         const u64 total  = epoch_order(order, loader, seed, epoch, &shuffle);
         const u64 groups = (total + group - 1) / group;
+        Status.epoch     = epoch;
         if (!gpu_zero(loss, sizeof(u64))) {
             return false;
         }
@@ -1375,6 +1513,8 @@ static bool train_gpu(NTModel *model, const NTLoader *loader, const double *lamb
             if (!gpu_wait()) {
                 return false;
             }
+            Status.step = step;
+            status_write(false, -1);
         }
         u64 sum = 0;
         if (!gpu_download(&sum, loss, sizeof(u64)) || !gpu_download(model->q, q, floats)) {
@@ -1388,12 +1528,17 @@ static bool train_gpu(NTModel *model, const NTLoader *loader, const double *lamb
 }
 
 /* Scores the network on each group of games: as written, the mean of the fit's last steps, or a
- * warm fit's before its first step. */
+ * warm fit's before its first step. `scored`, if not NULL, takes the loss and the loss against
+ * results. */
 static void report_groups(const NTModel *model, const NTLoader *loader, const double *lambda,
-                          int threads, const char *when) {
+                          int threads, const char *when, double *scored) {
     double loss, result, by_group[NT_GROUPS];
     score_set(model, &loader->held, lambda, threads, &loss, &result, by_group);
     printf("%s: held out %.6f, against results %.6f\n", when, loss, result);
+    if (scored) {
+        scored[0] = loss;
+        scored[1] = result;
+    }
     for (int g = 0; g < loader->group_count; g++) {
         const NTGroup *group = &loader->groups[g];
         printf("  %dx%d gen %d at %u nodes%s: %.6f against results, %llu held out\n", group->size,
@@ -1403,12 +1548,20 @@ static void report_groups(const NTModel *model, const NTLoader *loader, const do
     }
 }
 
-int nntrain_run(const char *out, int keep, const double *lambda, int epochs, int threads, bool gpu,
-                unsigned long long seed, double rate, bool warm, const double *share, char **paths,
-                int path_count) {
+static int fit_network(const char *out, int keep, const double *lambda, int epochs, int threads,
+                       bool gpu, unsigned long long seed, double rate, bool warm,
+                       const double *share, const double *scale, char **paths, int path_count) {
     if (keep < 1 || epochs < 1 || threads < 1 || threads > NT_MAX_THREADS || rate < 0.0) {
         printf("bad arguments\n");
         return 2;
+    }
+    for (int n = 0; n < NT_SLOTS; n++) {
+        LossScale[n] = scale && scale[n] > 0.0 ? (float)scale[n] : (float)NN_SCALE;
+        LossRatio[n] = LossScale[n] == (float)NN_SCALE ? 1.0f : (float)NN_SCALE / LossScale[n];
+        if (LossScale[n] != (float)NN_SCALE && n >= MIN_SIZE) {
+            printf("%dx%d reads a score through a scale of %g, the engine's units %d\n", n, n,
+                   (double)LossScale[n], NN_SCALE);
+        }
     }
     static NTLoader loader;
     loader.keep = keep;
@@ -1427,8 +1580,12 @@ int nntrain_run(const char *out, int keep, const double *lambda, int epochs, int
         if (!data_replay(paths[i], nt_visit, &loader)) {
             return 1;
         }
+        Status.file = i + 1;
+        status_write(false, -1);
     }
     const NTSet *train = &loader.train, *held = &loader.held;
+    Status.positions = train->count;
+    Status.read_at   = wall_clock();
     printf("%llu positions to fit, %llu held out, %.1f stacks a position\n",
            (unsigned long long)train->count, (unsigned long long)held->count,
            train->count ? (double)train->feature_count / (double)train->count : 0.0);
@@ -1451,7 +1608,8 @@ int nntrain_run(const char *out, int keep, const double *lambda, int epochs, int
             printf("this build has no network to start from\n");
             return 1;
         }
-        report_groups(&model, &loader, loader.lambda, threads, "start");
+        status_phase("scoring the start");
+        report_groups(&model, &loader, loader.lambda, threads, "start", NULL);
     }
     u32 *order = malloc(train->count * sizeof(u32));
     if (!order) {
@@ -1459,15 +1617,18 @@ int nntrain_run(const char *out, int keep, const double *lambda, int epochs, int
         return 1;
     }
 
-    char why[4096] = "not asked for";
+    char why[4096]  = "not asked for";
+    Status.train_at = wall_clock();
     if (gpu && gpu_open(kernel_source(), why, sizeof(why))) {
         printf("training on %s\n", gpu_name());
+        snprintf(Status.device, sizeof(Status.device), "%s", gpu_name());
         if (!train_gpu(&model, &loader, loader.lambda, epochs, threads, seed, order)) {
             printf("%s\n", gpu_error());
             return 1;
         }
     } else {
         printf("training on %d CPU threads, with no GPU: %s\n", threads, why);
+        snprintf(Status.device, sizeof(Status.device), "%d CPU threads", threads);
         if (!train_cpu(&model, &loader, loader.lambda, epochs, threads, seed, order)) {
             printf("out of memory\n");
             return 1;
@@ -1484,11 +1645,26 @@ int nntrain_run(const char *out, int keep, const double *lambda, int epochs, int
         model.p[i] = model.a[i];
         snap(&model, i);
     }
-    report_groups(&model, &loader, loader.lambda, threads, "averaged");
+    Status.step = Status.steps;
+    status_phase("scoring");
+    report_groups(&model, &loader, loader.lambda, threads, "averaged", Status.averaged);
+    Status.scored = true;
+    status_phase("checking the engine");
     quantise_model(&model, &q);
     if (!write_header(out, &model, &q, sizes) || !check_engine(&model, &loader, &q, sizes)) {
         return 1;
     }
     printf("wrote %s\n", out);
     return 0;
+}
+
+int nntrain_run(const char *out, int keep, const double *lambda, int epochs, int threads, bool gpu,
+                unsigned long long seed, double rate, bool warm, const double *share,
+                const double *scale, const char *status, char **paths, int path_count) {
+    status_open(status, out, epochs, path_count);
+    const int code = fit_network(out, keep, lambda, epochs, threads, gpu, seed, rate, warm, share,
+                                 scale, paths, path_count);
+    Status.phase   = code == 0 ? "done" : "failed";
+    status_write(true, code);
+    return code;
 }

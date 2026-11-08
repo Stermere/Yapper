@@ -161,7 +161,7 @@ pass.
 | `tools/perftdiff.py` | fuzz the engine against takref, seal suites |
 | `tools/match.py` | TEI match runner, referee and pentanomial SPRT |
 | `tools/tune.py` | SPSA over `src/tune.h` by self-play of a `TUNE=on` build; prints a candidate for an SPRT |
-| `tools/progress.py` | every match live, with ETAs: match.py's status files, `external/games/queue.txt`, fresh logs |
+| `tools/progress.py` | every long run live, with ETAs: the status files of matches, tunes, fits and datagen, `external/games/queue.txt`, fresh logs |
 | `tools/ptnlink.py` | a ptn.ninja link for a game |
 | `tools/play.py` | play the engine in a terminal |
 | `tools/speedcmp.py` | race move generation against the baselines |

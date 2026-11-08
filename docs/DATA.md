@@ -30,10 +30,17 @@ play would never build. A game is thrown away if its first search already calls 
 costs no search of its own: that search's move is the game's first.
 
 Random plies only reach the structures the engine's own play builds. `--openings <book>` plays
-a line of a book in place of them, one opening a line as PTN moves, the same form the match
+a line of a book in place of them, one position a line as PTN moves, the same form the match
 books take; the book plies are stored unscored, as random plies are, and the format does not
-change. `tools/mkopenings.py` writes such a book from the first plies of games against other
-engines, so a generation can start from what they build: E60.
+change. `tools/mkopenings.py` writes such a book from Yapper's own match games or from people's,
+at any point of a game, and `tools/playtak.py` turns PlayTak's history of games between people
+into PTN for it.
+
+**No other engine's play goes into the data**: not its games, moves or scores, as games,
+openings, seeds, targets or anything a fit or a tuner is chosen by. Matches against other engines
+only measure. `mkopenings.py` leaves out any game with another engine on either side, and
+`playtak.py` any game with a program on either side. Gen 12, `external/data/gen12`, was seeded from
+the openings of games against syntaks and Topaz, E60, and is never to be fitted on.
 
 On about one ply in ten, a random move is searched as well, and played in place of the search's
 choice if it comes within 0.4 of a flat of it. That is about one such deviation in 110 plies, for
@@ -119,7 +126,9 @@ yapper nntrain src/net.h 1 0.7 2 15 --warm --rate 0.0005 --share 7=0.33 --share 
 ```
 
 Gen 11 is listed four times, which weighs it four times as heavily: listed once, as a twentieth of
-the positions, it hardly moved the network. The arguments are the
+the positions, it hardly moved the network. Windows starts no command longer than 32,767
+characters, and the recipe above is 28,000; join a run's files into one before listing it again,
+since joining files joins datasets (E69). The arguments are the
 output, the one-in-N positions to keep, `lambda`, the epochs and the threads, then the options,
 then the games. A size is in the network when the games have some of it, and a size they do not
 have counts flats. The engine picks up `net.h` the next time it is built. After swapping one in by
@@ -136,6 +145,12 @@ puts a fifth of 8x8's positions into each epoch, drawn afresh each time, for a s
 games for every epoch to see them all. Weighting its loss instead would not do: the optimiser
 rescales the steps of the weights only that size reaches, so they would move as far as ever.
 `--lambda 4=0.5` gives one size a `lambda` of its own, since the best one differs by board: E39.
+`--scale 6=170` reads a score through a scale of its own in the loss, for one size or, without the
+size, for all; the engine's units stay NN_SCALE's, since the search's score in the target holds
+the output to them. Self-play's results are more decisive than 310 says, and more so the smaller
+the board: the scale that fits gen 11's results best is 120 on 3x3 and 4x4, 140 on 5x5, 160 to 170
+on 6x6, 240 on 7x7 and 280 on 8x8. Fitted with those, E49's recipe lost 10.2 to E49 itself, so
+310 stays: E67.
 
 `--warm` starts the fit from the network the binary was built with instead of random weights, and
 prints its held-out loss before the first step, so the report says what the fit added. `--rate r`
@@ -193,6 +208,11 @@ differently would show in the last line.
 
 A fit takes every core it is given, so nothing can be timed or matched alongside it. A lower loss
 is not a claim of strength: only an SPRT makes one.
+
+A fit run from the repository's root writes where it stands to
+`external/games/live/fit-<folder>-<file>.json`, after the network's path, every two seconds, and
+`tools/progress.py` shows it with the matches; `--status file` writes it elsewhere. `datagen.py`
+does the same for a run of self-play. Nothing in either file feeds the fit or the games.
 
 ## Fitting the move prior
 

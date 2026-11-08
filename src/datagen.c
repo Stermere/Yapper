@@ -39,7 +39,8 @@
  * can be far larger, and this is how much of one is allowed before it is cut off. */
 #define HARD_NODES_FACTOR 4
 
-#define REPORT_EVERY 2000
+/* Often enough for tools/datagen.py to show a run's progress: a job may play only a few hundred. */
+#define REPORT_EVERY 20
 
 /* Mostly what matches are played at, with enough else that komi can be fitted. */
 static const i8 HalfKomiDraws[] = {4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 5, 2, 6, 0};

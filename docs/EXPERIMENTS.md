@@ -2822,6 +2822,156 @@ So the gap is judgement more than speed: positions that count level and that syn
 reads as lost, about three of Yapper's moves before Yapper does. The scripts are
 `external/analysis/analyse.py` and `analyse2.py`; the games are `external/games/tak/e66-stc.ptn`.
 
+## E67: the scale a score is read through in the loss, by size
+
+The user's direction on 2026-11-08: make the network better through its data, and since that
+morning without another engine's play in it, DATA.md. Before generating anything, gen 11's own 6x6
+games, 100,000 of them, were read for how well the stored 20,000-node scores foretell the results.
+The fit turns a score into a chance of winning as `sigmoid(score / 310)`, and self-play's results are
+far more decisive than that:
+
+| Plies | Positions | Scale that fits best | Loss against results, at 310 and at best |
+|---|---|---|---|
+| 0 to 9 | 182,954 | 140 | 0.5252, 0.4675 |
+| 10 to 19 | 850,360 | 140 | 0.4975, 0.4413 |
+| 20 to 29 | 989,219 | 160 | 0.4697, 0.4195 |
+| 30 to 39 | 986,648 | 160 | 0.4417, 0.3955 |
+| 40 to 59 | 1,941,602 | 180 | 0.3922, 0.3561 |
+| 60 to 79 | 1,771,250 | 180 | 0.3175, 0.2870 |
+| 80 to 119 | 1,017,334 | 180 | 0.2882, 0.2611 |
+
+By size, on all scored plies: 120 for 3x3 and 4x4 (gen 1), 140 for 5x5, 160 for 6x6's gen 11 and
+170 for its gen 10, 240 for 7x7 and 280 for 8x8, where 310 costs nothing (0.4911 to 0.4903). E37
+had read 240 on 6x6's earlier games; a stronger engine turns a small lead into a win more surely.
+With lambda 0.7 the fit has been blending a search target that is too timid with results that
+disagree with it, and the gradient on level positions, where E66 found the games against syntaks
+are lost, is the weaker for it. Two smaller findings from the same games: a side's score moves by
+37 rms from one of its moves to its next in level positions at plies 20 to 40, and 49 at 40 to 60;
+and at 2 komi the first scored ply's mean score foretells white's result to the point (0.482
+against 0.478), while at 0 and 3 komi it under-reacts (0.554 against 0.596, 0.440 against 0.408).
+
+`nntrain --scale 6=170`, or `--scale 170` for every size, sets the scale the loss reads a score
+through: the target is `lambda * sigmoid(score / s) + (1 - lambda) * result`, the prediction
+`sigmoid(output * 310 / s)`, and the slope gains the factor `310 / s`. The engine's units stay
+NN_SCALE's, since the search's score in the target holds the output to them, so no margin in the
+search moves. The GPU kernels read the ratio by size from a constant array; at the default it is
+exactly 1 and a fit keeps its bytes. **Checked: E49's recipe from E48's network, on the GPU, writes
+E49's `net.h` byte for byte** with the option in, so this is E49 with one thing changed. (A first
+build printed the array's ones as `1f`, which NVRTC refused, and both fits fell back to the CPU,
+whose control then differed from E49 in the float rounding; the CPU fits are kept in
+`external/build/e67/cpu`.)
+
+One scale of 170 for every size, E49's recipe otherwise, fitted 6x6 better and 7x7 and 8x8 worse
+than the control after its first epoch (0.5091 and 0.5733 against 0.4943 and 0.5463 against
+results), so the scale is by size: 120, 120, 140, 170, 240 and 280 for 3x3 to 8x8. Held out,
+against results, E49's recipe and the same with the scales by size:
+
+| Group | E49, 310 | By size |
+|---|---|---|
+| 5x5 gen 11 | 0.387641 | 0.346770 |
+| 6x6 gen 10 | 0.419904 | 0.396853 |
+| 6x6 gen 11 | 0.416033 | 0.387644 |
+| 7x7 gen 11 | 0.462961 | 0.460220 |
+| 8x8 gen 11 | 0.504147 | 0.504338 |
+
+Most of the 5x5 and 6x6 gain is the reading of a score as a result, not a better order of
+positions, which only play can tell. The engine reads within 0.58 of the fit on average, 4 at
+worst. Fits and logs in `external/build/e67`.
+
+| Match | Result |
+|---|---|
+| Scales by size against E66 (E49's network), 2+0.02, [0, 10] | **FAILED**, 1532 games, +518 -563 =451, **-10.2 +/- 14.0**, pairs [98, 146, 304, 139, 79], one loss on time |
+
+Calibrated to its own results, the network plays no better and leans worse. At 170 a position
+three flats up is already read as 85% won and gets little gradient, so the scores past that, which
+the search's margins read when it prunes, are learned less well; and the weight moves onto level
+positions, which the network already ranks about as well as it can. The default stays 310, and
+`--scale` stays as an option at no cost.
+
+## E68: the search's score smoothed over the next plies
+
+E67's second finding: a side's stored score moves by about half a flat from one of its moves to its
+next in level middle games, so one search's score is a noisy target, and the searches after it see
+further. `nntrain --smooth n` replaces a position's score in the target with the mean, as a chance
+of winning, of the next n scored plies' scores, each read for the side to move at the position; a
+deviation's unscored ply is skipped and a forced result counts as 0 or 1. The data is unchanged,
+the trainer reads ahead in the game it already holds. E49's recipe from E48's network with
+`--smooth 4`, on the GPU, in `external/build/e68` (to be staged only if it passes):
+
+| Held out, against results | E49 | Smoothed over 4 |
+|---|---|---|
+| 5x5 gen 11 | 0.387641 | 0.383223 |
+| 6x6 gen 10 | 0.419904 | 0.417741 |
+| 6x6 gen 11 | 0.416033 | 0.413635 |
+| 7x7 gen 11 | 0.462961 | 0.462664 |
+| 8x8 gen 11 | 0.504147 | 0.504035 |
+
+The scale is the same, so these compare, but a target drawn from later scores sits nearer the
+result and so scores nearer it, as a higher lambda would: the SPRT decides. The engine reads within
+0.77 of the fit on average, 6 at worst on 3x3.
+
+| Match | Result |
+|---|---|
+| Smoothed over 4 against E66 (E49's network), 2+0.02, [0, 10] | INCONCLUSIVE at the cap, 2000 games, +741 -660 =599, **+14.1 +/- 12.7**, LLR +2.15, pairs [111, 193, 332, 232, 132], bench 1534984, none on time |
+| The same at `--seed 2`, another order of the book | **PASSED**, 1708 games, +640 -547 =521, **+18.9 +/- 13.4**, pairs [84, 158, 305, 195, 112], none on time |
+| Both, pooled | 3708 games, **+16.3 +/- 9.2**, pairs [195, 351, 637, 427, 244] |
+
+A first build of it was E49 by mistake, its chain having deleted the network before copying it;
+the refit gave the same bytes, as a GPU fit does. The later scores of a game are a better target
+than one search's: about 16 Elo at no cost in data or play.
+
+## E69: gen 13, from our own seeds and people's games
+
+Gen 13 is 6x6 only, played by E66, with no other engine's play in it (DATA.md): 130,395 games, 12.7M
+positions, `external/data/gen13`, takref replaying 652 of them without a fault. Three sets, each at
+20k nodes and at 60k nodes for the same time, about 100 minutes a cell:
+
+| Set | Seeded from | 20k | 60k |
+|---|---|---|---|
+| self | random plies, as before | 27,000 | 9,000 |
+| variants | positions from Yapper's own match games, 46 plies in on average (`mkopenings.py`) | 38,400 | 12,795 |
+| humans | positions from 19,381 PlayTak games between people (`playtak.py`) | 32,400 | 10,800 |
+
+Nearly every position of every set, gen 11's included, is new, so variety was counted by kind:
+stacks (height, top, the colours of the top six) and positions (empty squares, tallest stack,
+walls, capstones, flat lead, reserves). Self-play is gen 11 again. The variants have the most
+stacks of a kind gen 11 rarely shows (1.8% of them against 1.1%), tall stacks and walls of the late
+middle game, and a quarter of their games drawn; the human-seeded games spread widest over kinds
+of position (18.8% of a kind under one in 10,000 of gen 11's, against 14.2%). Road wins fell to
+5-6% of the games in every set, self-play's too, from 8-9% in gen 10 and 11.
+
+Seven fits from E49 by its recipe, gen 13's part listed four times (one file a cell: 90 files
+four times passed Windows' command line). Held out, against results:
+
+| Fit | 6x6 gen 10 | 6x6 gen 11 | 6x6 gen 13 20k | 6x6 gen 13 60k |
+|---|---|---|---|---|
+| E49, before any step | 0.419904 | 0.416033 | 0.448693 | 0.447475 |
+| control, no gen 13 | 0.419801 | 0.415905 | | |
+| all of gen 13 | 0.415989 | 0.411143 | 0.441786 | 0.439708 |
+| its 20k half | 0.416674 | 0.411997 | 0.443109 | |
+| its 60k half | 0.418276 | 0.413980 | | 0.444487 |
+| self alone | 0.417755 | 0.413354 | | |
+| variants alone | 0.418594 | 0.414465 | | |
+| humans alone | 0.418131 | 0.413787 | | |
+
+Gen 13 was far from what E49 knew, 0.033 worse than gen 11 on 6x6, and fitting on it improved gen
+11's held-out games too, each set alone included. Then two fine-tunes of the fit on all of it, at
+rate 0.0002 for two epochs: on every game of 20k nodes and up (3x3 and 4x4 keeping their 5k games,
+which are all they have), and on gen 13's 60k games alone for 6x6, the other sizes at a twentieth.
+
+| Match, 2+0.02, [0, 10] | Result |
+|---|---|
+| All of gen 13 against E66 (E49's network) | **PASSED**, 730 games, +282 -208 =240, **+35.3 +/- 19.7**, pairs [24, 69, 129, 95, 48], bench 1341109 |
+| The 60k half against the 20k half | **FAILED**, 976 games, +313 -368 =295, **-19.6 +/- 17.8**, pairs [63, 117, 166, 96, 46] |
+| 20k+ fine-tune against all | INCONCLUSIVE at the cap, 2000 games, +749 -683 =568, **+11.5 +/- 12.6**, LLR +1.56, pairs [105, 205, 345, 209, 136], bench 1350467 |
+| 60k fine-tune against all | **FAILED**, 1446 games, +504 -555 =387, **-12.3 +/- 14.9**, pairs [97, 155, 256, 132, 83] |
+
+None lost on time. For the same machine time, three times the games at 20k nodes beat a third of
+them at 60k: more positions teach more than deeper scores do, at these budgets. Finishing on the
+deeper games alone forgets; finishing on everything at 20k and up leans better, and gets a second
+SPRT at `--seed 2`. A fine-tune's held-out losses do not compare with the fits above: it reads
+other games.
+
 ## Mistakes worth not repeating
 
 - **Bench is not a tree-size measure.** Its 13 positions are mostly openings and other sizes. E62's

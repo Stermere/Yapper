@@ -176,8 +176,8 @@ has to be the one of its commit's day: `topaz-tei.exe` is dcb8cd2 on branch `bac
    tree: ordering by a depth 1 search from depth 6 cost a sixth more nodes to a depth on real
    positions and lost 25 to 32 in three forms, E62, as E52 found a better-predicting prior ordered
    little better. History already holds what refutes in the tree; a prior is worth pursuing for
-   its cost, not its top 1. The feature map as an evaluation does not pay either, E61. E60's
-   openings from the opponents' games belong in the next generation's mix.
+   its cost, not its top 1. The feature map as an evaluation does not pay either, E61. No other
+   engine's play goes into the data, so E60's gen 12 stays out of every fit: DATA.md.
 5. Run on real ARM and measure it, since that is a stated target.
 6. Make and unmake have plateaued at about 3 ns a node on the start position and 8.5 ns on the
    endgame: E7 lists what no longer helps. Any further lead has to come from an idea that is not

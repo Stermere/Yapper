@@ -25,4 +25,7 @@ void thread_join(ThreadHandle handle);
 /* For waiting on an external event, never inside the search. */
 void thread_sleep_ms(int ms);
 
+/* For a status file, whose reader asks whether the process that wrote it still runs. */
+int process_id(void);
+
 #endif

@@ -1,5 +1,6 @@
 """
-progress.py - a live view of every match: where each stands, and when the queue should end.
+progress.py - a live view of every long run, matches, fits and datagen: where each stands, and
+when the queue should end.
 
     python tools/progress.py                  # redrawn in the terminal every 5 seconds
     python tools/progress.py --serve 8765     # the same as a page, http://localhost:8765
@@ -10,17 +11,21 @@ What it reads, all under external/games/:
 - live/*.json, which tools/match.py writes after every pair, however it was started. Whether its
   process still runs tells a match that is playing from one that was killed. tools/tune.py writes
   one too, with the parameters that have moved furthest; one that stopped short of its end is
-  paused, since --resume carries it on, and stays listed however long it waits.
+  paused, since --resume carries it on, and stays listed however long it waits. `yapper nntrain`
+  writes one for every fit run from the repository's root, and tools/datagen.py one a run.
 - queue.txt, if there is one: the runs planned, in the order they play, so it can say when each
   should start and end. One run a line, then a label:
 
       # Review of E52, 2026-11-06
-      games 600   external/games/tak/e52-k4.log   E52 vs syntaks at 1/4
-      sprt  2000  external/games/pol2/r1.log      r1 flat win on the spot, vs E52
+      games   600    external/games/tak/e52-k4.log   E52 vs syntaks at 1/4
+      sprt    2000   external/games/pol2/r1.log      r1 flat win on the spot, vs E52
+      fit     2      external/build/e69/net-all.h    gen 13 refit
+      datagen 27000  external/data/gen13/6s/gen13    gen 13 self-play
 
   `sprt` may stop before its cap and `games` plays them all. The path names the run: the match.py
-  run whose PTN has that directory and name, or else a log, racetrack's or match.py's printout.
-  The first comment is the title.
+  run whose PTN has that directory and name, or else a log, racetrack's or match.py's printout; a
+  fit's network, with the epochs; datagen's --out, with the games. A fit not yet started is
+  expected to take as long as the fits before it. The first comment is the title.
 - Any other log written in the last ten minutes, such as racetrack's, which keeps no status of
   its own. How long such a run will be is unknown.
 
@@ -70,8 +75,11 @@ EARLY_GAMES = 200  # before this, an SPRT's LLR says little about where it is he
 DISCOVER = 600.0
 RECENT = 86400.0
 SPRT_CAP = 2000  # match.py's default under SPRT, for a printout found without a queue line
+FIT_QUIET = 600.0  # a fit scoring millions of held-out positions writes nothing for a while
+FIT_TAIL = 30.0  # the least a fit takes after its last step: scoring, writing, checking
 ENDED = ("done", "stopped", "paused")
 LIVELY = ("running", "stalled")
+OWN_STATUS = ("fit", "datagen")  # kinds known only from a status file, never from a log
 
 _logs: dict[Path, tuple[tuple[int, int], dict]] = {}
 _statuses: dict[Path, tuple[tuple[int, int], dict]] = {}
@@ -130,6 +138,33 @@ def moved(spsa: list, count: int = 6) -> str:
     return "  ".join(f"{name} {start:g}>{now:.1f}" for name, start, now, _, _ in far)
 
 
+def short(path: str) -> str:
+    """A network or a datagen run by its folder and name, as a label."""
+    parts = Path(path).parts
+    return "/".join(parts[-2:])
+
+
+def read_job(s: dict) -> dict:
+    """A fit's status, from `yapper nntrain`, or a datagen run's, from tools/datagen.py. Their
+    paths are the network and the --out prefix, by which queue.txt names them."""
+    out = ROOT / s["out"]
+    code = s.get("code")
+    run = {"source": "status", "kind": s["kind"], "pid": s.get("pid"), "ptn": str(out),
+           "start": s["started"], "touched": s["updated"], "finished": bool(s.get("finished")),
+           "code": code, "verdict": "FAILED" if code else None, "w": None}
+    if s["kind"] == "fit":
+        run.update(label=f"fit {short(s['out'])}", cap=None, games=0, phase=s.get("phase", ""),
+                   step=s.get("step", 0), steps=s.get("steps", 0), epoch=s.get("epoch", 0),
+                   epochs=s.get("epochs", 0), files=s.get("files", [0, 0]),
+                   positions=s.get("positions", 0), losses=s.get("losses", []),
+                   averaged=s.get("averaged"), device=s.get("device", ""),
+                   read_at=s.get("read_at") or 0.0, train_at=s.get("train_at") or 0.0)
+    else:
+        run.update(label=s.get("label") or f"datagen {short(s['out'])}", cap=s["cap"],
+                   games=s["games"], positions=s.get("positions", 0), nodes=s.get("nodes"))
+    return run
+
+
 def read_status(path: Path) -> dict | None:
     hit = _statuses.get(path)
     try:
@@ -138,6 +173,11 @@ def read_status(path: Path) -> dict | None:
         if hit and hit[0] == key:
             return hit[1]
         s = json.loads(path.read_text(encoding="utf-8"))
+        if s.get("kind") in OWN_STATUS:
+            run = read_job(s)
+            run["dir"] = folder(Path(run["ptn"]).parent)
+            _statuses[path] = (key, run)
+            return run
         run = {"source": "status", "label": s.get("label") or path.stem, "pid": s.get("pid"),
                "kind": "sprt" if s.get("sprt") else "games", "cap": s.get("cap"),
                "tc": s.get("tc"), "ptn": s.get("ptn"), "start": s["started"],
@@ -212,8 +252,32 @@ def settle(run: dict, later: bool, now: float) -> str:
     elif later:
         return "stopped"
     rate = own_rate(run)
-    limit = max(STALL_GAMES / rate if rate else 600.0, STALL_FLOOR)
+    limit = FIT_QUIET if run["kind"] == "fit" else \
+        max(STALL_GAMES / rate if rate else 600.0, STALL_FLOOR)
     return "stalled" if now - run["touched"] > limit else "running"
+
+
+def fit_typical(statuses: list[dict], now: float) -> float | None:
+    """How long the day's finished fits took, for one not yet started."""
+    spans = [s["touched"] - s["start"] for s in statuses
+             if s["kind"] == "fit" and s["finished"] and not s.get("code")
+             and now - s["touched"] < RECENT]
+    return statistics.median(spans) if spans else None
+
+
+def fit_left(run: dict, statuses: list[dict], now: float) -> float | None:
+    """Seconds to a fit's end: its steps at the pace of those done, then scoring the held-out
+    games again, which takes about as long as a warm fit's first scoring did."""
+    typical = fit_typical(statuses, now)
+    if "source" not in run:
+        return typical
+    tail = max(FIT_TAIL, run["train_at"] - run["read_at"]) if run["read_at"] else FIT_TAIL
+    if run["phase"] == "training" and run["step"] and run["train_at"]:
+        pace = (run["touched"] - run["train_at"]) / run["step"]
+        return max(0.0, (run["steps"] - run["step"]) * pace + tail - (now - run["touched"]))
+    if run["steps"] and run["step"] >= run["steps"]:
+        return max(0.0, tail - (now - run["touched"]))
+    return max(FIT_TAIL, typical - (now - run["start"])) if typical else None
 
 
 def median_sprt(directory: str, statuses: list[dict]) -> float | None:
@@ -253,7 +317,7 @@ def build(queue: Path) -> dict:
         if found:
             used.add(found)
             run.update(statuses[found])
-        elif info := read_log(target):
+        elif e["kind"] not in OWN_STATUS and (info := read_log(target)):
             run.update(info)
         run["label"] = e["label"]
         plan.append(run)
@@ -289,6 +353,18 @@ def build(queue: Path) -> dict:
     cursor = latest = now
     known = True
     for run in plan:
+        if run["kind"] == "fit":
+            run["rate"] = None
+            if run["status"] in ENDED:
+                continue
+            left = fit_left(run, all_statuses, now) if known else None
+            if left is None:
+                known = False
+                continue
+            run["starts"] = cursor
+            run["eta"], run["worst"] = cursor + left, latest + left
+            cursor, latest = run["eta"], run["worst"]
+            continue
         group = (run["kind"], run["cap"], run["dir"])
         if (rate := own_rate(run) if "source" in run else None):
             rates[group] = rate
@@ -303,6 +379,11 @@ def build(queue: Path) -> dict:
         run["worst"] = latest + (run["cap"] - run.get("games", 0)) / run["rate"]
         cursor, latest = run["eta"], run["worst"]
     for run in others:
+        if run["kind"] == "fit":
+            run["rate"] = None
+            if run["status"] in LIVELY and (left := fit_left(run, all_statuses, now)) is not None:
+                run["eta"] = run["worst"] = now + left
+            continue
         run["rate"] = own_rate(run)
         if run["status"] in LIVELY and run["rate"] and run["cap"]:
             run["eta"] = now + expected_left(run, all_statuses) / run["rate"]
@@ -338,6 +419,24 @@ def score(run: dict, short: bool = False) -> str:
     return elo if short else f"+{run['w']} -{run['l']} ={run['d']}  {elo}"
 
 
+def job_score(run: dict) -> str:
+    """What a finished fit or datagen run shows in place of a match's score."""
+    if run["kind"] == "fit" and run.get("averaged"):
+        return f"held out {run['averaged'][0]:.4f}, results {run['averaged'][1]:.4f}"
+    if run["kind"] == "datagen":
+        return f"{run['positions']:,} positions"
+    return ""
+
+
+def job_progress(run: dict) -> tuple[float, str]:
+    """A fit's place: its steps once training, else the files it has read."""
+    if run["steps"]:
+        return run["step"] / run["steps"], \
+            f"step {run['step']}/{run['steps']}, epoch {run['epoch']}/{run['epochs']}"
+    read, files = run["files"]
+    return (read / files if files else 0.0), f"read {read}/{files} files"
+
+
 def bar(fraction: float, width: int = 30) -> str:
     filled = round(width * max(0.0, min(1.0, fraction)))
     return "█" * filled + "░" * (width - filled)
@@ -363,7 +462,7 @@ def summary(model: dict) -> str:
         parts.append(f"the queue ends ~{clock(model['end'])}, {duration(model['end'] - now)} "
                      f"from now, {clock(model['latest'])} at the latest")
     if busy:
-        parts.append(f"{busy} other match{'es' if busy > 1 else ''} running")
+        parts.append(f"{busy} other run{'s' if busy > 1 else ''} going")
     return ". ".join(p[:1].upper() + p[1:] for p in parts) if parts else "Nothing running"
 
 
@@ -372,7 +471,7 @@ def render_text(model: dict, colour: bool) -> str:
         return f"\x1b[{code}m{s}\x1b[0m" if colour else s
 
     now, runs = model["now"], model["runs"]
-    out = [paint("1", model["title"] or "Matches") + "   " + time.strftime("%H:%M:%S"),
+    out = [paint("1", model["title"] or "Runs") + "   " + time.strftime("%H:%M:%S"),
            summary(model), ""]
     if not runs:
         return "\n".join(out)
@@ -386,18 +485,37 @@ def render_text(model: dict, colour: bool) -> str:
                         f"{run['verdict']:<12}")
         else:
             tag = paint("33", f"{run['status']:<12}") if run["status"] != "done"                 else "done        "
-        count = str(run["games"]) if run["status"] == "done" or not run["cap"] \
-            else f"{run['games']}/{run['cap']}"
-        out.append(f"  {label}  {tag} {count:>8}  {score(run, True):<30} "
+        if run["kind"] == "fit":
+            count = f"{run['epochs']} ep"
+        else:
+            count = str(run["games"]) if run["status"] == "done" or not run["cap"] \
+                else f"{run['games']}/{run['cap']}"
+        result = job_score(run) if run["kind"] in OWN_STATUS else score(run, True)
+        out.append(f"  {label}  {tag} {count:>8}  {result:<30} "
                    f"{duration(run['touched'] - run['start']):>7}")
     for run in (r for r in runs if r["status"] in LIVELY):
         hue = "36" if run["status"] == "running" else "1;33"
         games, cap = run["games"], run["cap"]
         out += ["", f"  {paint('1', run['label'])}  {paint(hue, run['status'].upper())}"
                 + ("" if run["planned"] else paint("2", "  (not queued)"))]
-        rate = f"  {run['rate'] * 60:.0f}/min" if run["rate"] else ""
-        progress = f"{paint(hue, bar(games / cap))} {games}/{cap}" if cap else f"{games}"
-        out.append(f"    {progress} games{rate}  started {clock(run['start'])}")
+        if run["kind"] == "fit":
+            fraction, where = job_progress(run)
+            out.append(f"    {paint(hue, bar(fraction))} {where}  {run['phase']}  "
+                       f"started {clock(run['start'])}")
+            if run["positions"]:
+                out.append(f"    {run['positions']:,} positions"
+                           + (f" on {run['device']}" if run["device"] else ""))
+            for i, (_, held, results) in enumerate(run["losses"], 1):
+                out.append(f"    epoch {i}: held out {held:.6f}, against results {results:.6f}")
+            if run.get("averaged"):
+                out.append(f"    averaged: held out {run['averaged'][0]:.6f}, "
+                           f"against results {run['averaged'][1]:.6f}")
+        else:
+            rate = f"  {run['rate'] * 60:.0f}/min" if run["rate"] else ""
+            progress = f"{paint(hue, bar(games / cap))} {games}/{cap}" if cap else f"{games}"
+            out.append(f"    {progress} games{rate}  started {clock(run['start'])}")
+        if run["kind"] == "datagen" and run["positions"]:
+            out.append(f"    {run['positions']:,} positions")
         if run.get("w") is not None:
             out.append(f"    {score(run)}" + (f"  pairs {run['pairs']}" if run.get("pairs") else ""))
         if run.get("llr") is not None:
@@ -424,7 +542,7 @@ def render_text(model: dict, colour: bool) -> str:
 PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Match Queue</title>
+<title>Run Queue</title>
 <style>
 :root { --bg:#f6f6f3; --card:#fff; --ink:#1c1c1a; --mute:#6c6b66; --line:#e2e1dc; --track:#ebeae5;
   --run:#2b6cd4; --ok:#1d8048; --bad:#c0362d; --warn:#a86f12; }
@@ -469,7 +587,7 @@ h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(-
 @media (max-width:560px) { .hide { display:none; } }
 </style></head>
 <body><main>
-<h1 id="title">Matches</h1>
+<h1 id="title">Runs</h1>
 <div class="sub num"><span id="summary"></span> <span id="stale" hidden>· the server is not answering</span></div>
 <div id="live"></div>
 <h2 id="qh">Queued</h2><div class="card"><table id="queued"></table></div>
@@ -489,13 +607,31 @@ function score(r, short) {
   const elo = `<b>${sign((r.elo || 0).toFixed(1))}</b> ± ${(r.err || 0).toFixed(1)}`;
   return short ? elo : `+${r.w} −${r.l} =${r.d} &nbsp; Elo ${elo}`;
 }
+const line = html => `<div class="facts num" style="margin-top:4px">${html}</div>`;
+const losses = (what, held, results) => line(`${what}: held out <b>${held.toFixed(6)}</b>, against results <b>${results.toFixed(6)}</b>`);
+function jobScore(r) {
+  if (r.kind === 'fit') return r.averaged ? `held out <b>${r.averaged[0].toFixed(4)}</b>, results <b>${r.averaged[1].toFixed(4)}</b>` : '';
+  if (r.kind === 'datagen') return `${r.positions.toLocaleString()} positions`;
+  return score(r, true);
+}
 function live(r, now) {
-  let bar = '', facts = [];
-  if (r.cap) {
+  let bar = '', facts = [], lines = '';
+  if (r.kind === 'fit') {
+    const reading = !r.steps;
+    const part = reading ? (r.files[1] ? r.files[0] / r.files[1] : 0) : r.step / r.steps;
+    bar = `<div class="bar"><i style="width:${100 * part}%"></i></div>`;
+    facts.push(reading ? `<span>read <b class="num">${r.files[0]}</b> / ${r.files[1]} files</span>`
+      : `<span>step <b class="num">${r.step}</b> / ${r.steps}, epoch <b>${r.epoch}</b> / ${r.epochs}</span>`);
+    facts.push(`<span>${esc(r.phase)}</span>`);
+    if (r.positions) facts.push(`<span><b class="num">${r.positions.toLocaleString()}</b> positions${r.device ? ' on ' + esc(r.device) : ''}</span>`);
+    lines = r.losses.map((l, i) => losses('epoch ' + (i + 1), l[1], l[2])).join('');
+    if (r.averaged) lines += losses('averaged', r.averaged[0], r.averaged[1]);
+  } else if (r.cap) {
     const mark = r.eta && r.rate ? `<u style="left:${Math.min(100, 100 * (r.games + (r.eta - now) * r.rate) / r.cap)}%" title="expected end"></u>` : '';
     bar = `<div class="bar"><i style="width:${100 * r.games / r.cap}%"></i>${mark}</div>`;
     facts.push(`<span><b class="num">${r.games}</b> / ${r.cap} games</span>`);
   } else facts.push(`<span><b class="num">${r.games}</b> games</span>`);
+  if (r.kind === 'datagen' && r.positions) lines = line(`<b>${r.positions.toLocaleString()}</b> positions`);
   if (r.rate) facts.push(`<span><b class="num">${Math.round(r.rate * 60)}</b>/min</span>`);
   facts.push(`<span>started <b>${clock(r.start)}</b></span>`);
   if (r.status === 'stalled') facts.push(`<span class="warn">no game for ${dur(now - r.touched)}: hung?</span>`);
@@ -510,14 +646,14 @@ function live(r, now) {
   return `<div class="card ${r.status}"><div class="head"><b>${esc(r.label)}</b>
     ${r.planned ? '' : '<span class="extra">not queued</span>'}
     <span class="tag ${r.status}">${r.status.toUpperCase()}</span></div>${bar}
-    <div class="facts" style="margin-top:${r.cap ? 0 : 8}px">${facts.join('')}</div>
-    <div class="facts num" style="margin-top:4px">${score(r)}${r.pairs ? ' &nbsp; pairs [' + r.pairs.join(', ') + ']' : ''}</div>${llr}
+    <div class="facts" style="margin-top:${bar ? 0 : 8}px">${facts.join('')}</div>
+    <div class="facts num" style="margin-top:4px">${score(r)}${r.pairs ? ' &nbsp; pairs [' + r.pairs.join(', ') + ']' : ''}</div>${lines}${llr}
     ${r.moved ? '<div class="facts num" style="margin-top:4px">moved ' + esc(r.moved) + '</div>' : ''}</div>`;
 }
 function render(m) {
   const now = m.now, runs = m.runs;
-  $('#title').textContent = m.title || 'Matches';
-  document.title = m.title ? 'Queue: ' + m.title : 'Match Queue';
+  $('#title').textContent = m.title || 'Runs';
+  document.title = m.title ? 'Queue: ' + m.title : 'Run Queue';
   $('#summary').textContent = m.summary + ` · updated ${new Date(now * 1000).toLocaleTimeString()}`;
   $('#live').innerHTML = runs.filter(r => r.status === 'running' || r.status === 'stalled').map(r => live(r, now)).join('');
   const queued = runs.filter(r => r.status === 'queued');
@@ -529,8 +665,8 @@ function render(m) {
   $('#done').innerHTML = done.slice().reverse().map(r => {
     const tag = r.verdict || r.status;
     return `<tr><td>${esc(r.label)}</td><td class="tag ${tag}">${tag.toUpperCase()}</td>
-      <td class="r num hide">${r.status !== 'done' && r.cap ? r.games + '/' + r.cap : r.games} g</td>
-      <td class="r num">${score(r, true)}</td><td class="r num hide">${dur(r.touched - r.start)}</td></tr>`;
+      <td class="r num hide">${r.kind === 'fit' ? r.epochs + ' ep' : (r.status !== 'done' && r.cap ? r.games + '/' + r.cap : r.games) + ' g'}</td>
+      <td class="r num">${jobScore(r)}</td><td class="r num hide">${dur(r.touched - r.start)}</td></tr>`;
   }).join('');
 }
 async function tick() {

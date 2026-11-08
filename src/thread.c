@@ -44,7 +44,11 @@ void thread_join(ThreadHandle handle) {
 
 void thread_sleep_ms(int ms) { Sleep((DWORD)ms); }
 
+int process_id(void) { return (int)GetCurrentProcessId(); }
+
 #else
+
+#include <unistd.h>
 
 static void *thread_trampoline(void *raw) {
     ThreadStart start = *(ThreadStart *)raw;
@@ -78,5 +82,7 @@ void thread_sleep_ms(int ms) {
     const struct timespec pause = {ms / 1000, (long)(ms % 1000) * 1000000};
     nanosleep(&pause, NULL);
 }
+
+int process_id(void) { return (int)getpid(); }
 
 #endif
