@@ -9,7 +9,8 @@ What it reads, all under external/games/:
 
 - live/*.json, which tools/match.py writes after every pair, however it was started. Whether its
   process still runs tells a match that is playing from one that was killed. tools/tune.py writes
-  one too, with the parameters that have moved furthest.
+  one too, with the parameters that have moved furthest; one that stopped short of its end is
+  paused, since --resume carries it on, and stays listed however long it waits.
 - queue.txt, if there is one: the runs planned, in the order they play, so it can say when each
   should start and end. One run a line, then a label:
 
@@ -69,7 +70,7 @@ EARLY_GAMES = 200  # before this, an SPRT's LLR says little about where it is he
 DISCOVER = 600.0
 RECENT = 86400.0
 SPRT_CAP = 2000  # match.py's default under SPRT, for a printout found without a queue line
-ENDED = ("done", "stopped")
+ENDED = ("done", "stopped", "paused")
 LIVELY = ("running", "stalled")
 
 _logs: dict[Path, tuple[tuple[int, int], dict]] = {}
@@ -149,6 +150,7 @@ def read_status(path: Path) -> dict | None:
         run.update(llr=s["llr"], lower=s["lower"], upper=s["upper"])
     if s.get("spsa"):
         run["moved"] = moved(s["spsa"])
+        run["resumable"] = True
     run["dir"] = folder(Path(run["ptn"]).parent) if run["ptn"] else ""
     _statuses[path] = (key, run)
     return run
@@ -206,7 +208,7 @@ def settle(run: dict, later: bool, now: float) -> str:
         return "done"
     if run["source"] == "status":
         if not alive(run["pid"]):
-            return "stopped"
+            return "paused" if run.get("resumable") else "stopped"
     elif later:
         return "stopped"
     rate = own_rate(run)
@@ -262,7 +264,8 @@ def build(queue: Path) -> dict:
     for p, s in statuses.items():
         run: dict = dict(s, planned=False)
         run["status"] = settle(run, False, now)
-        if p not in used and (run["status"] in LIVELY or now - run["touched"] < RECENT):
+        if p not in used and (run["status"] in (*LIVELY, "paused")
+                              or now - run["touched"] < RECENT):
             others.append(run)
     covered = {(s["dir"], Path(s["ptn"]).stem) for s in statuses.values() if s["ptn"]}
     for p in [*GAMES.glob("*.log"), *GAMES.glob("*/*.log")]:
@@ -382,7 +385,7 @@ def render_text(model: dict, colour: bool) -> str:
             tag = paint({"PASSED": "32", "FAILED": "31"}.get(run["verdict"], "33"),
                         f"{run['verdict']:<12}")
         else:
-            tag = paint("33", "stopped     ") if run["status"] == "stopped" else "done        "
+            tag = paint("33", f"{run['status']:<12}") if run["status"] != "done"                 else "done        "
         count = str(run["games"]) if run["status"] == "done" or not run["cap"] \
             else f"{run['games']}/{run['cap']}"
         out.append(f"  {label}  {tag} {count:>8}  {score(run, True):<30} "
@@ -441,7 +444,7 @@ h1 { font-size:20px; margin:0; }
 .head b { flex:1 1 240px; }
 .tag { font-size:12px; font-weight:700; letter-spacing:.04em; }
 .running { color:var(--run); } .stalled { color:var(--warn); } .PASSED { color:var(--ok); }
-.FAILED { color:var(--bad); } .INCONCLUSIVE, .stopped { color:var(--warn); }
+.FAILED { color:var(--bad); } .INCONCLUSIVE, .stopped, .paused { color:var(--warn); }
 .extra { color:var(--mute); font-size:12px; }
 .bar { position:relative; height:8px; background:var(--track); border-radius:99px; margin:10px 0 8px; }
 .bar i { position:absolute; left:0; top:0; bottom:0; background:var(--run); border-radius:99px; }
@@ -479,7 +482,7 @@ const clock = t => t ? new Date(t * 1000).toLocaleTimeString([], {hour: '2-digit
 const dur = s => { s = Math.max(0, Math.round(s)); if (s < 60) return s + 's';
   const m = Math.floor(s / 60); return m >= 60 ? Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm' : m + 'm'; };
 const sign = x => (x >= 0 ? '+' : '') + x;
-const ended = r => r.status === 'done' || r.status === 'stopped';
+const ended = r => ['done', 'stopped', 'paused'].includes(r.status);
 function score(r, short) {
   if (r.w === undefined || r.w === null) return '';
   if (r.lo !== undefined) return `+${r.w} −${r.l} =${r.d} &nbsp; <b>${sign(r.elo)}</b> [${sign(r.lo)}, ${sign(r.hi)}]`;
@@ -526,7 +529,7 @@ function render(m) {
   $('#done').innerHTML = done.slice().reverse().map(r => {
     const tag = r.verdict || r.status;
     return `<tr><td>${esc(r.label)}</td><td class="tag ${tag}">${tag.toUpperCase()}</td>
-      <td class="r num hide">${r.status === 'stopped' && r.cap ? r.games + '/' + r.cap : r.games} g</td>
+      <td class="r num hide">${r.status !== 'done' && r.cap ? r.games + '/' + r.cap : r.games} g</td>
       <td class="r num">${score(r, true)}</td><td class="r num hide">${dur(r.touched - r.start)}</td></tr>`;
   }).join('');
 }

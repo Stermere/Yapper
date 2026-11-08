@@ -27,12 +27,11 @@
 #define BATCH       1024 /* positions a step */
 #define FIT_LIMIT   ((float)POLICY_LIMIT / POLICY_QA)
 
-/* A position: its moves' feature counts and features, and those of the position alone. */
+/* A position: its moves' feature counts and features. */
 typedef struct FitPos {
     u64 feat, move;
-    u32 ctx;
     u16 count, target;
-    u8 ctx_n, spread;
+    u8 spread;
 } FitPos;
 
 typedef struct FitSet {
@@ -42,8 +41,6 @@ typedef struct FitSet {
     u64 nmoves, cmoves;
     u16 *feats;
     u64 nfeats, cfeats;
-    u16 *ctx;
-    u64 nctx, cctx;
 } FitSet;
 
 typedef struct FitScore {
@@ -135,16 +132,12 @@ static bool fit_read_position(const Board *b, const DataGame *game, int ply, u64
     set->counts = fit_grow(set->counts, &set->cmoves, set->nmoves + (u64)count, 1);
     set->feats =
         fit_grow(set->feats, &set->cfeats, set->nfeats + (u64)count * POLICY_MAX_ACTIVE, 2);
-    set->ctx  = fit_grow(set->ctx, &set->cctx, set->nctx + POLICY_MAX_ACTIVE, 2);
     FitPos *p = &set->pos[set->npos++];
     p->feat   = set->nfeats;
     p->move   = set->nmoves;
-    p->ctx    = (u32)set->nctx;
     p->count  = (u16)count;
     p->target = (u16)target;
     p->spread = !move_is_place(w->moves[target]);
-    p->ctx_n  = (u8)policy_context_features(b, &ctx, set->ctx + set->nctx);
-    set->nctx += p->ctx_n;
     for (int j = 0; j < count; j++) {
         const int n = policy_features(b, &ctx, w->moves[j], set->feats + set->nfeats);
         set->counts[set->nmoves++] = (u8)n;
@@ -173,19 +166,11 @@ static double fit_position(FitWorker *w, const FitSet *set, const FitPos *p, flo
     const u16 *feats  = set->feats + p->feat;
     const u8 *counts  = set->counts + p->move;
     const float *wlin = WLIN(FitParam), *emb = EMB(FitParam), *w2 = W2(FitParam);
-    float ctx[H];
-    memcpy(ctx, B1(FitParam), sizeof(ctx));
-    for (int k = 0; k < p->ctx_n; k++) {
-        const float *row = emb + (u64)set->ctx[p->ctx + k] * H;
-        for (int h = 0; h < H; h++) {
-            ctx[h] += row[h];
-        }
-    }
     double top   = -1e30;
     const u16 *f = feats;
     for (int j = 0; j < p->count; j++) {
         float *a = w->pre + (u64)j * H;
-        memcpy(a, ctx, sizeof(ctx));
+        memcpy(a, B1(FitParam), H * sizeof(float));
         double z = 0.0;
         for (int k = 0; k < counts[j]; k++) {
             z += wlin[f[k]];
@@ -223,8 +208,8 @@ static double fit_position(FitWorker *w, const FitSet *set, const FitPos *p, flo
         return loss;
     }
     float *gw = WLIN(grad), *ge = EMB(grad), *gb = B1(grad), *g2 = W2(grad);
-    float dctx[H] = {0};
-    f             = feats;
+    float dbias[H] = {0};
+    f              = feats;
     for (int j = 0; j < p->count; j++) {
         const float step = (float)(exp(w->logits[j] - top) / total - (j == p->target));
         const float *a   = w->pre + (u64)j * H;
@@ -232,7 +217,7 @@ static double fit_position(FitWorker *w, const FitSet *set, const FitPos *p, flo
         for (int h = 0; h < H; h++) {
             g2[h] += step * fit_clip(a[h]);
             da[h] = a[h] > 0.f && a[h] < 1.f ? step * w2[h] : 0.f;
-            dctx[h] += da[h];
+            dbias[h] += da[h];
         }
         for (int k = 0; k < counts[j]; k++) {
             gw[f[k]] += step;
@@ -244,13 +229,7 @@ static double fit_position(FitWorker *w, const FitSet *set, const FitPos *p, flo
         f += counts[j];
     }
     for (int h = 0; h < H; h++) {
-        gb[h] += dctx[h];
-    }
-    for (int k = 0; k < p->ctx_n; k++) {
-        float *row = ge + (u64)set->ctx[p->ctx + k] * H;
-        for (int h = 0; h < H; h++) {
-            row[h] += dctx[h];
-        }
+        gb[h] += dbias[h];
     }
     return loss;
 }

@@ -5,6 +5,7 @@ tune.py - SPSA over the tunables in src/tune.h, by self-play of a `make TUNE=on`
     python tools/tune.py --list
     python tools/tune.py --name lmr --params LmrBase,LmrDivisor,LmrMoves \
         --pairs 20000 --tc 2+0.02 --book tests/books/6s_4ply.txt
+    python tools/tune.py --name lmr --pause     # from another terminal
     python tools/tune.py --name lmr --resume
     python tools/tune.py --name lmr --report
 
@@ -30,7 +31,12 @@ command. Record both in docs/EXPERIMENTS.md.
 
 State goes to external/tune/<name>.json after every pair, so a run survives being stopped, and
 every pair's values to <name>.csv beside it. Progress goes to external/games/live, which
-tools/progress.py shows like any match.
+tools/progress.py shows like any match, and as paused once it stops short of the end.
+
+A run plays a copy of its engine, external/tune/<name>.exe, so a rebuild in the days a long run
+may take cannot change the binary between one session and the next. --pause lets the pairs being
+played finish and then exits; Ctrl+C, a closed window or a reboot lose only those pairs, which
+--resume draws again.
 
 Stdlib only.
 """
@@ -42,10 +48,13 @@ import concurrent.futures
 import csv
 import json
 import math
+import multiprocessing
 import os
 import random
+import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -148,6 +157,16 @@ def worker_start(config: Config) -> None:
     # A dict each: Engine keeps the one it is given, and set_values() writes to it.
     WORKER["plus"] = match.Engine(config.command, dict(config.options))
     WORKER["minus"] = match.Engine(config.command, dict(config.options))
+    threading.Thread(target=die_with_parent, daemon=True).start()
+
+
+def die_with_parent() -> None:
+    """Windows leaves a pool's workers running when the tuner is killed, each with two engines
+    still playing, and they would steal the clock from the run that resumes."""
+    multiprocessing.parent_process().join()
+    for side in ("plus", "minus"):
+        WORKER[side].process.kill()
+    os._exit(1)
 
 
 def set_values(engine: match.Engine, values: dict[str, int]) -> match.Engine:
@@ -184,6 +203,7 @@ class Run:
         self.name = name
         self.state_path = RUNS / f"{name}.json"
         self.csv_path = RUNS / f"{name}.csv"
+        self.pause_path = RUNS / f"{name}.pause"
         self.status_path = match.LIVE / f"spsa-{name}.json"
         self.engine = ""
         self.params: list[Param] = []
@@ -314,11 +334,12 @@ class Run:
     def moved_text(self, count: int) -> str:
         return "  ".join(f"{p.name} {p.start:g}>{p.value:.1f}" for p in self.movers(count))
 
-    def write_status(self, started: float, finished: bool) -> None:
+    def write_status(self, started: float) -> None:
+        # Finished only at the end: a run that stopped short is paused, whatever stopped it.
         status = {"label": f"SPSA {self.name}", "pid": os.getpid(), "dev": self.engine,
                   "base": self.engine, "tc": self.condition(), "ptn": None,
                   "cap": 2 * self.total, "sprt": None, "lower": None, "upper": None,
-                  "started": started, "finished": finished, "verdict": None,
+                  "started": started, "finished": self.done >= self.total, "verdict": None,
                   "spsa": [[p.name, p.start, p.value, p.lo, p.hi] for p in self.params]}
         match.write_status(self.status_path, status, self.tally, None)
 
@@ -359,8 +380,8 @@ def parse_c_end(text: str | None) -> tuple[float | None, dict[str, float]]:
     return None, {name: float(value) for name, value in pairs}
 
 
-def play(run: Run, started_at: float) -> bool:
-    """Plays until the run is done or stopped. True when it finished."""
+def play(run: Run, started_at: float) -> str:
+    """Plays until the run is done, paused or stopped, and says which."""
     command = [run.engine]
     options = {"HalfKomi": str(run.halfkomi)}
     if run.hash_mb:
@@ -373,30 +394,37 @@ def play(run: Run, started_at: float) -> bool:
         match.Engine(command, dict(options)).close()
     except (OSError, match.EngineError) as error:
         print(f"cannot start {run.engine}: {error}", file=sys.stderr)
-        return False
+        return "stopped"
 
     session_start = time.monotonic()
     elapsed_before = run.elapsed
     last_print = 0.0
+    pausing = False
     pending: dict[concurrent.futures.Future, Task] = {}
     pool = concurrent.futures.ProcessPoolExecutor(run.concurrency, initializer=worker_start,
                                                   initargs=(config,))
     try:
         while True:
-            while len(pending) < run.concurrency and run.issued < run.total:
+            if not pausing and run.pause_path.exists():
+                pausing = True
+                print(f"\npausing once the {len(pending)} pairs being played end", flush=True)
+            while not pausing and len(pending) < run.concurrency and run.issued < run.total:
                 task = run.draw()
                 pending[pool.submit(run_task, task)] = task
             if not pending:
                 break
+            # A timeout, so a pause is seen while every worker is mid-game.
             finished, _ = concurrent.futures.wait(
-                pending, return_when=concurrent.futures.FIRST_COMPLETED)
+                pending, timeout=1.0, return_when=concurrent.futures.FIRST_COMPLETED)
+            if not finished:
+                continue
             for future in finished:
                 task = pending.pop(future)
                 scores, endings = future.result()
                 run.apply(task, scores, endings)
             run.elapsed = elapsed_before + time.monotonic() - session_start
             run.save()
-            run.write_status(started_at, False)
+            run.write_status(started_at)
             if time.monotonic() - last_print >= 15.0 or run.done >= run.total:
                 last_print = time.monotonic()
                 left = (run.total - run.done) * run.elapsed / max(1, run.done)
@@ -410,12 +438,16 @@ def play(run: Run, started_at: float) -> bool:
               flush=True)
         pool.shutdown(wait=False, cancel_futures=True)
         run.save()
-        run.write_status(started_at, True)
-        return False
+        run.write_status(started_at)
+        return "stopped"
     pool.shutdown()
     run.save()
-    run.write_status(started_at, True)
-    return True
+    run.write_status(started_at)
+    run.pause_path.unlink(missing_ok=True)
+    if run.done < run.total:
+        print(f"\npaused at pair {run.done}; --resume carries on.", flush=True)
+        return "paused"
+    return "finished"
 
 
 def main() -> int:
@@ -443,6 +475,8 @@ def main() -> int:
     parser.add_argument("--r-end", type=float, default=0.002,
                         help="the last step for each unit of result, as a fraction of c_end")
     parser.add_argument("--resume", action="store_true", help="carry on with run --name")
+    parser.add_argument("--pause", action="store_true",
+                        help="ask run --name to stop once its pairs in flight end, then exit")
     parser.add_argument("--report", action="store_true", help="where run --name stands, then exit")
     parser.add_argument("--dry-run", action="store_true",
                         help="show the run and its first two engines, then exit")
@@ -450,10 +484,14 @@ def main() -> int:
 
     run = Run(args.name)
 
-    if args.report or args.resume:
+    if args.report or args.resume or args.pause:
         if not run.state_path.exists():
             print(f"no run named {args.name}: {run.state_path} does not exist", file=sys.stderr)
             return 1
+        if args.pause:
+            run.pause_path.touch()
+            print(f"{args.name} pauses once the pairs it is playing end; --resume carries on")
+            return 0
         run.load()
         if args.report:
             run.report()
@@ -464,6 +502,8 @@ def main() -> int:
             return 0
         if args.concurrency:
             run.concurrency = max(1, args.concurrency)
+        # A pause asked for while nothing was playing has already happened.
+        run.pause_path.unlink(missing_ok=True)
     else:
         engine = str(Path(args.engine).resolve())
         tunables = query_tunables(engine)
@@ -511,6 +551,13 @@ def main() -> int:
         run.seed = args.seed or random.randrange(1, 2 ** 31)
         run.rng = random.Random(run.seed)
 
+    if not args.resume and not args.dry_run:
+        RUNS.mkdir(parents=True, exist_ok=True)
+        own = RUNS / f"{run.name}{Path(run.engine).suffix}"
+        shutil.copy2(run.engine, own)
+        run.engine = str(own)
+        run.pause_path.unlink(missing_ok=True)
+
     run.prepare()
     print(f"SPSA {run.name}: {len(run.params)} parameters, {run.done}/{run.total} pairs at "
           f"{run.condition()} on {run.size}x{run.size}, {run.concurrency} at once, seed {run.seed}")
@@ -529,9 +576,9 @@ def main() -> int:
 
     if not args.resume:
         run.save()
-    finished = play(run, time.time() - run.elapsed)
+    outcome = play(run, time.time() - run.elapsed)
     run.report()
-    return 0 if finished else 1
+    return 1 if outcome == "stopped" else 0
 
 
 if __name__ == "__main__":

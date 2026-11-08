@@ -46,9 +46,6 @@ typedef struct Worker {
     /* By side, then the whole move. Square plus kind put every spread from a square in one
      * direction in one slot, and a spread east in a flat placement's, whatever it carried. */
     i32 history[2][65536];
-    /* What answered what, by side, then square plus kind of the move before this one and of
-     * this one. */
-    i32 replies[2][256][256];
     Move played[MAX_PLY + 1];
     /* The static evaluation of each node on the path. */
     int evals[MAX_PLY + 1];
@@ -109,7 +106,6 @@ void search_clear(void) {
     tt_clear();
     memset(Search.killers, 0, sizeof(Search.killers));
     memset(Search.history, 0, sizeof(Search.history));
-    memset(Search.replies, 0, sizeof(Search.replies));
 }
 
 static inline int score_to_tt(int score, int ply) {
@@ -293,7 +289,6 @@ static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Mo
     const int us        = board_stm(b);
     const Move killer_a = w->killers[ply][0];
     const Move killer_b = w->killers[ply][1];
-    const i32 *replies  = w->replies[us][ply ? w->played[ply - 1] & 0xFF : 0];
 
     /* The prior, or what the order by hand reads. */
     PolicyContext ctx;
@@ -312,7 +307,7 @@ static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Mo
 
     for (int i = 0; i < count; i++) {
         const Move m = moves[i];
-        i32 score    = w->history[us][m] + replies[m & 0xFF];
+        i32 score    = w->history[us][m];
         if (m == tt_move) {
             score += 1 << 28;
         } else if (m == killer_a) {
@@ -627,16 +622,13 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, bool cut_n
                     const int bonus = depth * depth * HistoryBonusMul < HistoryBonusMax
                                           ? depth * depth * HistoryBonusMul
                                           : HistoryBonusMax;
-                    i32 *replies    = w->replies[us][ply ? w->played[ply - 1] & 0xFF : 0];
                     history_update(history_slot(w, us, m), bonus);
-                    history_update(&replies[m & 0xFF], bonus);
                     const Move *tried = i < first_count ? first : moves;
                     for (int j = 0; j < i; j++) {
                         if (tried[j] == excluded) {
                             continue;
                         }
                         history_update(history_slot(w, us, tried[j]), -bonus);
-                        history_update(&replies[tried[j] & 0xFF], -bonus);
                     }
                     break;
                 }
@@ -731,11 +723,6 @@ static SearchReport run_search(const Board *root, const u64 *history, int histor
     for (int c = 0; c < 2; c++) {
         for (int m = 0; m < 65536; m++) {
             w->history[c][m] = w->history[c][m] * HistoryKeep / 16;
-        }
-        for (int p = 0; p < 256; p++) {
-            for (int q = 0; q < 256; q++) {
-                w->replies[c][p][q] = w->replies[c][p][q] * HistoryKeep / 16;
-            }
         }
     }
 

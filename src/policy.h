@@ -13,7 +13,6 @@
 
 /* What a node works out once for all of its moves. Side 0 is the side to move. */
 typedef struct PolicyContext {
-    i16 acc[16];         /* the network's units from the position alone */
     u64 near_road[2];    /* board_road_near() */
     u64 threats;         /* where the other side can place a road */
     u64 ends[2];         /* each side's four ends together */
@@ -23,7 +22,6 @@ typedef struct PolicyContext {
     u64 prev2[3];        /* the same for this side's own last move */
     int dist[2];         /* fewest placements to a road, up to 2 * POLICY_LEVELS */
     int us;
-    int lead;  /* board_flat_lead() for the side to move */
     int phase; /* by the smaller reserve, 0 at the start to 3 at the end */
     int race; /* with the end in sight, 0 behind on flats, 1 level, 2 ahead, komi counted; else 3 */
     int prev_kind; /* the last move: flat, wall, capstone or spread, or 4 for none */
@@ -38,10 +36,6 @@ void policy_context(const Board *b, const u64 ends[4], const u64 their_ends[4], 
 
 /* The features of `m`, as indices below policy_feature_count(). Returns how many. */
 int policy_features(const Board *b, const PolicyContext *ctx, Move m, u16 *out);
-
-/* Features of the position alone, the same for every move, which only matter past the hidden
- * units. Returns how many, at most POLICY_MAX_ACTIVE. */
-int policy_context_features(const Board *b, const PolicyContext *ctx, u16 *out);
 
 int policy_feature_count(void);
 

@@ -207,10 +207,9 @@ make
 The arguments are the output, the one-in-N games to fit on, the epochs and the threads, then the
 games; `--seed n` and `--rate r` (0.003) are optional. One game in 16 is held out, and a quarter of
 those are scored. Every thread reads its share of the files into memory first: the command above
-fits 2.25M positions on 7.8 GB of features, about a minute and a half on 16 threads. It ends by
+fits 2.25M positions on 6.7 GB of features, about a minute on 16 threads. It ends by
 scoring the held-out games with the engine's own `policy_logits()` on the rounded weights, which
 must match the last epoch. Files go to threads by their place in the list, so a fit repeats to the
-byte for the same seed and thread count. The staged network came from E52's work-copy fitter on
-this recipe and two threads, which shared files out as they finished, so this command fits one
-like it rather than the same bytes. A `policy_net.h` written for another set of features is
+byte for the same seed and thread count: the staged network is this command's, seed 0, and a
+refit writes the same bytes, E65. A `policy_net.h` written for another set of features is
 ignored and the prior is flat, so after changing the features, build, fit and build again.

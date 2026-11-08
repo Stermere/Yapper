@@ -2675,6 +2675,76 @@ better. That speaks against chasing the prior's top 1 as well: a better prior on
 need not be a better order, and the one here costs seven times today's. Time to depth on real
 positions is the measure to take before an SPRT, not bench.
 
+## E65: four pieces tested for harm, and a refactor
+
+A review of the code for what is more than it needs to be found the network lean. Measured with
+counters on bench, in a scratch copy that benches 1060614: the straight sum of the pools has a
+standard deviation of 253 hundredths, the head 126 and the skip 553, and the head correlates with
+the skip at 0.61, so the straight sum is the main positional path and not a leftover of E48's warm
+start. Every one of the 48 heads has every second-layer unit weighted in and out. 3x3's buckets 6
+and 7 and 4x4's bucket 7 are still at their starting weights, since no fitted position reaches them.
+
+**The refactor**, committed as the baseline in ed3bbba. One `move_squares()` beside the move accessors, for
+`nn_move_squares()` and the prior's copy of it. One `board_flat_lead()` and `board_komi()` for the
+four copies of the flat count with komi: `flat_outcome()`, the network's inputs, and twice in the
+prior's context, which now keeps it in `PolicyContext`. The hand order's road masks are built only
+at depth 1, where they are read; from depth 2 the prior's context built the same two again. Bench
+1060614 from clang native and generic, gcc POPCNT, `make release` and `make TUNE=on`. `make check`
+passes, perftdiff found 0 differences in 101,986 positions, and gcc's selftest passes 987,121,304
+checks.
+
+**Four pieces**, each removed alone and played against the refactor: first a non-regression test,
+then, if that passed, a gain test of the removal on a fresh seed. A piece counts as harmful only if
+taking it out passes the gain test. 2+0.02 on 6x6 with 2 komi, 7 games at once, nothing else
+running, and no game ended on time.
+
+| Removed | Bench | Non-regression, [-20, 5] | Gain, [0, 10], seed 2 |
+|---|---|---|---|
+| a: the evaluation's price for a road threat, 60 and 220 | 1012070 | PASSED, 1134 games, +1.5 +/- 17.1, pairs [67, 127, 182, 116, 75] | **FAILED**, 1742 games, **-8.2 +/- 13.0**, pairs [97, 193, 325, 166, 90] |
+| b: the order's flat, flat-near and capstone terms at depth 1 | 1197290 | PASSED, 882 games, +3.9 +/- 19.2, pairs [54, 87, 150, 95, 55] | **FAILED**, 1504 games, **-11.3 +/- 14.5**, pairs [100, 155, 273, 142, 82] |
+| c: the history of what answered what | 1086287 | PASSED, 284 games, +23.3 +/- 31.0, pairs [10, 28, 53, 35, 16] | INCONCLUSIVE at the cap, 2000 games, **-0.5 +/- 12.5**, pairs [116, 209, 356, 200, 119] |
+| d: the prior's position features, square classes and lines, against d0 | 1147531 | PASSED, 1286 games, -0.0 +/- 15.3, pairs [72, 129, 242, 127, 73] | INCONCLUSIVE at the cap, 2000 games, **+3.8 +/- 12.4**, pairs [104, 218, 349, 210, 119] |
+
+None is harmful, and taking out any of them costs nothing measurable either. c's +23 came from a
+test that stopped at 284 games, and the gain test's 2000 put it at -0.5.
+
+a's price reaches a score the search returns in 0.08% of bench's evaluations, at quiesce's depth
+cap or with the last stones going in, since reverse futility, null move and quiesce's stand pat all
+pass a node with a road hanging by. It flips `improving` at 0.30% of the nodes that reach
+move-count pruning. b's terms date from the first commit and were never measured alone. c's only
+measurement was a row of E24's bundle, on the hand-written evaluation, before any prior.
+
+d's two priors were fitted by DATA.md's recipe, seed 0, 16 threads, so that they differ only by
+their features: 1314 for d0 and 1210 without the three groups. Held out, d0 2.7999 and d1 2.8449,
+read by the engine at 2.8001 and 2.8451; top 1 21.73% and 21.06%. d0 benches 951898, since the
+staged prior came from E52's two-thread fitter. E52 priced the groups one at a time at 0.006, 0.011
+and 0.018; together they cost 0.045 and play the same, as E62 found for a prior's accuracy.
+
+**The cut.** The user chose c and d, which went together: the history of what answered what, and
+the prior's position features, square classes and lines, with `policy_context_features()`,
+`class_of()`, `run_through()` and the position's rows in `policyfit`. The prior is d1's, and the
+cleaned fitter writes it again to the byte. With the history kept, the cut benches d1's 1147531;
+with both gone, 928599 from clang native and generic, gcc POPCNT, `make release` and `make
+TUNE=on`. `make check` and `make datacheck` pass, and gcc's selftest passes 984,138,986 checks.
+
+| Match | Result |
+|---|---|
+| Against the refactor, the engine that shipped, 2+0.02, [-20, 5], seed 3 | **PASSED**, 218 games, +75 -61 =82, **+22.3 +/- 30.5**, pairs [4, 23, 43, 33, 6] |
+
+A test that stops this early reads high, as c's first did. What it says is that the cut, with d1's
+fit in place of E52's, loses nothing. a and b stay: their gain tests leaned the other way.
+
+**The first prior's biases.** `policy_context()` copied the prior's biases before the first call
+installed them, so the first node each process scored had none, as E54 found. The context no
+longer carries them, and `policy_logits()` reads them after installing. Before the fix a second
+bench in the same process read 902225; now every bench reads it, the first included, so nothing
+past that one node changed. Bench 902225 from clang native and generic, gcc POPCNT, `make release`
+and `make TUNE=on`; `make check`, `make datacheck` and gcc's selftest pass. No match was played
+for one node a process.
+
+The variants are in `external/build/e65`, each tree with its own `src`, and `chain.sh` ran them;
+the cut's binary is `external/build/e65cut/e65cut.exe`.
+
 ## Mistakes worth not repeating
 
 - **Bench is not a tree-size measure.** Its 13 positions are mostly openings and other sizes. E62's

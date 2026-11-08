@@ -71,6 +71,14 @@ trunk named 23.4% to its 21.1%. E62 fitted a prior on the GPU to 28.3%, short of
 search lost 25 to 32 in three forms: it cost a sixth more nodes on real positions and ordered no
 better than history and the prior. See Next.
 
+E65 reviewed the code for what it could do without. The network has nothing to spare: the straight
+sum of the pools carries twice the head's part of the score. Of four smaller pieces, none was
+harmful when taken out, and two went: the history of what answered what, and the prior's position
+features, square classes and lines, with a prior refitted without them. Together they passed a
+non-regression test against the engine before them, **+22.3 +/- 30.5** over 218 games. The road
+threat's price and the hand order's flat and capstone terms stay; their gain tests leaned the
+other way.
+
 ## Done and verified
 
 | Piece | State | Evidence |

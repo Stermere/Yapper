@@ -101,15 +101,17 @@ Iterative deepening PVS with aspiration windows, a bucketed transposition table,
 reverse futility, late move reductions and pruning, and singular extensions. Reductions are a ply
 stronger at a node expected to cut, and move-count pruning comes sooner when the side to move's
 evaluation has fallen since its last move. The table move and the killers are tried
-before a move list exists, because most nodes cut on one of them. The rest go by history: of the
-whole move, so each spread a stack can make keeps its own, and of its square and kind by what
-answered the move before. On top of that goes a prior. From depth 2 it is `policy.c`'s, a small
-network fitted by `yapper policyfit` to the moves the search chose in self-play. A move's features,
-all read the same under the board's symmetries and from either side, say what a placement touches
-and leaves for the roads, how many placements each side's best road through its square still
-needs, what a spread takes, covers and gives up, and how either answers the last two moves. Each
-indexes a row of 16 lanes, summed with the position's own: 15 are clipped units weighed into the
-prior and the last is linear, E52. A node scores its moves at once, so what they share, a
+before a move list exists, because most nodes cut on one of them. The rest go by history of the
+whole move, so each spread a stack can make keeps its own; a second history, of what answered the
+move before, measured neutral beside the prior and went, E65. On top of that goes a prior. From
+depth 2 it is `policy.c`'s, a small network fitted by `yapper policyfit` to the moves the search
+chose in self-play. A move's features, all read the same under the board's symmetries and from
+either side, say what a placement touches and leaves for the roads, how many placements each
+side's best road through its square still needs, what a spread takes, covers and gives up, and how
+either answers the last two moves. Each indexes a row of 16 lanes, summed onto the units' biases:
+15 are clipped units weighed into the prior and the last is linear, E52. Features of the position
+alone, square classes and lines of road stones fitted a little better and played the same, and
+went in E65. A node scores its moves at once, so what they share, a
 placement's square, a spread's source and carry and the squares it lands on, is summed once.
 History is halved at the start of every search, so the prior leads until the search has evidence
 of its own, which pays only with the network prior, E52. A node a ply from the leaves cannot pay

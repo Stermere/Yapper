@@ -2,8 +2,8 @@
  *
  * Every feature reads the board the same way under its eight symmetries and from either side,
  * so the prior cannot tell a turned or recoloured position from the original. A move's features
- * index rows of 16 lanes, which are summed with the position's own rows; 15 lanes are clipped
- * units weighed by the output, and the last is a linear term. */
+ * index rows of 16 lanes, which are summed onto the units' biases; 15 lanes are clipped units
+ * weighed by the output, and the last is a linear term. */
 #include "policy.h"
 
 #include "bitboard.h"
@@ -26,43 +26,30 @@ enum {
     P_DIST_OURS   = P_ROAD + 3 * 4 * 32,                    /* type, rel 0-3, our distance */
     P_DIST_THEIRS = P_DIST_OURS + 3 * 4 * 4,                /* type, rel 0-3, their distance */
     P_PREV        = P_DIST_THEIRS + 3 * 4 * 4,              /* type, last move, ours, its kind */
-    P_CLASS       = P_PREV + 3 * 4 * 4 * 5,                 /* type, square class */
-    P_RUN         = P_CLASS + 3 * 10,                       /* flat or cap, our line 1-5 */
-    P_CUT         = P_RUN + 2 * 5,                          /* type, their line it cuts 0-4 */
     /* A spread's source alone. */
-    S_PHASE  = P_CUT + 3 * 5,
+    S_PHASE  = P_PREV + 3 * 4 * 4 * 5,
     S_TOP    = S_PHASE + 4, /* flat, wall or capstone */
     S_RACE   = S_TOP + 3,
     S_HEIGHT = S_RACE + 4,   /* 1, 2, 3-4, 5+ */
     S_PREV   = S_HEIGHT + 4, /* last move, ours, its kind */
-    S_CLASS  = S_PREV + 4 * 4 * 5,
     /* Its source and carry. */
-    S_CARRY = S_CLASS + 10, /* 1 to 8 */
-    S_WHOLE = S_CARRY + 8,  /* carries the whole stack */
-    S_LEFT  = S_WHOLE + 1,  /* leaves the source empty, ours, theirs */
-    S_OWN   = S_LEFT + 3,   /* our stones carried: all, most, some, none */
+    S_CARRY = S_PREV + 4 * 4 * 5, /* 1 to 8 */
+    S_WHOLE = S_CARRY + 8,        /* carries the whole stack */
+    S_LEFT  = S_WHOLE + 1,        /* leaves the source empty, ours, theirs */
+    S_OWN   = S_LEFT + 3,         /* our stones carried: all, most, some, none */
     /* Where it lands, the same for every spread of a stack the same way as far. */
-    S_TAKES      = S_OWN + 4,       /* tallest of theirs covered 0-3+, a crush */
-    S_NEAR       = S_TAKES + 4 * 2, /* landings on our near squares 0-2+, theirs, a road square */
-    S_COUNTS     = S_NEAR + 3 * 3 * 2,      /* landings on empties 0-3+, ours 0-2+, theirs 0-2+ */
-    S_LAND_PREV  = S_COUNTS + 4 * 3 * 3,    /* last move's kind, lands on/beside it, our last */
-    S_LAST_CLASS = S_LAND_PREV + 5 * 4 * 4, /* class of the last square */
+    S_TAKES     = S_OWN + 4,          /* tallest of theirs covered 0-3+, a crush */
+    S_NEAR      = S_TAKES + 4 * 2,    /* landings on our near squares 0-2+, theirs, a road square */
+    S_COUNTS    = S_NEAR + 3 * 3 * 2, /* landings on empties 0-3+, ours 0-2+, theirs 0-2+ */
+    S_LAND_PREV = S_COUNTS + 4 * 3 * 3, /* last move's kind, lands on/beside it, our last */
     /* How it drops. */
-    S_SWING     = S_LAST_CLASS + 10,   /* tops won -4 to 4, phase */
-    S_HOPS      = S_SWING + 9 * 4,     /* hops 1-7, stones dropped last 1-3+ */
+    S_SWING     = S_LAND_PREV + 5 * 4 * 4, /* tops won -4 to 4, phase */
+    S_HOPS      = S_SWING + 9 * 4,         /* hops 1-7, stones dropped last 1-3+ */
     S_DIST_OURS = S_HOPS + 7 * 3,      /* best rel of our new tops on empties 0-4, our distance */
     S_BREAK     = S_DIST_OURS + 5 * 4, /* covers their road stone at rel 0/1, their distance */
     S_BLOCK     = S_BREAK + 2 * 4,     /* our new top on an empty at their rel 0-2 */
     S_GIVE      = S_BLOCK + 3 * 4,     /* their new top at our rel 0/1, our distance */
-    /* The position alone. */
-    C_PHASE       = S_GIVE + 2 * 4,
-    C_RACE        = C_PHASE + 4,
-    C_DIST_OURS   = C_RACE + 4,
-    C_DIST_THEIRS = C_DIST_OURS + 4,
-    C_LEAD        = C_DIST_THEIRS + 4, /* flats ahead with komi, seven buckets */
-    C_CAPS        = C_LEAD + 7,        /* a capstone in hand, ours and theirs */
-    C_EMPTIES     = C_CAPS + 2,        /* up to 6, 12, 20, more */
-    F_COUNT       = C_EMPTIES + 4,
+    F_COUNT     = S_GIVE + 2 * 4,
 };
 
 int policy_feature_count(void) { return F_COUNT; }
@@ -100,18 +87,6 @@ static inline const i16 *rows_now(void) {
         }
     }
     return Rows;
-}
-
-/* How far in from the nearest edge across the files and across the ranks, sorted, each up to 3:
- * ten classes, the same under every symmetry, which say a ring and a corner too. */
-static inline int class_of(const Board *b, int sq) {
-    static const u8 Index[4][4] = {{0, 1, 2, 3}, {1, 4, 5, 6}, {2, 5, 7, 8}, {3, 6, 8, 9}};
-    const int file = sq & 7, rank = sq >> 3, last = b->size - 1;
-    int f = file < last - file ? file : last - file;
-    int r = rank < last - rank ? rank : last - rank;
-    f     = f < 3 ? f : 3;
-    r     = r < 3 ? r : 3;
-    return Index[f][r];
 }
 
 /* Both sides' four edges at once, a lane each: the floods run in step, so a node pays for the
@@ -234,9 +209,9 @@ void policy_context(const Board *b, const u64 ends[4], const u64 their_ends[4], 
     const int left  = ours < other ? ours : other;
     const int part  = 4 * left / start;
     ctx->phase      = part >= 3 ? 0 : 3 - part;
-    ctx->lead       = board_flat_lead(b, us);
     if (left <= 6 || popcount(empty) <= 6) {
-        ctx->race = ctx->lead < 0 ? 0 : ctx->lead == 0 ? 1 : 2;
+        const int lead = board_flat_lead(b, us);
+        ctx->race      = lead < 0 ? 0 : lead == 0 ? 1 : 2;
     } else {
         ctx->race = 3;
     }
@@ -251,39 +226,6 @@ void policy_context(const Board *b, const u64 ends[4], const u64 their_ends[4], 
     touched(b, prev, ctx->prev);
     touched(b, prev2, ctx->prev2);
     ctx->prev_kind = prev == MOVE_NONE ? 4 : move_is_place(prev) ? (int)move_stone(prev) : 3;
-
-    PolicyVec acc = *(const PolicyVec *)Bias;
-    if (rows_now()) {
-        u16 features[POLICY_MAX_ACTIVE];
-        acc = add_rows(acc, features, policy_context_features(b, ctx, features));
-    }
-    *(PolicyVec *)ctx->acc = acc;
-}
-
-int policy_context_features(const Board *b, const PolicyContext *ctx, u16 *out) {
-    const int us   = ctx->us;
-    int n          = 0;
-    out[n++]       = (u16)(C_PHASE + ctx->phase);
-    out[n++]       = (u16)(C_RACE + ctx->race);
-    out[n++]       = (u16)(C_DIST_OURS + dist_bucket(ctx->dist[0]));
-    out[n++]       = (u16)(C_DIST_THEIRS + dist_bucket(ctx->dist[1]));
-    const int lead = ctx->lead;
-    out[n++]       = (u16)(C_LEAD + (lead <= -4   ? 0
-                                     : lead <= -2 ? 1
-                                     : lead < 0   ? 2
-                                     : lead == 0  ? 3
-                                     : lead < 2   ? 4
-                                     : lead < 4   ? 5
-                                                  : 6));
-    if (b->capstones[us]) {
-        out[n++] = (u16)C_CAPS;
-    }
-    if (b->capstones[!us]) {
-        out[n++] = (u16)(C_CAPS + 1);
-    }
-    const int e = popcount(board_empty(b));
-    out[n++]    = (u16)(C_EMPTIES + (e <= 6 ? 0 : e <= 12 ? 1 : e <= 20 ? 2 : 3));
-    return n;
 }
 
 static inline int neighbour_code(const Board *b, int sq, int us) {
@@ -296,30 +238,11 @@ static inline int neighbour_code(const Board *b, int sq, int us) {
     return 1 + side * 4 + kind;
 }
 
-/* Road stones of a set in a line through sq, sq counted in, the longer of the two lines. */
-static inline int run_through(const Board *b, u64 stones, int sq) {
-    const int file = sq & 7, rank = sq >> 3, size = b->size;
-    int h = 1, v = 1;
-    for (int f = file + 1; f < size && ((stones >> (sq + f - file)) & 1); f++) {
-        h++;
-    }
-    for (int f = file - 1; f >= 0 && ((stones >> (sq + f - file)) & 1); f--) {
-        h++;
-    }
-    for (int r = rank + 1; r < size && ((stones >> (sq + 8 * (r - rank))) & 1); r++) {
-        v++;
-    }
-    for (int r = rank - 1; r >= 0 && ((stones >> (sq + 8 * (r - rank))) & 1); r--) {
-        v++;
-    }
-    return h > v ? h : v;
-}
-
 /* What a placement's features read off its square, the same for every stone placed there. */
 typedef struct PlaceSquare {
     u8 codes, code[4], count[4]; /* the kinds of neighbour present, in code order, and how many */
     u8 road;                     /* near ours, near theirs, a road square, ends ours, theirs */
-    u8 rel_ours, rel_theirs, prev, prev2, cls, run, cut;
+    u8 rel_ours, rel_theirs, prev, prev2;
 } PlaceSquare;
 
 static void place_square(const Board *b, const PolicyContext *ctx, int sq, PlaceSquare *p) {
@@ -352,11 +275,6 @@ static void place_square(const Board *b, const PolicyContext *ctx, int sq, Place
     p->rel_theirs = (u8)rel_at(ctx->rel_empty[1], sq);
     p->prev       = (u8)ring_index(ctx->prev, bit);
     p->prev2      = (u8)ring_index(ctx->prev2, bit);
-    p->cls        = (u8)class_of(b, sq);
-    const int run = run_through(b, board_road_stones(b, ctx->us), sq);
-    const int cut = run_through(b, board_road_stones(b, !ctx->us), sq) - 1;
-    p->run        = (u8)(run < 5 ? run : 5);
-    p->cut        = (u8)(cut < 4 ? cut : 4);
 }
 
 /* `node_rows` false leaves out the two features of the stone and the node alone, which a node
@@ -378,11 +296,6 @@ static int place_emit(const PolicyContext *ctx, const PlaceSquare *p, int type, 
     if (p->prev < 3 || p->prev2 < 3) {
         out[n++] = (u16)(P_PREV + ((type * 4 + p->prev) * 4 + p->prev2) * 5 + ctx->prev_kind);
     }
-    out[n++] = (u16)(P_CLASS + type * 10 + p->cls);
-    if (type != WALL) {
-        out[n++] = (u16)(P_RUN + (type == CAP) * 5 + p->run - 1);
-    }
-    out[n++] = (u16)(P_CUT + type * 5 + p->cut);
     return n;
 }
 
@@ -419,8 +332,7 @@ static void spread_parts(const Board *b, const PolicyContext *ctx, Move m, unsig
         if (a < 3 || z < 3) {
             s->src[k++] = (u16)(S_PREV + (a * 4 + z) * 5 + ctx->prev_kind);
         }
-        s->src[k++] = (u16)(S_CLASS + class_of(b, sq));
-        s->src_n    = k;
+        s->src_n = k;
     }
     if (need & 2) {
         int k         = 0;
@@ -470,8 +382,7 @@ static void spread_parts(const Board *b, const PolicyContext *ctx, Move m, unsig
         if (a | z) {
             s->land[k++] = (u16)(S_LAND_PREV + (ctx->prev_kind * 4 + a) * 4 + z);
         }
-        s->land[k++] = (u16)(S_LAST_CLASS + class_of(b, to));
-        s->land_n    = k;
+        s->land_n = k;
     }
     if (need & 8) {
         /* Which tops become ours, read off the stack's bits: a hop's top is its last stone. */
@@ -566,7 +477,7 @@ int policy_logit(const Board *b, const PolicyContext *ctx, Move m) {
     }
     u16 features[POLICY_MAX_ACTIVE];
     const int n = policy_features(b, ctx, m, features);
-    return finish(add_rows(*(const PolicyVec *)ctx->acc, features, n));
+    return finish(add_rows(*(const PolicyVec *)Bias, features, n));
 }
 
 void policy_logits(const Board *b, const PolicyContext *ctx, const Move *moves, int count,
@@ -577,7 +488,8 @@ void policy_logits(const Board *b, const PolicyContext *ctx, const Move *moves, 
         }
         return;
     }
-    const PolicyVec base = *(const PolicyVec *)ctx->acc;
+    /* After rows_now(), which installs the biases on the first call. */
+    const PolicyVec base = *(const PolicyVec *)Bias;
     const PolicyVec zero = {0};
     PlaceSquare squares[SQUARE_COUNT];
     PolicyVec stone_acc[3], src_acc[SQUARE_COUNT], carry_acc[SQUARE_COUNT][8];

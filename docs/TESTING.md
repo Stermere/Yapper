@@ -174,7 +174,11 @@ A normal build folds them as constants; `make TUNE=on` makes each a TEI spin opt
 binary can play any set of values. `tools/tune.py` reads the list from the engine, plays pairs
 between the values either side of where it stands, and moves every parameter at once along the
 result: fishtest's schedule, one pair an iteration, on every core. It saves after every pair to
-`external/tune/<name>.json`, `--resume` carries on, and `tools/progress.py` shows the run.
+`external/tune/<name>.json`, `--resume` carries on, and `tools/progress.py` shows the run, as
+paused while it waits for one. A run plays its own copy of the engine, `external/tune/<name>.exe`,
+so it can span days and rebuilds. `--pause`, from another terminal, lets the pairs being played
+finish and exits; Ctrl+C, a closed window or a reboot lose only those pairs. Keep the machine from
+sleeping: a game asleep mid-move loses on time.
 
 SPSA does not measure. It walks wherever its noise leads and reports where it ended, so what it
 prints is a candidate. `--report` gives the SPRT that decides it: the tune build against itself,
