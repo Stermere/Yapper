@@ -205,6 +205,37 @@ static int group_of(NTLoader *loader, const DataHeader *h) {
     return loader->group_count++;
 }
 
+/* The scale the loss reads a score through, by size, which can differ from NN_SCALE: a flat is
+ * worth more of a game on a small board. The engine's units stay put, since the search's score in
+ * the target ties the output to them. LossRatio is NN_SCALE over it, exactly 1 by default so that
+ * a default fit keeps its bytes. */
+static float LossScale[NT_SLOTS], LossRatio[NT_SLOTS];
+
+/* With Smooth above 1, the search's score in the target is the mean, as a chance of winning, of
+ * the next Smooth scored plies' scores, each read for the side to move here. A search's score
+ * moves by about half a flat from one move of a side to its next, and a later search sees
+ * further, so the mean is the steadier target. */
+static int Smooth = 0;
+
+static int smoothed_score(const DataGame *game, int ply, int size) {
+    double sum = 0.0;
+    int count  = 0;
+    for (int p = ply; p < game->header.plies && count < Smooth; p++) {
+        const int raw = game->plies[p].score;
+        if (raw == DATA_NO_SCORE) {
+            continue;
+        }
+        const int s = (p - ply) % 2 ? -raw : raw;
+        sum += s >= SCORE_WIN_BOUND    ? 1.0
+               : s <= -SCORE_WIN_BOUND ? 0.0
+                                       : 1.0 / (1.0 + exp(-(double)s / LossScale[size]));
+        count++;
+    }
+    const double mean  = fmin(fmax(sum / count, 1e-4), 1.0 - 1e-4);
+    const double score = LossScale[size] * log(mean / (1.0 - mean));
+    return (int)lround(fmin(fmax(score, -(SCORE_WIN_BOUND - 1)), SCORE_WIN_BOUND - 1));
+}
+
 /* A side able to win on the spot, a road being answered, a forced result and the random plies
  * all go to the search rather than to a stand pat, so the evaluation is never asked about
  * them. */
@@ -226,7 +257,7 @@ static bool nt_visit(const Board *b, const DataGame *game, int ply, u64 index, v
     NTSample sample;
     u16 features[SQUARE_COUNT];
     sample_of(b, &sample, features);
-    sample.score = (i16)score;
+    sample.score = (i16)(Smooth > 1 ? smoothed_score(game, ply, b->size) : score);
     sample.group = (u8)group_of(loader, &game->header);
 
     const Outcome outcome = (Outcome)game->header.outcome;
@@ -286,12 +317,6 @@ static inline void snap(NTModel *model, u64 i) {
 }
 
 static inline float sigmoid(float x) { return 1.0f / (1.0f + expf(-x)); }
-
-/* The scale the loss reads a score through, by size, which can differ from NN_SCALE: a flat is
- * worth more of a game on a small board. The engine's units stay put, since the search's score in
- * the target ties the output to them. LossRatio is NN_SCALE over it, exactly 1 by default so that
- * a default fit keeps its bytes. */
-static float LossScale[NT_SLOTS], LossRatio[NT_SLOTS];
 
 /* `lambda` is by size: how far to trust the search's score over the result varies with the board.
  */
@@ -1550,10 +1575,15 @@ static void report_groups(const NTModel *model, const NTLoader *loader, const do
 
 static int fit_network(const char *out, int keep, const double *lambda, int epochs, int threads,
                        bool gpu, unsigned long long seed, double rate, bool warm,
-                       const double *share, const double *scale, char **paths, int path_count) {
+                       const double *share, const double *scale, int smooth, char **paths,
+                       int path_count) {
     if (keep < 1 || epochs < 1 || threads < 1 || threads > NT_MAX_THREADS || rate < 0.0) {
         printf("bad arguments\n");
         return 2;
+    }
+    if (smooth > 1) {
+        Smooth = smooth;
+        printf("the search's score is smoothed over %d scored plies\n", smooth);
     }
     for (int n = 0; n < NT_SLOTS; n++) {
         LossScale[n] = scale && scale[n] > 0.0 ? (float)scale[n] : (float)NN_SCALE;
@@ -1660,10 +1690,10 @@ static int fit_network(const char *out, int keep, const double *lambda, int epoc
 
 int nntrain_run(const char *out, int keep, const double *lambda, int epochs, int threads, bool gpu,
                 unsigned long long seed, double rate, bool warm, const double *share,
-                const double *scale, const char *status, char **paths, int path_count) {
+                const double *scale, int smooth, const char *status, char **paths, int path_count) {
     status_open(status, out, epochs, path_count);
     const int code = fit_network(out, keep, lambda, epochs, threads, gpu, seed, rate, warm, share,
-                                 scale, paths, path_count);
+                                 scale, smooth, paths, path_count);
     Status.phase   = code == 0 ? "done" : "failed";
     status_write(true, code);
     return code;

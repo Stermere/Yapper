@@ -125,8 +125,8 @@ yapper nntrain src/net.h 1 0.7 2 15 --warm --rate 0.0005 --share 7=0.33 --share 
     --lambda 3=0.5 --lambda 4=0.5 <E48's games, as above> $G $G $G $G
 ```
 
-E69's, which plays now, is the same from E49's `net.h`, with gen 13 listed four times after gen 11,
-one file a cell: `external/data/gen13/joined/gen13-*.ydg`.
+E69's is the same from E49's `net.h`, with gen 13 listed four times after gen 11, one file a cell:
+`external/data/gen13/joined/gen13-*.ydg`. E70's, which plays now, is E69's with `--smooth 4`.
 
 Gen 11 is listed four times, which weighs it four times as heavily: listed once, as a twentieth of
 the positions, it hardly moved the network. Windows starts no command longer than 32,767
@@ -154,6 +154,13 @@ the output to them. Self-play's results are more decisive than 310 says, and mor
 the board: the scale that fits gen 11's results best is 120 on 3x3 and 4x4, 140 on 5x5, 160 to 170
 on 6x6, 240 on 7x7 and 280 on 8x8. Fitted with those, E49's recipe lost 10.2 to E49 itself, so
 310 stays: E67.
+
+`--smooth 4` puts in the target, in place of a position's own score, the mean as a chance of
+winning of the next four scored plies' scores, each read for the side to move there; a deviation's
+unscored ply is skipped and a forced result counts as a win or a loss. A side's score moves by about
+half a flat from one of its moves to its next in level middle games, and the later searches see
+further, so the mean is the steadier target. The data does not change: the trainer reads ahead in
+the game it already holds. It gained 16 on E49's games and 28 more on gen 13's: E68, E70.
 
 `--warm` starts the fit from the network the binary was built with instead of random weights, and
 prints its held-out loss before the first step, so the report says what the fit added. `--rate r`

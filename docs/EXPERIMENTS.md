@@ -2896,7 +2896,7 @@ further. `nntrain --smooth n` replaces a position's score in the target with the
 of winning, of the next n scored plies' scores, each read for the side to move at the position; a
 deviation's unscored ply is skipped and a forced result counts as 0 or 1. The data is unchanged,
 the trainer reads ahead in the game it already holds. E49's recipe from E48's network with
-`--smooth 4`, on the GPU, in `external/build/e68` (to be staged only if it passes):
+`--smooth 4`, on the GPU, in `external/build/e68`; the option went into the trainer with E70:
 
 | Held out, against results | E49 | Smoothed over 4 |
 |---|---|---|
@@ -2973,6 +2973,46 @@ a third of them at 60k: more positions teach more than deeper scores do, at thes
 Finishing on the deeper games alone forgets, and finishing on everything at 20k and up gains too
 little to show. A fine-tune's held-out losses do not compare with the fits above: it reads other
 games. The fit on all of gen 13 is the network now, bench 1341109.
+
+## E70: gen 13 with the smoothed target
+
+E68 and E69 each passed against E66, one by its target and the other by its games, and never
+against each other. E69's fit again, from E49 with gen 13, with E68's `--smooth 4`, now an option
+of the trainer, which wrote this network from the source committed with it:
+
+| Held out, against results | E69 | E70 |
+|---|---|---|
+| 6x6 gen 10 | 0.415989 | 0.414018 |
+| 6x6 gen 11 | 0.411143 | 0.408845 |
+| 6x6 gen 13 20k | 0.441786 | 0.439070 |
+| 6x6 gen 13 60k | 0.439708 | 0.437067 |
+
+The smoothed target sits nearer the results, so these lean its way, as E68's did. The engine reads
+within 0.80 of the fit on average, 8 at worst on 3x3.
+
+| Match, 2+0.02, [0, 10] | Result |
+|---|---|
+| E70 against E69 | **PASSED**, 1096 games, +418 -329 =349, **+28.3 +/- 17.4**, pairs [54, 103, 174, 134, 83], bench 1357917, none on time |
+
+The two gains add: the target and the games teach different things. E70 is the network now.
+
+**Against the other engines**, through racetrack on 6x6 with 2 komi and 7 games at once, nothing
+else running, E66 (the morning's engine, E49's network) straight after each under the same
+conditions:
+
+| Opponent | E70 | E66 straight after |
+|---|---|---|
+| syntaks at 1/4 of 5+0.05, 600 games, book shuffled | +303 -208 =89, **+55 [+28, +81]**, score 0.579 | +304 -207 =89, +56 [+29, +83] |
+| Topaz at 5+0.05, 200 games, book shuffled | +129 -37 =34, **+172 [+121, +221]**, score 0.730 | +122 -40 =38, +151 [+101, +198] |
+| syntaks at 8+0.08, 250 games, the book in order | +27 -198 =25, **-290 [-345, -233]**, score 0.158 | +21 -209 =20, -339 [-400, -275] |
+
+Every game lost on time was syntaks's: 11 of each 600 at a quarter of the clock, 3 of E70's 250 at
+full. The full-strength runs played the same openings in the same order, as E66's run of the night
+before did, which read -380 over its first 250; 110 games paired by opening and colour put E70
++0.046 +/- 0.072 in score ahead. So the 60 of self-play over the day reads as nothing at a quarter,
+21 against Topaz and 49 against syntaks at full strength, each inside its interval. E66 itself
+reads 33 above E53 at a quarter and 17 against Topaz, where the SPSA run, E66, gained 51 in
+self-play.
 
 ## Mistakes worth not repeating
 

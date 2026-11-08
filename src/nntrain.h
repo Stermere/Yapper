@@ -11,11 +11,12 @@
  * size's positions that each epoch sees, or NULL for all of them. `rate` is the first step's
  * learning rate, or 0 for the usual one. With `warm`, the fit starts from the network this build
  * plays rather than from random weights. `scale`, by size, is what the loss reads a score through,
- * 0 or NULL for NN_SCALE; the engine's units do not change with it. Progress goes to the JSON file
- * `status` for tools/progress.py, or with NULL to one named after `out` in external/games/live.
- * Non-zero on failure. */
+ * 0 or NULL for NN_SCALE; the engine's units do not change with it. With `smooth` above 1, the
+ * search's score in the target is the mean of that many scored plies' from the position on.
+ * Progress goes to the JSON file `status` for tools/progress.py, or with NULL to one named after
+ * `out` in external/games/live. Non-zero on failure. */
 int nntrain_run(const char *out, int keep, const double *lambda, int epochs, int threads, bool gpu,
                 unsigned long long seed, double rate, bool warm, const double *share,
-                const double *scale, const char *status, char **paths, int path_count);
+                const double *scale, int smooth, const char *status, char **paths, int path_count);
 
 #endif

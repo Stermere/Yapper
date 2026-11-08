@@ -99,6 +99,7 @@ int main(int argc, char **argv) {
     }
     if (strcmp(command, "nntrain") == 0 && argc >= 8) {
         bool cpu = false, warm = false;
+        int smooth                 = 0;
         unsigned long long seed    = 0;
         double rate                = 0.0;
         const char *status         = NULL;
@@ -134,6 +135,9 @@ int main(int argc, char **argv) {
                     scale[n] = atof(argv[first + 1]);
                 }
                 first++;
+            } else if (strcmp(argv[first], "--smooth") == 0 && first + 1 < argc &&
+                       atoi(argv[first + 1]) > 0) {
+                smooth = atoi(argv[++first]);
             } else if (strcmp(argv[first], "--share") == 0 && first + 1 < argc &&
                        sscanf(argv[first + 1], "%d=%lf", &size, &part) == 2 && size >= MIN_SIZE &&
                        size <= MAX_SIZE && part > 0.0) {
@@ -149,7 +153,7 @@ int main(int argc, char **argv) {
             }
         }
         return nntrain_run(argv[2], atoi(argv[3]), lambda, atoi(argv[5]), atoi(argv[6]), !cpu, seed,
-                           rate, warm, share, scale, status, argv + first, argc - first);
+                           rate, warm, share, scale, smooth, status, argv + first, argc - first);
     }
     if (strcmp(command, "policyfit") == 0 && argc >= 7) {
         unsigned long long seed = 0;
@@ -175,7 +179,7 @@ int main(int argc, char **argv) {
         "               nntrain <net.h> <keep one in> <lambda> <epochs> <threads> [--cpu]\n"
         "                       [--seed n] [--rate r] [--warm] [--share size=part]...\n"
         "                       [--lambda size=lambda]... [--scale [size=]s]... [--status file]\n"
-        "                       <games>...] |\n"
+        "                       [--smooth n] <games>...] |\n"
         "               policyfit <policy_net.h> <keep one in> <epochs> <threads>\n"
         "                         [--seed n] [--rate r] <games>...]\n");
 #else

@@ -477,7 +477,7 @@ def render_text(model: dict, colour: bool) -> str:
         return "\n".join(out)
     cols = shutil.get_terminal_size((110, 40)).columns
     width = max(16, min(max(len(r["label"]) for r in runs), cols - 64))
-    ended = [r for r in runs if r["status"] in ENDED]
+    ended = sorted((r for r in runs if r["status"] in ENDED), key=lambda r: -r["touched"])
     for run in ended:
         label = run["label"][:width].ljust(width)
         if run.get("verdict"):
@@ -662,7 +662,7 @@ function render(m) {
     <td class="r num">${r.eta ? '~' + clock(r.starts) + ' – ' + clock(r.eta) : ''}</td></tr>`).join('');
   const done = runs.filter(ended);
   $('#dh').hidden = $('#done').parentNode.hidden = !done.length;
-  $('#done').innerHTML = done.slice().reverse().map(r => {
+  $('#done').innerHTML = done.sort((a, b) => b.touched - a.touched).map(r => {
     const tag = r.verdict || r.status;
     return `<tr><td>${esc(r.label)}</td><td class="tag ${tag}">${tag.toUpperCase()}</td>
       <td class="r num hide">${r.kind === 'fit' ? r.epochs + ' ep' : (r.status !== 'done' && r.cap ? r.games + '/' + r.cap : r.games) + ' g'}</td>
