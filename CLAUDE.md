@@ -164,6 +164,7 @@ pass.
 | `tools/progress.py` | every long run live, with ETAs: the status files of matches, tunes, fits and datagen, `external/games/queue.txt`, fresh logs |
 | `tools/ptnlink.py` | a ptn.ninja link for a game |
 | `tools/play.py` | play the engine in a terminal |
+| `tools/playtakbot.py` | the engine plays on playtak.com: seeks, plays, seeks again; unrated unless `--rated` |
 | `tools/speedcmp.py` | race move generation against the baselines |
 | `tools/gamestats.py` | how a match went, side by side, from its PTN |
 | `tools/datagen.py` | self-play for training, on every core |

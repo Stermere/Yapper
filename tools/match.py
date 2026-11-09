@@ -288,9 +288,9 @@ def play_game(white: Engine, black: Engine, opening: list[str], size: int, halfk
 
 
 def write_ptn(path: Path, result: GameResult, white: str, black: str, size: int, halfkomi: int,
-              clock: str, round_number: int) -> None:
+              clock: str, round_number: int, site: str = "Yapper match") -> None:
     today = datetime.date.today()
-    tags = [("Site", "Yapper match"), ("Date", f"{today.year}.{today.month:02}.{today.day:02}"),
+    tags = [("Site", site),("Date", f"{today.year}.{today.month:02}.{today.day:02}"),
             ("Round", str(round_number)), ("Player1", white), ("Player2", black),
             ("Size", str(size)), ("Clock", clock), ("Result", result.ptn_result)]
     if halfkomi:
