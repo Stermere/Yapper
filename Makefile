@@ -14,7 +14,7 @@
 #    make check           perft + selftest + bench, the gate for any board change
 #    make perftdiff       fuzz the engine against tools/takref.py, the slow oracle
 #    make speed           race move generation against external/engines
-#    make datacheck       training data: read by takref, and the same twice
+#    make datacheck       training data: read by takref, the same twice, and the same resumed
 #    make format          apply .clang-format
 #    make clean
 #
@@ -142,6 +142,9 @@ datacheck: $(BIN)
 	./$(BIN) datagen external/data/check-b.ydg 100 7 2000
 	python tools/datacheck.py external/data/check-a.ydg --check-every 1 \
 		--same-as external/data/check-b.ydg
+	./$(BIN) datagen external/data/check-c.ydg 40 7 2000
+	./$(BIN) datagen external/data/check-c.ydg 100 7 2000
+	python tools/datacheck.py external/data/check-c.ydg --same-as external/data/check-a.ydg
 	rm -f external/data/check-*.ydg
 
 format:

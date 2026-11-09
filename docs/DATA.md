@@ -19,6 +19,20 @@ shares nothing. The budget is in nodes, so a busy machine changes the speed and 
 the same seed and build give the same bytes. `external/` is gitignored, so data is never
 committed.
 
+A run stops and starts again. `--pause`, with what names the run, stops every job at once and loses
+only the games being played; the same command run again carries on. Each try at a game draws from
+the seed and the game's place in its file alone, so a file stopped and resumed holds the same bytes
+as one that never stopped, and `make datacheck` holds it to that. A file that a stopped job left
+part way through a game is cut back to its last whole game, and the jobs die with the run however
+it ends. For a run of a day or more, `--plan` plays a list of runs one after another under one
+name, with its counts written down before it starts and the engine's bench checked at every start:
+`external/data/gen14/plan.json` is one.
+
+```sh
+python tools/datagen.py --plan external/data/gen14/plan.json
+python tools/datagen.py --plan external/data/gen14/plan.json --pause    # from another terminal
+```
+
 A generation gets a folder, with a folder for each size inside it and the run's log beside them:
 `external/data/gen10/6s/`. Generations before 10 are under `external/data/early/`: gen 1 to 8 of
 6x6 each in its own folder, and `gen1big` for gen 1 of the other sizes along with gen 9 of 6x6.
@@ -34,7 +48,9 @@ a line of a book in place of them, one position a line as PTN moves, the same fo
 books take; the book plies are stored unscored, as random plies are, and the format does not
 change. `tools/mkopenings.py` writes such a book from Yapper's own match games or from people's,
 at any point of a game, and `tools/playtak.py` turns PlayTak's history of games between people
-into PTN for it.
+into PTN for it. `--exclude` leaves out an earlier book's lines, so a generation starts where the
+last did not, and `--swing` keeps only the positions Yapper's own search misjudged, read from the
+scores it left in its own games.
 
 **No other engine's play goes into the data**: not its games, moves or scores, as games,
 openings, seeds, targets or anything a fit or a tuner is chosen by. Matches against other engines

@@ -167,7 +167,7 @@ pass.
 | `tools/playtakbot.py` | the engine plays on playtak.com: seeks, plays, seeks again; unrated unless `--rated` |
 | `tools/speedcmp.py` | race move generation against the baselines |
 | `tools/gamestats.py` | how a match went, side by side, from its PTN |
-| `tools/datagen.py` | self-play for training, on every core |
+| `tools/datagen.py` | self-play for training, on every core; pauses and carries on, alone or as a plan of runs |
 | `tools/datacheck.py` | read training data without the engine, and check it against takref |
 | `docs/` | status, architecture, testing, TEI, data, experiments |
 | `external/` | **gitignored**: baseline binaries, match output, training data |

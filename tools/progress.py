@@ -12,7 +12,8 @@ What it reads, all under external/games/:
   process still runs tells a match that is playing from one that was killed. tools/tune.py writes
   one too, with the parameters that have moved furthest; one that stopped short of its end is
   paused, since --resume carries it on, and stays listed however long it waits. `yapper nntrain`
-  writes one for every fit run from the repository's root, and tools/datagen.py one a run.
+  writes one for every fit run from the repository's root, and tools/datagen.py one a run, which
+  is paused in the same way when it stopped short.
 - queue.txt, if there is one: the runs planned, in the order they play, so it can say when each
   should start and end. One run a line, then a label:
 
@@ -161,7 +162,8 @@ def read_job(s: dict) -> dict:
                    read_at=s.get("read_at") or 0.0, train_at=s.get("train_at") or 0.0)
     else:
         run.update(label=s.get("label") or f"datagen {short(s['out'])}", cap=s["cap"],
-                   games=s["games"], positions=s.get("positions", 0), nodes=s.get("nodes"))
+                   games=s["games"], positions=s.get("positions", 0), nodes=s.get("nodes"),
+                   resumable=bool(s.get("resumable")))
     return run
 
 

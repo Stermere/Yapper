@@ -48,12 +48,13 @@ typedef struct DataConfig {
     int size;
     int generation;
     /* A book of openings, one a line as PTN moves, played in place of the random plies; NULL
-     * for random plies. tools/mkopenings.py writes one from games against other engines. */
+     * for random plies. tools/mkopenings.py writes one from Yapper's own games or people's. */
     const char *openings;
 } DataConfig;
 
-/* Appends this many games to the file. The same seed and build give the same games. Non-zero
- * if the file cannot be written. */
+/* Plays until the file holds this many games, carrying on after any it already holds. The same
+ * seed and build give the same file, however often it was stopped and started again. Non-zero
+ * if the file cannot be written, ends part way through a game, or holds another run's games. */
 int datagen_run(const DataConfig *config);
 
 /* Called for every position of every game, before the move at `ply` is made. `index` counts

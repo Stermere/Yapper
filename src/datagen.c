@@ -57,12 +57,28 @@ static char *Book;
 static char **BookLines;
 static u64 BookCount;
 
-/* xorshift64*. The seed goes through a multiply so that seeds 1, 2, 3 start far apart. */
+/* xorshift64*. */
 static u64 data_rng(void) {
     DataRngState ^= DataRngState >> 12;
     DataRngState ^= DataRngState << 25;
     DataRngState ^= DataRngState >> 27;
     return DataRngState * 0x2545F4914F6CDD1DULL;
+}
+
+/* splitmix64's finalizer: a bijection, so seeds 1, 2, 3 start far apart. */
+static u64 mix64(u64 x) {
+    x ^= x >> 30;
+    x *= 0xBF58476D1CE4E5B9ULL;
+    x ^= x >> 27;
+    x *= 0x94D049BB133111EBULL;
+    return x ^ (x >> 31);
+}
+
+/* Each try at a game draws from its seed and its place in the file alone, so a job stopped part
+ * way and started again writes the same bytes as one that never stopped. */
+static void data_rng_seed(u64 seed, u64 game, u64 attempt) {
+    const u64 x  = mix64(mix64(mix64(seed + 0x9E3779B97F4A7C15ULL) ^ game) ^ attempt);
+    DataRngState = x ? x : 1;
 }
 
 /* A flat, wall or capstone placement by its StoneType, and a spread after those. */
@@ -261,7 +277,59 @@ static bool play_game(DataGame *game, const DataConfig *config) {
     return true;
 }
 
+/* Counts the games a file already holds, so that a job started again carries on after them.
+ * Refuses a file that ends part way through a game, or that holds another run's games: a game
+ * cut short has to be cut off first, as tools/datagen.py does. */
+static bool data_resume(const DataConfig *config, u64 *games, u64 *positions) {
+    FILE *in = fopen(config->path, "rb");
+    if (!in) {
+        return true;
+    }
+    static DataGame game;
+    bool intact = true;
+    for (;;) {
+        const size_t got = fread(&game.header, 1, sizeof(DataHeader), in);
+        if (got == 0) {
+            break;
+        }
+        const DataHeader *h = &game.header;
+        const size_t plies  = got == sizeof(DataHeader) ? h->plies : 0;
+        if (got < sizeof(DataHeader) || plies > DATA_MAX_PLIES ||
+            fread(game.plies, sizeof(DataPly), plies, in) != plies) {
+            printf("%s: game %llu is cut short\n", config->path, (unsigned long long)*games);
+            intact = false;
+            break;
+        }
+        if (h->magic != DATA_MAGIC || h->size != config->size ||
+            h->generation != config->generation || h->nodes != config->nodes) {
+            printf("%s: game %llu is not from this run\n", config->path,
+                   (unsigned long long)*games);
+            intact = false;
+            break;
+        }
+        (*games)++;
+        *positions += plies;
+    }
+    fclose(in);
+    return intact;
+}
+
+static void report(u64 played, u64 positions, u64 rejected, const struct timespec *start) {
+    struct timespec now;
+    timespec_get(&now, TIME_UTC);
+    const double seconds =
+        (double)(now.tv_sec - start->tv_sec) + (double)(now.tv_nsec - start->tv_nsec) / 1e9;
+    printf("%llu games %llu positions %llu rejected %llu of %llu deviations played %.1f seconds\n",
+           (unsigned long long)played, (unsigned long long)positions, (unsigned long long)rejected,
+           (unsigned long long)DeviationsPlayed, (unsigned long long)DeviationsTried, seconds);
+    fflush(stdout);
+}
+
 int datagen_run(const DataConfig *config) {
+    u64 played = 0, positions = 0, rejected = 0;
+    if (!data_resume(config, &played, &positions)) {
+        return 1;
+    }
     FILE *out = fopen(config->path, "ab");
     if (!out) {
         printf("cannot write %s\n", config->path);
@@ -270,7 +338,6 @@ int datagen_run(const DataConfig *config) {
     static char buffer[1 << 20];
     setvbuf(out, buffer, _IOFBF, sizeof(buffer));
 
-    DataRngState = (config->seed + 1) * 0x9E3779B97F4A7C15ULL;
     tt_resize(DATA_HASH_MB);
     if (config->openings && !book_read(config->openings)) {
         printf("cannot read openings from %s\n", config->openings);
@@ -278,31 +345,30 @@ int datagen_run(const DataConfig *config) {
     }
 
     static DataGame game;
-    struct timespec start, now;
+    struct timespec start;
     timespec_get(&start, TIME_UTC);
-    u64 played = 0, positions = 0, rejected = 0;
+    if (played > 0) {
+        report(played, positions, rejected, &start);
+    }
     bool written = true;
+    u64 attempt  = 0;
 
     while (played < config->games && written) {
+        data_rng_seed(config->seed, played, attempt++);
         if (!play_game(&game, config)) {
             rejected++;
             continue;
         }
+        attempt = 0;
+        /* Each game goes to disk whole, so a job killed by a pause loses only the one it was
+         * playing. */
         const size_t plies = game.header.plies;
         written            = fwrite(&game.header, sizeof(DataHeader), 1, out) == 1 &&
-                  fwrite(game.plies, sizeof(DataPly), plies, out) == plies;
+                  fwrite(game.plies, sizeof(DataPly), plies, out) == plies && fflush(out) == 0;
         played++;
         positions += plies;
         if (played % REPORT_EVERY == 0 || played == config->games) {
-            timespec_get(&now, TIME_UTC);
-            const double seconds =
-                (double)(now.tv_sec - start.tv_sec) + (double)(now.tv_nsec - start.tv_nsec) / 1e9;
-            printf("%llu games %llu positions %llu rejected %llu of %llu deviations played "
-                   "%.1f seconds\n",
-                   (unsigned long long)played, (unsigned long long)positions,
-                   (unsigned long long)rejected, (unsigned long long)DeviationsPlayed,
-                   (unsigned long long)DeviationsTried, seconds);
-            fflush(stdout);
+            report(played, positions, rejected, &start);
         }
     }
     if (fclose(out) != 0 || !written) {
