@@ -142,7 +142,9 @@ yapper nntrain src/net.h 1 0.7 2 15 --warm --rate 0.0005 --share 7=0.33 --share 
 ```
 
 E69's is the same from E49's `net.h`, with gen 13 listed four times after gen 11, one file a cell:
-`external/data/gen13/joined/gen13-*.ydg`. E70's, which plays now, is E69's with `--smooth 4`.
+`external/data/gen13/joined/gen13-*.ydg`. E70's is E69's with `--smooth 4`, and E71's, which
+plays now, is E70's with gen 14 listed twice after gen 13, one file a set:
+`external/data/gen14/joined/gen14-*.ydg`.
 
 Gen 11 is listed four times, which weighs it four times as heavily: listed once, as a twentieth of
 the positions, it hardly moved the network. Windows starts no command longer than 32,767

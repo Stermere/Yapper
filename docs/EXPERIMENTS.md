@@ -3014,6 +3014,78 @@ before did, which read -380 over its first 250; 110 games paired by opening and 
 reads 33 above E53 at a quarter and 17 against Topaz, where the SPSA run, E66, gained 51 in
 self-play.
 
+## E71: gen 14, a day of E70's games
+
+Gen 14 is 6x6 only, played by E70 at 20,000 nodes on 15 jobs, with no other engine's play in it
+(DATA.md): 684,720 games, 68.3M positions, `external/data/gen14`. It ran as one plan of
+`tools/datagen.py`, about 24 hours of play over 27, paused twice and carried on with the same bytes
+an unpaused run writes. Four rounds of four sets, so a run stopped after any round would still have
+been balanced, the counts fixed beforehand from 450 games of each set by E70:
+
+| Set | Seeded from | Games | Positions | Drawn |
+|---|---|---|---|---|
+| humans | the same 19,381 PlayTak games between people as gen 13, at plies its book did not start from | 142,560 | 13.9M | 18.5% |
+| variants | positions from Yapper's own match games that gen 13's book did not hold | 179,280 | 17.8M | 25.6% |
+| swings | positions from Yapper's own match games since 2026-11-05 scored within 3 flats, where its own score moved 2 flats or more within the next 8 plies (`mkopenings.py --swing`) | 276,480 | 28.4M | 27.1% |
+| self | random plies, as before | 86,400 | 8.2M | 16.3% |
+
+takref replayed 345 of them without a fault. A swing game is short, since its seed is 75 plies in
+at the median, so its set has the most games for its share of the time.
+
+Before the run, on the 450 games of each set. Rare stack kinds are the share of stacks of a kind
+under 1 in 10,000 of the stacks in what E70 was fitted on, gen 11's and gen 13's 6x6, and an
+unstable seed is a game's first scored position whose 20,000-node score moves 2 flats within 8
+plies:
+
+| Set | Rare stack kinds | Unstable seed |
+|---|---|---|
+| gen 11 and gen 13, already fitted on | 0.9% to 1.5% | 0.2% to 9% |
+| gen 14 self | 1.0% | 0.7% |
+| gen 14 variants | 1.7% | 13% |
+| gen 14 humans | 1.4% | 2.8% |
+| gen 14 swings | 2.3% | 39% |
+
+So variants and humans are new positions of the kinds gen 13's sets already were, and the swing
+seeds stay unstable for the datagen search as well as for the matches' searches they were found
+by: the newest kinds, and the noisiest targets. A deeper search steadies them only at 100,000
+nodes, and the fit's target, four searches smoothed, already sits as near the results at 20,000:
+
+| Swing games, 450 each | Moves 2 flats within 8 plies | Seed's score agrees with the result | Smoothed target agrees | Games a second |
+|---|---|---|---|---|
+| 20,000 nodes | 30% | 88% | 93% | 11.0 |
+| 60,000 nodes | 26% | 89% | 90% | 3.2 |
+| 100,000 nodes | 21% | 93% | 93% | 1.9 |
+
+The run stayed at 20,000. Each budget's results come from its own games, so agreement is a check
+of the data against itself, to about 2 points either way.
+
+Three fits by E70's recipe from E49, `external/build/e71/fit.sh`, with gen 14 joined into a file a
+set and listed after gen 13. Held out, against results, on the groups all of them share:
+
+| Held out, against results | E70 | f1, gen 14 once | f2, twice | f3, once without swings |
+|---|---|---|---|---|
+| 6x6 gen 10 | 0.414018 | 0.411153 | **0.409626** | 0.411664 |
+| 6x6 gen 11 | 0.408845 | 0.405470 | **0.403621** | 0.406076 |
+| 6x6 gen 13 20k | 0.439070 | 0.434035 | **0.431332** | 0.434997 |
+| 5x5 gen 11 | 0.382910 | 0.382798 | 0.382710 | 0.382421 |
+| 7x7 gen 11 | 0.462486 | 0.462073 | 0.462166 | 0.462214 |
+
+The order is f2, f1, f3, E70 in every 6x6 group, and gen 14 moved the other sizes hardly at all.
+The engine reads within 0.50 of the fit on average on 6x6, 0.81 on 3x3, 7 at worst.
+
+| Match, 2+0.02, [0, 10], against E70 | Result |
+|---|---|
+| f1 | **PASSED**, 602 games, +257 -180 =165, **+44.7 +/- 22.5**, pairs [22, 49, 108, 74, 48] |
+| f2 | **PASSED**, 388 games, +190 -106 =92, **+76.4 +/- 30.1**, pairs [12, 28, 63, 46, 45] |
+| f3 | **PASSED**, 910 games, +358 -276 =276, **+31.4 +/- 18.4**, pairs [40, 80, 155, 118, 62] |
+
+f1's first run was stopped at 84 games and played again from the start. f2 is the network now,
+bench 1323465 from `make`, `make release` and `make TUNE=on`, as from the binary that played.
+The three intervals overlap, and an SPRT that stops as early as f2's reads high, so the matches
+alone do not order them; the held-out losses do, the same way. The swings: with them, f1 led f3 by
+0.0005 to 0.001 on every 6x6 group and by 13 in play, which no match has tested head to head
+(`sprt.sh f1 1 f3`).
+
 ## Mistakes worth not repeating
 
 - **Bench is not a tree-size measure.** Its 13 positions are mostly openings and other sizes. E62's
