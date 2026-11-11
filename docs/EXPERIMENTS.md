@@ -3086,6 +3086,70 @@ alone do not order them; the held-out losses do, the same way. The swings: with 
 0.0005 to 0.001 on every 6x6 group and by 13 in play, which no match has tested head to head
 (`sprt.sh f1 1 f3`).
 
+## E72: SPSA again, at 8+0.08
+
+E66's run tuned at 2+0.02, and E69 to E71 have changed the network under its values since. Tuning
+at a time control that short is a known pitfall in chess engines, values that suit a shallow
+search being wrong for a deep one, so this run tuned at 8+0.08, the control syntaks is measured
+at, on E71's engine (bench 1323465), as large as E66 and otherwise the same:
+`external/build/e72/tune.sh`, which is `tools/tune.py --name e72-stc --exclude <the seven Time
+tunables> --pairs 10000 --tc 8+0.08 --book tests/books/6s_4ply.txt --concurrency 8 --r-end
+0.004`. 10,000 pairs in 14 h 2 m, nothing else running, no game lost on time.
+
+Where it ended, rounded, for the 29 that moved a whole step; the other nine rounded back to their
+defaults (NmpDivisor, SingularDepth, SingularTtDepth, SingularMargin, LmrDepth, LmrMoves,
+LmrCutNode, PriorWeight, PriorDepth):
+
+| Tunable | Was | Now | | Tunable | Was | Now |
+|---|---|---|---|---|---|---|
+| QuiesceDepth | 3 | 2 | | HistoryLimit | 12966 | 8716 |
+| RfpDepth | 6 | 5 | | HistoryKeep | 10 | 11 |
+| RfpMargin | 49 | 55 | | OrderFlatNear | 262 | 311 |
+| NmpDepth | 3 | 4 | | OrderFlat | 114 | 67 |
+| NmpBase | 3 | 4 | | OrderCap | 197 | 221 |
+| LmpDepth | 8 | 9 | | OrderRoadOurs | 7710 | 7644 |
+| LmpBase | 12 | 13 | | OrderRoadTheirs | 3916 | 3727 |
+| LmpSlope | 4 | 3 | | OrderSwing | 367 | 497 |
+| LmpImprovingBase | 22 | 27 | | AspirationDepth | 4 | 5 |
+| LmpImprovingSlope | 7 | 4 | | AspirationWindow | 25 | 21 |
+| LmrBase | 39 | 25 | | AspirationGrowth | 176 | 174 |
+| LmrDivisor | 170 | 183 | | AspirationLimit | 482 | 460 |
+| LmrPvNode | 1 | 0 | | ThreatOne | 36 | 49 |
+| HistoryBonusMul | 19 | 21 | | ThreatMany | 217 | 219 |
+| HistoryBonusMax | 3983 | 3766 | | | | |
+
+The largest moves for their range: the reductions' base down by a third and none extra at PV
+nodes, the history's limit down by a third, the flat placement's order term down by 40% and the
+order by tops won up by a third, one ply less of quiescence again, and null move from a ply deeper
+with a larger reduction. Two of E66's moves came partly back, the price of one road threat (60,
+36, now 49) and reverse futility's margin (90, 49, now 55).
+
+| Match | Result |
+|---|---|
+| The candidate against E71's values, the same tune build both sides, 8+0.08, [0, 5] | **PASSED**, 1110 games, +434 -293 =383, **+44.4 +/- 16.3**, pairs [35, 102, 188, 147, 83], none on time |
+
+Bench 1013724 from `make`, `make TUNE=on` and `make release`, and from the tune build that played
+the SPRT given the candidate's options; given none, that build benches E71's 1323465. `make check`
+passes. Not yet done: a confirmation at another time control, which TESTING.md asks for.
+
+**Against syntaks at full strength**, 8+0.08 each, 2 komi, through `tools/match.py` with the
+6s_4ply book at seed 1, so each run played the same 250 openings with each colour; 7 games at
+once, nothing else running, the three back to back on 2026-11-10:
+
+| Engine | Result | Score |
+|---|---|---|
+| E72 | +64 -381 =55, **-260 [-294, -225]** | 0.183 |
+| E71 | +59 -390 =51, **-277 [-313, -240]** | 0.169 |
+| E70 | +51 -406 =43, **-308 [-348, -268]** | 0.145 |
+
+Paired game by game: E71 against E70 +0.024 +/- 0.034 in score, about +34 +/- 48; E72 against E71
++0.014 +/- 0.035, about +17 +/- 43; E72 against E70 +0.038 +/- 0.036, about +53 +/- 50. The one
+game lost on time was syntaks's, against E70. Both steps show against syntaks in the order
+self-play gave them, at about two fifths of their self-play size, the network's (+76) and the
+tune's (+44) alike: a tune at the control it is measured at carries over as a network does. E72
+read -301 at 226 games, which looked like no gain over E70's -290 of 2026-11-08; only runs played
+alike, side by side, can be compared.
+
 ## Mistakes worth not repeating
 
 - **Bench is not a tree-size measure.** Its 13 positions are mostly openings and other sizes. E62's
