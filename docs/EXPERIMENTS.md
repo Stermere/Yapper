@@ -3150,6 +3150,23 @@ tune's (+44) alike: a tune at the control it is measured at carries over as a ne
 read -301 at 226 games, which looked like no gain over E70's -290 of 2026-11-08; only runs played
 alike, side by side, can be compared.
 
+## E73: the clock's seven tunables at 8+0.08, stopped
+
+SPSA over the seven `Time` tunables alone, from E72's engine (bench 1013724), at 8+0.08 where the
+clock is more than one budget, as large as E72: `external/build/e73/tune.sh`, 10,000 pairs in
+14 h 35 m. Five of its 20,000 games ended by a forfeit rather than on the board, all with the
+clock's values perturbed. Where it ended, rounded: TimeMoves 4 to 2, TimeMovesPerStone 150 to 155,
+TimeMovesMin 10 to 6, TimeIncrement 75 to 79, TimeHard 300 to 277, TimeIteration 50 to 56;
+TimeHardCap rounded back to 50.
+
+| Match | Result |
+|---|---|
+| The candidate against E72's values, the same tune build both sides, 8+0.08, [0, 5] | stopped at 592 games, +201 -186 =205, **+8.8 +/- 19.8**, pairs [17, 66, 122, 67, 24], LLR +0.31 of 2.94, none on time |
+
+Stopped by the user: a gain this size would take thousands of games at 8+0.08 to show, and is
+worth less than the time. The clock keeps its defaults. Its tunables wait for one tune of every
+parameter at once, nearer syntaks's strength.
+
 ## Mistakes worth not repeating
 
 - **Bench is not a tree-size measure.** Its 13 positions are mostly openings and other sizes. E62's

@@ -95,7 +95,9 @@ its own search misjudged, listed twice in that recipe passed **+76.4 +/- 30.1** 
 SPSA over the search's 38 tunables at 8+0.08 on that network, where E66's first run had tuned at
 2+0.02, moved 29 of them and passed **+44.4 +/- 16.3** at 8+0.08, E72. Against syntaks at full
 strength at 8+0.08, the three back to back on the same 500 openings read E70 -308, E71 -277 and
-**E72 -260 [-294, -225]**, about two fifths of each step's gain in self-play.
+**E72 -260 [-294, -225]**, about two fifths of each step's gain in self-play. The clock's seven
+tunables tuned alone, E73, read +8.8 +/- 19.8 after 592 games and were stopped; they wait for one
+tune of every parameter nearer syntaks's strength.
 
 ## Done and verified
 
