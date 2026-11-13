@@ -3167,6 +3167,107 @@ Stopped by the user: a gain this size would take thousands of games at 8+0.08 to
 worth less than the time. The clock keeps its defaults. Its tunables wait for one tune of every
 parameter at once, nearer syntaks's strength.
 
+## E74: evaluations asked twice, and a cache for them
+
+The user asked for new candidates against syntaks, measured before built. Everything here is from an
+instrumented copy of E72's engine in `external/build/e74/diag`, which benches E72's 1013724 with its
+switches off. It searches the positions of E72's own games against syntaks in game order, every
+second ply from the 8th to 450,000 nodes, with the table, history and killers carried from the move
+before as a match carries them (`external/build/e74/flow.py`): 12 games, 530 searches, 224M nodes,
+mean depth 12.2.
+
+**Where the nodes are.**
+
+| | Nodes | |
+|---|---|---|
+| Inside the tree | 156.1M | 70% of all |
+| ... left by reverse futility | 85.8M | 55% of those |
+| ... at depth 1 | 82.7M | 53% |
+| ... with a table entry, and cut by it | 19.8M, 9.6M | |
+| ... with a road to answer | 5.1M | |
+| Leaves | 67.6M | 30% of all |
+| ... a road placed on the spot | 10.4M | |
+| ... stand pat at or above beta | 42.9M | |
+| ... a road by spread, found after the evaluation | 3.2M | |
+| ... answering a road, the stand pat never read | 2.4M | |
+| ... stand pat returned below beta | 8.8M | |
+| Evaluated by the network | 174.1M | 78% of all: 116.9M inside, 57.3M at leaves |
+
+Four nodes in five evaluate and return. Reverse futility and the leaves write nothing to the table,
+so a position met again, by another order of the same moves or at the next iteration, is evaluated
+again. How often, against a cache of one entry a slot:
+
+| Cache | Evaluations inside the tree | At leaves | All |
+|---|---|---|---|
+| 512 kB, 2^16 entries | 19.5% | 8.3% | 15.8% |
+| 2 MB | 25.8% | 10.6% | 20.8% |
+| 8 MB | 29.8% | 12.3% | **24.1%** |
+| 32 MB | 31.4% | 13.0% | 25.4% |
+
+**The cache.** `EvalCache` in `search.c`: 2^20 entries of 8 bytes, the position's key with the score
+in its low 16 bits, the slot from the key's low bits, so all 64 bits are compared and a hit is the
+score the network would give. `node_eval()` asks it before it builds a frame, a hit leaves the node
+without one as a table hit does, and the slot is fetched as the move is made. `search_clear()`
+empties it with the table, since its scores are of one network and komi as the table's are. A leaf
+that goes on to answer a road also no longer evaluates: its stand pat was computed and never read.
+
+| Check | Result |
+|---|---|
+| bench, before and after | 1013724 nodes both |
+| 203 searches of 5 games in game order, 450,000 nodes each | 61,904,844 nodes both |
+| 28 games, seven engines at once | 361,257,459 nodes both |
+| selftest, perft | 984,138,986 checks and 153 positions, no failures |
+
+Not one node differs, so this is a pure speedup and no match was played for it. Speed, builds
+alternated:
+
+| Conditions | E72 | With the cache | |
+|---|---|---|---|
+| bench, five runs each | 1.90M nps | 2.25M | +18% |
+| 5 games in game order, alone, twice | 36.5 s | 33.3 s | **+9.6%** |
+| 28 games, seven engines at once, as an SPRT loads the machine | 1355 knps | 1458 | **+7.6%** |
+
+Bench clears everything before each position and is mostly openings, where an iteration returns to
+more of the last one. Under a match's load the gain is smaller than alone, because seven engines
+share the memory the cache lives in. Its size hardly matters there: 512 kB, 2 MB and 32 MB read
+1488, 1447 and 1473 knps over two runs each, to 8 MB's 1458 over four, all inside the 3% that two
+runs of one build differ by. 8 MB is kept for the machine that is not busy.
+
+**Measured and not built**, on the same searches:
+
+- *A stand pat guessed from the parent.* At leaves with a null window and no road to answer, the
+  leaf's score less the negated score of the node above has a mean of +158 and a standard deviation
+  of 314. Trusting the parent by a margin of 300 would skip 8% of leaf evaluations and be wrong in
+  1.3% of them; by 100, 37% and 4.1%. A move changes the evaluation too much for the one before it
+  to stand in.
+- *The table at the leaves.* 2.4% of leaves have an entry and 1.8% one that would cut: a probe
+  costs more than that returns.
+- *What a pass costs.* Where a null move is tried, this side's evaluation plus the other's after
+  the pass has a mean of **450** and a standard deviation of 161: each side reads itself 225 better
+  for having the move. So a pass must leave beta 450 behind, and the null move was tried at 3.98M
+  nodes and held at 0.40M of them, 10%, while 88% of the nodes where it failed went on to fail high
+  anyway. E53's r3, no null move at all, read +5.2 +/- 12.5. E75 takes this up.
+- *The evaluation's error against the search, by what the position has.* At nodes whose result
+  bounds the evaluation's error, a running mean of that error kept by a key of the position, each
+  read before it is updated, against the mean error of 106 at depth 1 and 126 at depth 5 and more:
+
+  | Key | Depth 1 | Depth 5+ |
+  |---|---|---|
+  | None: the raw error | 105.7 | 125.5 |
+  | One number for each side to move | 89.5 | 88.4 |
+  | Walls and capstones | 89.8 | 85.5 |
+  | The last move | 88.1 | 87.6 |
+  | Stacks, walls and capstones | 95.0 | 93.3 |
+  | Each side's tops | 98.2, 99.8 | 97.5, 103.9 |
+  | Four of them summed | 87.6 | 81.8 |
+
+  One constant takes most of what any key takes, and a constant is only a margin the tuner already
+  set. The keys add 2% at depth 1 and 7% at depth 5 and more. Not built.
+
+Bench 1013724 from `make`, `make release` and `make TUNE=on`. The binary is
+`external/baselines/e74.exe`; the instrumented copy, its patches and the scripts are in
+`external/build/e74`.
+
 ## Mistakes worth not repeating
 
 - **Bench is not a tree-size measure.** Its 13 positions are mostly openings and other sizes. E62's

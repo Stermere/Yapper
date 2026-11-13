@@ -74,6 +74,30 @@ static ThreadHandle SearchThread;
 static bool SearchThreadRunning;
 static int LmrTable[64][64];
 
+/* The evaluation of every position scored lately. Reverse futility and the leaves return without
+ * writing to the table, so each new iteration, and each transposition, came back to a quarter of
+ * them and asked the network again, which is the dearest thing a node does: E74. An entry is the
+ * key with the score in its low 16 bits, the slot is the key's low bits, and between them all 64
+ * are compared, so a hit is the same score the network would give and the search cannot tell.
+ * Scores are of this network and komi, and in a tune build of its price for a road threat, as the
+ * table's are, so search_clear() empties it. */
+#define EVAL_CACHE_BITS 20
+#define EVAL_CACHE_SIZE ((size_t)1 << EVAL_CACHE_BITS)
+static u64 *EvalCache;
+
+/* The position hash is a sum, and its low bits pick the slot. */
+static inline u64 eval_cache_key(u64 hash) {
+    hash ^= hash >> 31;
+    hash *= 0x9E3779B97F4A7C15ULL;
+    hash ^= hash >> 29;
+    hash *= 0xBF58476D1CE4E5B9ULL;
+    return hash ^ hash >> 32;
+}
+
+static inline void eval_cache_prefetch(u64 hash) {
+    __builtin_prefetch(&EvalCache[eval_cache_key(hash) & (EVAL_CACHE_SIZE - 1)]);
+}
+
 static i64 now_ms(void) {
     struct timespec ts;
     timespec_get(&ts, TIME_UTC);
@@ -96,7 +120,8 @@ void search_init(void) {
     search_retune();
     Search.arena        = malloc(ARENA_MOVES * sizeof(Move));
     Search.arena_scores = malloc(ARENA_MOVES * sizeof(i32));
-    if (!Search.arena || !Search.arena_scores || !tt_resize(TT_DEFAULT_MB)) {
+    EvalCache           = calloc(EVAL_CACHE_SIZE, sizeof(u64));
+    if (!Search.arena || !Search.arena_scores || !EvalCache || !tt_resize(TT_DEFAULT_MB)) {
         fprintf(stderr, "out of memory\n");
         exit(1);
     }
@@ -104,6 +129,7 @@ void search_init(void) {
 
 void search_clear(void) {
     tt_clear();
+    memset(EvalCache, 0, EVAL_CACHE_SIZE * sizeof(u64));
     memset(Search.killers, 0, sizeof(Search.killers));
     memset(Search.history, 0, sizeof(Search.history));
 }
@@ -168,6 +194,13 @@ static int node_eval(Worker *w, int ply, u64 threats) {
     if (!nn_ready(b->size)) {
         return evaluate(b, threats);
     }
+    /* A hit leaves this node without a frame, as a table hit does, and its children carry theirs
+     * from further up. */
+    const u64 key = eval_cache_key(board_key(b));
+    u64 *slot     = &EvalCache[key & (EVAL_CACHE_SIZE - 1)];
+    if ((*slot ^ key) >> 16 == 0) {
+        return (i16)*slot;
+    }
     NNFrame *frame = &w->frames[ply];
     if (!frame->computed) {
         u64 touched = 0;
@@ -185,7 +218,9 @@ static int node_eval(Worker *w, int ply, u64 threats) {
             nn_refresh(b, frame);
         }
     }
-    return evaluate_frame(b, threats, frame);
+    const int score = evaluate_frame(b, threats, frame);
+    *slot           = (key & ~0xFFFFULL) | (u16)score;
+    return score;
 }
 
 /* With the last stones going in, the flat count can end the game before the road comes, and
@@ -220,18 +255,22 @@ static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *move
         return SCORE_WIN - ply - 1;
     }
 
-    /* Looking for a spread is the dearest thing a node does, and a stand pat that already
-     * fails high can only be confirmed by what it finds. */
-    const u64 threats   = board_road_placements(b, !us);
-    const int stand_pat = node_eval(w, ply, threats);
-    if (!threats && stand_pat >= beta) {
-        return stand_pat;
+    /* Looking for a spread is the dearest thing a node does after the evaluation, and a stand pat
+     * that already fails high can only be confirmed by what it finds. A node that goes on to
+     * answer a road never reads its stand pat, so it is not evaluated at all. */
+    const u64 threats  = board_road_placements(b, !us);
+    const bool answers = threats && !last_stones(b, us) && qply < QuiesceDepth && ply < MAX_PLY - 1;
+    int stand_pat      = 0;
+    if (!answers) {
+        stand_pat = node_eval(w, ply, threats);
+        if (!threats && stand_pat >= beta) {
+            return stand_pat;
+        }
     }
     if (movegen_road_spread(b, us, ends)) {
         return SCORE_WIN - ply - 1;
     }
-
-    if (!threats || last_stones(b, us) || qply >= QuiesceDepth || ply >= MAX_PLY - 1) {
+    if (!answers) {
         return stand_pat;
     }
 
@@ -247,6 +286,7 @@ static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *move
             continue;
         }
         board_play(b, m, &undo);
+        eval_cache_prefetch(board_key(b));
         w->played[ply]              = m;
         w->frames[ply + 1].computed = false;
         const Outcome outcome       = board_outcome_after(b, &undo);
@@ -556,9 +596,11 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, bool cut_n
         }
 
         board_play(b, m, &undo);
+        const u64 child_key = board_key(b);
         if (depth > 1) {
-            tt_prefetch(board_key(b));
+            tt_prefetch(child_key);
         }
+        eval_cache_prefetch(child_key);
         const Outcome outcome = board_outcome_after(b, &undo);
         searched++;
         w->played[ply]              = m;

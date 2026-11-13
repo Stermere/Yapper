@@ -217,6 +217,13 @@ vector registers, from the ancestor's accumulator straight into the node's. The 
 written for what the compiler makes of them: each part was timed alone, and the obvious forms ran
 two to four times slower, E48.
 
+**A score is kept once it is paid for.** Four nodes in five are evaluated and return at once, by
+reverse futility or as leaves, and neither writes to the transposition table. So the search keeps
+the last million evaluations in a cache of its own, 8 MB, a position's key with its score in the low
+bits. A quarter of all evaluations are found there, from other orders of the same moves and from
+the iteration before. Every bit of the key is compared, so the tree is the same node for node, and
+`search_clear()` empties it with the table: E74.
+
 **One network plays every size.** A filter is laid on an 8x8 grid, and a board sits on it with
 its edges on the grid's edges, the near half of each line counted from one edge and the rest from
 the other. A corner, an edge and the line beside it are then the same weights on every size, and
