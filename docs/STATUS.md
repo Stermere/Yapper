@@ -108,6 +108,34 @@ at the leaves finds an entry 2.4% of the time, the evaluation's error does not f
 the position by much, and a pass costs 450 on the evaluation's scale, which is why the null move
 holds at a tenth of the nodes it is tried at.
 
+E75 took up the null move's job. The node itself, searched four plies shallower against a bound
+100 past beta, is right 98% to 99% of the time from depth 5 and reaches depth 12 on real positions
+in 30% less time, yet it read **-0.6 +/- 15.1** over 1218 games at 8+0.08 and was stopped: the
+singular search already cuts half of the same nodes, and the depth it saves was doing the work.
+The same counting found that a position below alpha recovers too often for any margin or shallow
+search to prune it, that a cache of the prior's lists would be hit one time in eight, and that
+reductions by an odd number of plies are lopsided, since scores swing 40 to 80 between odd and
+even depths, though moving their bound found nothing more.
+
+E76 gave the clock a signal from the search. Another iteration names another move a third of the
+time when the move has just changed and one time in seventeen once it has held for seven, so an
+iteration is now started up to 2.3 times as late just after a change and 0.57 times once the move
+has held for four. The shares were chosen by replaying rules over 5,886 logged searches of 1.8M
+nodes, where this one ended on the long search's move 2.4 points more often for the same nodes,
+what half as much time again buys. It passed at 8+0.08, **+23.2 +/- 15.2** over 1066 games, on
+slightly less clock than before.
+
+E77 laid the head's two small layers out by pairs of inputs, so each is a run of multiply-adds with
+no sum across a register: the same scores, **5.7% faster** alone and 6.5% with seven engines at
+once. The cache, the clock and the head together passed against E72 at 8+0.08, **+94.0 +/- 31.8**
+over 284 games, a test that stopped early and reads high. Against syntaks at full strength at
+8+0.08 that build reads **-222 [-256, -191]**, where E72 run straight after on the same 500
+openings reads -250 [-287, -217]: +28 +/- 35 game by game.
+
+Gen 14 listed four times in E71's recipe fitted better on every 6x6 group and played **+3.0 +/-
+11.1** against E77 over 2000 games, E78, so the network stays E71's. The shallow-search cut of E75
+from depth 7 only read +5.7 +/- 11.2 over 2000.
+
 ## Done and verified
 
 | Piece | State | Evidence |
@@ -118,8 +146,8 @@ holds at a tenth of the nodes it is tried at.
 | TEI | Done | 40 games through the real racetrack with no protocol faults |
 | Match runner and SPRT | Done | Known-answer tests, EXPERIMENTS.md E1-E3 |
 | Evaluation | One network for every size, a view for each side, a head of two layers | Gen 14 listed twice in E70's recipe: **+76.4 +/- 30.1** over E70, E71. With the target's score smoothed over the next four searches: **+28.3 +/- 17.4** over E69, E70. E49's recipe with gen 13 added: **+35.3 +/- 19.7** at 2+0.02, E69. E48 fine-tuned on gen 11: **+23.4 +/- 15.4** at 2+0.02, +150 at k=8 and +103 against Topaz, E49. A head of 16 and 32 units on the pooled filters: **+54.0 +/- 24.7** at 2+0.02, +86.0 at equal nodes, E48. Two views of 64 filters, for one of 128 that the other side subtracted from: **+87.7 +/- 31.9** in self-play, +83 at k=8 and +17 against Topaz, E44, after E43 found one view could weigh only the difference between the sides. Before that, 128 filters, from 32 in E39: +79.4 +/- 21.8 for 64 at 100,000 nodes, and 128 led 64 by 45 against syntaks at k=8, E40. Filters on an 8x8 grid every board shares, and each size's own bias, output and skip. Against E38's networks of each size's own at 100,000 nodes: **8x8 +130, 7x7 +203, 5x5 +64**, passed SPRTs for its lambda 0.5 forerunner, then **+77 and +70 more on 8x8 and 7x7** from lambda 0.7; **4x4 +14.3 +/- 8.8**, passed, and +7.3 +/- 8.2 at 2+0.02; **6x6 +16.9 +/- 13.8 against v2, and +23.7 +/- 13.9 at 2+0.02**, both at the cap with their intervals above zero; 3x3 is decided by who moves first at every budget tried: E39. The hand-written evaluation went in E38. Refitted with gen 10, E42: +11.8 +/- 13.5 on E40 in self-play. A second layer fitted better and lost 37 on speed, playing only +14.5 at equal nodes, and the same as F1 against both other engines |
-| Search | Second pass done | **+116 [+92, +140] against Tiltak over 800 games at 5+0.05**, from -38: EXPERIMENTS.md E25. It sees roads by spread, and most of the gain is speed in real middlegames. With the network, stronger reductions, move-count pruning to depth 6 and singular extensions: **+82.5 +/- 31.3 on v2's search at 2+0.02**, E36. History by the whole move rather than square and kind: **+121.7 +/- 26.5** at 100,000 nodes, E40. Move-count pruning at half: **+19.7 +/- 12.9** at the cap, and a quarter or deeper gained nothing more, E42. Only the moves that can stop a road answer it, and road-making placements, the other side's road squares and spreads by the tops they win go first: **+29.3 +/- 17.6**, E50. A prior over moves fitted to the search's own choices orders from depth 2: **+42.5 +/- 22.0** and then **+20.1 +/- 14.0**, E51. A network prior with history halved at each search: **+28.1 +/- 17.3** over E51, E52. Reductions `/ 1.6` for `/ 2.0`: **+21.7 +/- 10.8** over two runs, the second passing, E53. SPSA over every tunable but the clock's: **+51.0 +/- 17.6** at 2+0.02, E66, and again at 8+0.08 on E71's network, **+44.4 +/- 16.3** at 8+0.08, E72. A cache of evaluations, since a quarter are asked twice: the same nodes **7.6% to 9.6% faster**, E74 |
-| Time management | Done for now | Budgets on the moves left, from the shorter reserve. One time loss in 5242 games, and it does not use the whole clock yet: E25. More time in the opening, as syntaks spends it, lost 22; less lost 9, and a later stop lost 7: E42 |
+| Search | Second pass done | **+116 [+92, +140] against Tiltak over 800 games at 5+0.05**, from -38: EXPERIMENTS.md E25. It sees roads by spread, and most of the gain is speed in real middlegames. With the network, stronger reductions, move-count pruning to depth 6 and singular extensions: **+82.5 +/- 31.3 on v2's search at 2+0.02**, E36. History by the whole move rather than square and kind: **+121.7 +/- 26.5** at 100,000 nodes, E40. Move-count pruning at half: **+19.7 +/- 12.9** at the cap, and a quarter or deeper gained nothing more, E42. Only the moves that can stop a road answer it, and road-making placements, the other side's road squares and spreads by the tops they win go first: **+29.3 +/- 17.6**, E50. A prior over moves fitted to the search's own choices orders from depth 2: **+42.5 +/- 22.0** and then **+20.1 +/- 14.0**, E51. A network prior with history halved at each search: **+28.1 +/- 17.3** over E51, E52. Reductions `/ 1.6` for `/ 2.0`: **+21.7 +/- 10.8** over two runs, the second passing, E53. SPSA over every tunable but the clock's: **+51.0 +/- 17.6** at 2+0.02, E66, and again at 8+0.08 on E71's network, **+44.4 +/- 16.3** at 8+0.08, E72. A cache of evaluations, since a quarter are asked twice: the same nodes **7.6% to 9.6% faster**, E74. The head by pairs of inputs: 5.7% to 6.5% more, E77 |
+| Time management | Done for now | Budgets on the moves left, from the shorter reserve. One time loss in 5242 games, and it does not use the whole clock yet: E25. More time in the opening, as syntaks spends it, lost 22; less lost 9, and a later stop lost 7: E42. An iteration started later while the best move is new and sooner once it has held: **+23.2 +/- 15.2** at 8+0.08 on no more clock, E76 |
 | Training data | Every size | Gen 14, 6x6 from E70 at 20,000 nodes over a day, seeded by people's games, by Yapper's own and by the positions its own search misjudged: 684,720 games, 68.3M positions, E71. Gen 13, 6x6 from E66 at 20,000 and 60,000 nodes, seeded by random plies, by Yapper's own match games and by people's PlayTak games: 130,395 games, 12.7M positions, E69. Gen 11, two rounds over 5x5 to 8x8 at 20,000 nodes from E48: 202,000 games, 21.5M positions, E49. 6x6: gens 1-10, 228.8M positions, gen 10 being 120,000 games at 20,000 nodes from E40, E42; every one recoverable from about four bytes a ply, repeatable, checked by takref: docs/DATA.md, E34, E38. 150,000 to 400,000 games of each other size from Gen-1Big. Openings of up to 16 random plies and margin-checked deviations from E37 on. At equal time, 20,000 nodes a move taught a 6x6 network far more than 5000, E38. The network is fitted on 6x6's gens 7-8 and gen 9's 20,000-node games: gens 1-6 can go and gen 7 cannot, E39 |
 | Fitting a network | On the GPU | An RTX 3070 fits about 18M positions a second to the CPU's 1.05M, the same network to within float rounding and repeatable to the byte; nothing is needed to build it: E37. Every size in one fit of minutes, the weights averaged over its last tenth. Two fits of the same games that differ only in seed play 15 to 35 apart, so a fit is chosen from several: E39 |
 | Playing it yourself | Done | `python tools/play.py` |
@@ -170,6 +198,7 @@ has to be the one of its commit's day: `topaz-tei.exe` is dcb8cd2 on branch `bac
    E70 scores 0.579 there, and 0.158 against syntaks at full strength at 8+0.08. E72 scores 0.183
    at full strength, where E70 run beside it scored 0.145: self-play gains show there at about two
    fifths of their size, E72.
+   E77 scores 0.218 at full strength, where E72 run beside it scored 0.192.
    E42 still finds syntaks two to three plies deeper at less time, its tree growing 1.5 times a ply
    to Yapper's 1.8 to 2.4. syntaks also spends three times Yapper's time on each opening move. Its
    10 ms `MoveOverhead` takes more than the clock says at an eighth. Both sticks move with the
@@ -188,8 +217,7 @@ has to be the one of its commit's day: `topaz-tei.exe` is dcb8cd2 on branch `bac
    by size where the fit uses 310, yet a fit to that lost 10, E67. A fit's gain plays at about 10 Elo at equal nodes per 0.001 of held-out
    loss, so a network that costs speed must buy more than that: E42's second layer did not, nor did
    lambda 0.85 or more epochs, nor 256 filters, at two thirds of the speed.
-4. The search items left: history in the reductions, a two-ply continuation history, null move
-   from deeper with a reduction that grows with the margin, the aspiration window and the clock's
+4. The search items left: a two-ply continuation history, the aspiration window and the clock's
    floor. E36 found that sparing moves that threaten a road, and the improving flag outside
    move-count pruning, both lose. E50 found that hand-set priors each gain too little to measure,
    and that a tinue prover, pruning spreads by the tops they leave, and leaves that answer roads by
@@ -206,6 +234,10 @@ has to be the one of its commit's day: `topaz-tei.exe` is dcb8cd2 on branch `bac
    would not either: a pass costs 450, so it holds at 10% of its tries while 88% of the rest fail
    high anyway. It also ruled out, by counting, a stand pat guessed from the parent, a table probe
    at the leaves, and a correction of the evaluation kept by a key of the position.
+   E75 found the search's own shallow result no substitute for the null move either, and nothing
+   to gain from history or parity in the reductions by counting: 84% of reduced moves have no
+   history or have it against them, and a reduced move beats alpha in full once in a hundred times
+   at best.
 7. The order, E61 and E62. The prior names the 20,000-node search's move 21.8% of the time, the
    value network one ply down 25.4%, a depth 1 search 34.0%, and a prior fitted on the GPU with a
    trunk of its own 28.3%, at seven times today's cost. None of that is the order inside the

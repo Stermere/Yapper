@@ -788,6 +788,8 @@ static SearchReport run_search(const Board *root, const u64 *history, int histor
 
     const int depth_limit = limits->depth ? limits->depth : MAX_PLY - 1;
     int score             = 0;
+    Move held             = MOVE_NONE; /* the best move of the last iteration */
+    int stable            = 0;         /* and how many iterations it has held */
     for (int depth = 1; depth <= depth_limit; depth++) {
         w->root_depth = depth;
         int window    = AspirationWindow;
@@ -823,19 +825,38 @@ static SearchReport run_search(const Board *root, const u64 *history, int histor
             break;
         }
 
-        score        = value;
-        report.depth = depth;
-        report.score = value;
+        const int fell = depth > 1 ? score - value : 0;
+        stable         = w->root_best == held ? stable + 1 : 0;
+        held           = w->root_best;
+        score          = value;
+        report.depth   = depth;
+        report.score   = value;
         if (verbose) {
             print_info(w, depth, value);
         }
         if (abs(value) >= SCORE_WIN_BOUND && !limits->infinite && SCORE_WIN - abs(value) <= depth) {
             break;
         }
-        /* The next iteration takes several times this one, so starting it late only
-         * spends the clock on a search that will not finish. */
-        if (w->soft_ms && (now_ms() - w->start_ms) * 100 >= w->soft_ms * TimeIteration) {
-            break;
+        /* The next iteration takes about twice this one, so starting it late only spends the
+         * clock on a search that will not finish. How late is late goes by what another
+         * iteration is likely to change: it names another move a third of the time when the move
+         * has just changed and one time in seventeen once it has held for seven, and twice as
+         * often after the score fell 60 as after it held. Spending by that ends on the move a
+         * search seven times as long chooses as often as half as much time again would, E76. */
+        if (w->soft_ms) {
+            /* A fixed time for the move is not a clock to share out. */
+            int share = 100;
+            if (limits->clock && !limits->movetime) {
+                share          = TimeStableMax - TimeStableStep * stable;
+                share          = share < TimeStableMin ? TimeStableMin : share;
+                const int drop = fell > TimeFallMax        ? TimeFallMax
+                                 : fell < -TimeFallMax / 4 ? -TimeFallMax / 4
+                                                           : fell;
+                share += share * drop * TimeFall / 10000;
+            }
+            if ((now_ms() - w->start_ms) * 10000 >= w->soft_ms * TimeIteration * share) {
+                break;
+            }
         }
         if (limits->soft_nodes && w->nodes >= limits->soft_nodes) {
             break;

@@ -32,10 +32,11 @@ typedef struct Net {
     _Alignas(64) i16 bias[NN_VIEW];
     _Alignas(64) i16 output[NN_BUCKETS][NN_POOLS];
     i32 skip[NN_BUCKETS][4];
-    _Alignas(64) i16 l2[NN_BUCKETS][NN_L2][NN_POOLS];
+    /* The head's layers by pairs of inputs, [pair][unit][which of the two]: see pair_products(). */
+    _Alignas(64) i16 l2_pairs[NN_BUCKETS][NN_POOLS / 2][NN_L2 * 2];
     i16 l2_skip[NN_BUCKETS][NN_L2][3];
     i32 l2_bias[NN_BUCKETS][NN_L2];
-    _Alignas(64) i16 l3[NN_BUCKETS][NN_L3][NN_L2];
+    _Alignas(64) i16 l3_pairs[NN_BUCKETS][NN_L2 / 2][NN_L3 * 2];
     i32 l3_bias[NN_BUCKETS][NN_L3];
     _Alignas(64) i16 l4[NN_BUCKETS][NN_L3];
 } Net;
@@ -101,10 +102,22 @@ bool nn_install(int size, const NNWeights *weights) {
     }
     memcpy(net->output, weights->output, sizeof(net->output));
     memcpy(net->skip, weights->skip, sizeof(net->skip));
-    memcpy(net->l2, weights->l2, sizeof(net->l2));
+    for (int bucket = 0; bucket < NN_BUCKETS; bucket++) {
+        for (int unit = 0; unit < NN_L2; unit++) {
+            for (int k = 0; k < NN_POOLS; k++) {
+                net->l2_pairs[bucket][k / 2][unit * 2 + k % 2] =
+                    weights->l2[((size_t)bucket * NN_L2 + unit) * NN_POOLS + k];
+            }
+        }
+        for (int unit = 0; unit < NN_L3; unit++) {
+            for (int j = 0; j < NN_L2; j++) {
+                net->l3_pairs[bucket][j / 2][unit * 2 + j % 2] =
+                    weights->l3[((size_t)bucket * NN_L3 + unit) * NN_L2 + j];
+            }
+        }
+    }
     memcpy(net->l2_skip, weights->l2_skip, sizeof(net->l2_skip));
     memcpy(net->l2_bias, weights->l2_bias, sizeof(net->l2_bias));
-    memcpy(net->l3, weights->l3, sizeof(net->l3));
     memcpy(net->l3_bias, weights->l3_bias, sizeof(net->l3_bias));
     memcpy(net->l4, weights->l4, sizeof(net->l4));
     Ready[size] = true;
@@ -330,14 +343,56 @@ static __attribute__((noinline)) i32 dot(const i16 *restrict a, const i16 *restr
     return sum;
 }
 
-/* A third-layer unit's row. Out of line, as dot() is: inlined, both widen to 32 bits. */
-static __attribute__((noinline)) i32 dot_l2(const i16 *restrict a, const i16 *restrict b) {
-    i32 sum = 0;
-    FULL_WIDTH
-    for (int j = 0; j < NN_L2; j++) {
-        sum += (i32)a[j] * b[j];
+/* A layer of the head is small and dense. A dot product for each unit ends in a sum across a
+ * register, which costs more than the products did, and thirty-two of them were most of a score.
+ * So a layer's weights are kept by pairs of inputs, and the two activations of a pair, set in every
+ * pair of lanes, are multiplied into a register of units at once: adjacent products added, which
+ * is one instruction on x86 and two widening multiplies on NEON, written out as what it computes so
+ * that a compiler finds whichever it has. The sums are the same integers in another order. */
+typedef i32 NNWide __attribute__((vector_size(NN_VEC_BYTES), may_alias));
+#define NN_WIDE_LANES ((int)(sizeof(NNWide) / sizeof(i32)))
+_Static_assert(NN_L2 % NN_WIDE_LANES == 0 && NN_L3 % NN_WIDE_LANES == 0,
+               "a layer's units are whole registers");
+_Static_assert(NN_POOLS % 4 == 0 && NN_L2 % 2 == 0, "inputs come in pairs, and pairs in twos");
+
+static inline NNWide pair_products(NNVec weights, NNVec pair) {
+#if defined(__AVX2__)
+    typedef short Lanes __attribute__((vector_size(32)));
+    return (NNWide)__builtin_ia32_pmaddwd256((Lanes)weights, (Lanes)pair);
+#elif defined(__SSE2__)
+    typedef short Lanes __attribute__((vector_size(16)));
+    return (NNWide)__builtin_ia32_pmaddwd128((Lanes)weights, (Lanes)pair);
+#elif defined(__clang__) || __GNUC__ >= 12
+    /* Even lanes times even, odd times odd, each widened: NEON has that multiply. */
+    typedef i16 Half __attribute__((vector_size(NN_VEC_BYTES / 2)));
+#if NN_VEC_BYTES == 32
+#define NN_EVEN 0, 2, 4, 6, 8, 10, 12, 14
+#define NN_ODD  1, 3, 5, 7, 9, 11, 13, 15
+#else
+#define NN_EVEN 0, 2, 4, 6
+#define NN_ODD  1, 3, 5, 7
+#endif
+    const Half we = __builtin_shufflevector(weights, weights, NN_EVEN);
+    const Half wo = __builtin_shufflevector(weights, weights, NN_ODD);
+    const Half pe = __builtin_shufflevector(pair, pair, NN_EVEN);
+    const Half po = __builtin_shufflevector(pair, pair, NN_ODD);
+    return __builtin_convertvector(we, NNWide) * __builtin_convertvector(pe, NNWide) +
+           __builtin_convertvector(wo, NNWide) * __builtin_convertvector(po, NNWide);
+#else
+    NNWide out;
+    for (int i = 0; i < NN_WIDE_LANES; i++) {
+        out[i] = (i32)weights[2 * i] * pair[2 * i] + (i32)weights[2 * i + 1] * pair[2 * i + 1];
     }
-    return sum;
+    return out;
+#endif
+}
+
+/* Two adjacent activations in every pair of lanes. Read through memory, so the lanes come back in
+ * the order they lay in whatever the byte order. */
+static inline NNVec pair_of(const i16 *at) {
+    i32 both;
+    memcpy(&both, at, sizeof(both));
+    return (NNVec)((NNWide){0} + both);
 }
 
 i64 nn_score(int size, const NNFrame *frame, const NNInputs *in) {
@@ -352,11 +407,23 @@ i64 nn_score(int size, const NNFrame *frame, const NNInputs *in) {
     const i32 inputs[3] = {in->lead * (NN_QU / NN_LEAD_UNIT),
                            in->reserve * (NN_QU / NN_RESERVE_UNIT),
                            in->komi * (NN_QU / NN_KOMI_UNIT)};
-    /* A row at a time: four rows sharing a loop were widened to 32-bit multiplies, E48. */
-    i32 sums[NN_L2];
-    for (int j = 0; j < NN_L2; j++) {
-        sums[j] = dot(net->l2[bucket][j], pooled);
+    /* The second layer, a pair of pools at a time into all its units. Two sets of sums, turn
+     * about, so that one add does not wait for the last. */
+    NNWide even[NN_L2 / NN_WIDE_LANES] = {0}, odd[NN_L2 / NN_WIDE_LANES] = {0};
+    for (int p = 0; p < NN_POOLS / 2; p += 2) {
+        const NNVec a = pair_of(pooled + 2 * p), c = pair_of(pooled + 2 * p + 2);
+        const NNVec *rows  = (const NNVec *)net->l2_pairs[bucket][p];
+        const NNVec *rows2 = (const NNVec *)net->l2_pairs[bucket][p + 1];
+        for (int j = 0; j < NN_L2 / NN_WIDE_LANES; j++) {
+            even[j] += pair_products(rows[j], a);
+            odd[j] += pair_products(rows2[j], c);
+        }
     }
+    i32 sums[NN_L2];
+    for (int j = 0; j < NN_L2 / NN_WIDE_LANES; j++) {
+        even[j] += odd[j];
+    }
+    memcpy(sums, even, sizeof(sums));
     _Alignas(32) i16 y[NN_L2];
     for (int j = 0; j < NN_L2; j++) {
         const i16 *ws = net->l2_skip[bucket][j];
@@ -365,10 +432,21 @@ i64 nn_score(int size, const NNFrame *frame, const NNInputs *in) {
         v    = v < 0 ? 0 : v > NN_QU * NN_Q2 ? NN_QU * NN_Q2 : v;
         y[j] = (i16)((v + (1 << (NN_Y_SHIFT - 1))) >> NN_Y_SHIFT);
     }
-    /* L3 */
+    /* The third, the same way from the second's units. */
+    NNWide units[NN_L3 / NN_WIDE_LANES];
+    memcpy(units, net->l3_bias[bucket], sizeof(units));
+    for (int p = 0; p < NN_L2 / 2; p++) {
+        const NNVec both  = pair_of(y + 2 * p);
+        const NNVec *rows = (const NNVec *)net->l3_pairs[bucket][p];
+        for (int j = 0; j < NN_L3 / NN_WIDE_LANES; j++) {
+            units[j] += pair_products(rows[j], both);
+        }
+    }
+    i32 z[NN_L3];
+    memcpy(z, units, sizeof(z));
     i64 head = 0;
     for (int k = 0; k < NN_L3; k++) {
-        i32 v = net->l3_bias[bucket][k] + dot_l2(net->l3[bucket][k], y);
+        i32 v = z[k];
         v     = v < 0 ? 0 : v > NN_QY * NN_Q3 ? NN_QY * NN_Q3 : v;
         head += (i64)net->l4[bucket][k] * ((v + (1 << (NN_Z_SHIFT - 1))) >> NN_Z_SHIFT);
     }

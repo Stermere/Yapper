@@ -84,7 +84,16 @@
     X(TimeIncrement,       75,    0,    100)                                                \
     X(TimeHard,            300,   100,  800)                                                \
     X(TimeHardCap,         50,    10,   80)                                                 \
-    X(TimeIteration,       50,    10,   100)
+    X(TimeIteration,       50,    10,   100)                                                \
+    /* That percent of the share is itself a percent of this: the most while the best move \
+     * has just changed, a step less for each iteration it has held, down to the least; and \
+     * this percent more for every 100 the score fell at the last iteration, counted up to  \
+     * the cap, and a quarter of it the other way. */                                       \
+    X(TimeStableMax,       228,   100,  400)                                                \
+    X(TimeStableStep,      43,    0,    120)                                                \
+    X(TimeStableMin,       57,    20,   100)                                                \
+    X(TimeFall,            30,    0,    100)                                                \
+    X(TimeFallMax,         100,   0,    400)
 /* clang-format on */
 
 #define X(name, value, min, max) \

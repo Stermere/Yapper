@@ -3268,6 +3268,309 @@ Bench 1013724 from `make`, `make release` and `make TUNE=on`. The binary is
 `external/baselines/e74.exe`; the instrumented copy, its patches and the scripts are in
 `external/build/e74`.
 
+## E75: a shallow search of the node itself, where a null move cannot work
+
+E74 measured what a pass costs in Tak: 450 on the evaluation's scale, so the null move holds at a
+tenth of the nodes it is tried at while nine tenths of the rest fail high anyway. Nothing else
+prunes a node that sits a little above beta: reverse futility stops at depth 5 and asks 55 a ply.
+Three ways to do the null move's job were measured on E74's instrumented copy before one was built,
+each on 8 games of E72's against syntaks in game order, 340 searches of 450,000 nodes, 153M nodes.
+Every test was only counted, and the node then searched in full, so each count is of the engine as
+it plays. A test that holds at a node inside another's subtree is left out of the nodes saved.
+
+**What the margin alone foretells.** Nodes off the PV with no road to answer that reverse futility
+left, by how far the evaluation is past the bound, and how often the node then ends on that side:
+
+| Above beta by | under 50 | 50-99 | 100-149 | 150-199 | 200-299 | 300-399 | 400+ |
+|---|---|---|---|---|---|---|---|
+| Depth 4 | 80.0% | 89.4% | 94.4% | 97.2% | 98.3% | | |
+| Depth 5 | 72.6% | 81.7% | 88.6% | 93.3% | 97.1% | | |
+| Depth 6 | 67.1% | 75.8% | 82.0% | 86.2% | 92.9% | 97.1% | 96.5% |
+| Depth 7-8 | 69.1% | 75.5% | 81.0% | 83.4% | 85.9% | 90.6% | 93.2% |
+| Depth 9+ | 68.4% | 71.0% | 73.4% | 76.1% | 80.5% | 88.3% | 92.8% |
+
+| Below alpha by | under 50 | 50-99 | 100-149 | 150-199 | 200-299 | 300-399 | 400+ |
+|---|---|---|---|---|---|---|---|
+| Depth 1 | 36.0% | 64.2% | 77.7% | 81.8% | 86.1% | 91.1% | 95.8% |
+| Depth 3 | 38.7% | 57.6% | 72.3% | 82.1% | 86.6% | 87.1% | 91.9% |
+| Depth 5 | 39.2% | 49.9% | 60.0% | 68.4% | 77.4% | 86.2% | 91.0% |
+| Depth 9+ | 37.7% | 41.6% | 42.5% | 46.4% | 53.4% | 54.9% | 71.0% |
+
+A position below alpha recovers far too often for any margin to stand in for its search, even a
+ply from the leaves: nothing like razoring or futility has a place here, which is what E55 found by
+playing. Above beta a margin is worth less with every ply.
+
+**A null move against beta less what a pass costs.** The null search as it is, R = 4 + depth / 4,
+its window moved down by a shift:
+
+| Shift | Held | Right when it held | Nodes under those, top level | Wrong, top level |
+|---|---|---|---|---|
+| 200 | 20% of tries | 99.1% | 11.1M, 7% of all | 1,855 |
+| 250 | 34% | 98.5% | 17.7M, 12% | 4,681 |
+| 300 | 51% | 97.3% | 27.4M, 18% | 10,587 |
+| 350 | 70% | 96.1% | 38.8M, 25% | 18,484 |
+
+It works, and it is the margin restated. At that depth the null search is a leaf, so it holds when
+the evaluation is past beta by more than the pass costs here less the shift, and how right it is
+goes by the margin and not by the shift: with the evaluation 100 to 199 above beta it was right 97.8%
+to 98.0% of the time at every shift, whether 14% of those nodes held or 86%. Not built.
+
+**The node itself, searched shallower against a bound past beta**, as Othello programs prune
+(ProbCut), with a real move in place of the pass. From depth 5, by how much shallower and how far
+past:
+
+| Above beta | Held | Right, depth 5 to 9+ | Nodes saved, top level | Nodes spent | Wrong, top level |
+|---|---|---|---|---|---|
+| 4 plies, beta + 50 | 75-87% | 96.5% to 98.1% | 52.0M, 34% | 6.5M | 7,454 |
+| 4 plies, beta + 100 | 69-81% | **97.9% to 99.3%** | **42.5M, 28%** | 9.2M, 6% | 4,851 |
+| 4 plies, beta + 150 | 58-73% | 98.6% to 99.5% | 31.9M, 21% | 11.3M | 2,878 |
+| 3 plies, beta + 100 | 66-82% | 98.5% to 99.6% | 38.2M, 25% | 17.8M | 2,892 |
+| 2 plies, beta + 100 | 63-75% | 98.9% to 99.6% | 35.1M | 34.1M | 2,442 |
+
+| Below alpha, 4 plies | Held | Right |
+|---|---|---|
+| alpha - 50 | 35-54% | 85.7% to 91.2% |
+| alpha - 100 | 27-44% | 90.1% to 94.5% |
+| alpha - 150 | 23-35% | 92.4% to 95.9% |
+
+Above beta it is right as often as reverse futility is where the tuner left it, and saves four
+times what it spends. Below alpha it is not usable, as the margins said. Four plies keeps the side
+to move at the leaves the same in both searches, which matters when the side to move reads itself
+225 better.
+
+**As built.** Off the PV, with no road to answer and the evaluation at or above beta, from
+`ProbcutDepth` 5 the node is searched `ProbcutReduction` 4 plies shallower with a null window at
+beta + `ProbcutMargin` 100; if that holds, the node returns it less the margin, and a win it found
+as it stands. Three lines in `src/tune.h`. The shallow search runs in the node's own space before its
+list exists, as the singular search does.
+
+| Measure | E74 | E75 |
+|---|---|---|
+| bench | 1013724 | 1635489 |
+| 279 searches of 6 games to depth 12 | 100.2M nodes, 58.4 s | 72.0M, 40.8 s: **30% less time** |
+| 251 searches of 6 other games to depth 11 | 38.0M, 22.6 s | 30.9M, 17.3 s: 23% less |
+
+Bench rose 61% and misleads again: 570,000 of its 622,000 more nodes are one position that is lost
+by force, two openings add 95,000, and the other ten positions together search 43,000 fewer.
+
+| Match | Result |
+|---|---|
+| Against E74, 8+0.08, [0, 10], 7 games at once | stopped at 1218 games, +384 -386 =448, **-0.6 +/- 15.1**, pairs [57, 138, 220, 138, 56], LLR -0.94 of 2.94, none on time |
+
+Stopped by hand once it could no longer pass inside the cap: from an LLR of -0.94 the 782 games left
+could end it only as FAILED or INCONCLUSIVE, and neither keeps it. **Not kept.** Reaching a depth
+30% sooner bought nothing, so the plies it reaches are worth that much less: the nodes it saves are
+the ones whose deeper search was doing the work. Part of the job was also already done. The singular
+search cuts a node whose other moves reach beta as well, and on the same searches it did so at
+half of the 618,000 nodes it was tried at, which are nodes above beta with a table move, the ones
+this test would cut. `src/` is E74's; the tree is `external/build/e75`.
+
+The same cut only from depth 7, where 86% of the wrong cuts are avoided for 64% of the nodes saved,
+was played on E77's build against E77 (`external/build/e78/pc7`, bench 1156289): INCONCLUSIVE at the
+cap, 2000 games, +605 -572 =823, **+5.7 +/- 11.2**, pairs [77, 218, 372, 261, 72], none on time. Not
+kept either.
+
+**Three more, counted on the same searches and not built:**
+
+- *A cache of the prior's lists*, as E74 caches evaluations. 5.5% of lists were scored before for a
+  cache of 1,024 lists and 12.0% for 65,536: the table already ends most second visits before a
+  list is made. A list is 102 moves on average and 21% are longer than 128.
+- *A reduction by an odd number of plies changes which side moves last*, and the scores of
+  successive depths swing by 40 to 80 with that: a search to depth 1 reads 60 above the static
+  evaluation, depth 2 reads 82 below depth 1, depth 3 38 above, depth 4 58 below. It shows in the
+  reductions. At depth 4 and 5, a move reduced by one ply beat alpha at the reduced depth 0.55% of
+  the time and again in full 83% of those times where the full search is even, and 1.21% and 46%
+  where it is odd; of the reduced moves that failed, searched in full all the same, 0.75% and
+  0.15% beat alpha. Reductions by two plies showed no such split, 49.4% and 49.7%. Moving the reduced
+  search's bound 30 or 60 towards the side the parity is unfair to moved the searches and not what
+  they found: at depth 2 and 3 the reduced moves searched again went from 120,000 to 218,000 and
+  387,000 while those that then beat alpha stayed at 91,000, 91,000 and 90,000, and the last
+  iteration a search finished took 2% more nodes for a mean depth of 10.40 where it had been 10.44.
+  A node has only one move to find, and it finds another.
+- *History in the reductions*, which E40 stopped at +8.0 +/- 21.3 and STATUS still listed
+  (`external/build/e75/patch_lmrhist.py`). A reduced move beat alpha at full depth 0.30% of the
+  time with history against it, 0.45% with none and 0.82% to 1.15% with history for it, so history
+  does foretell it, by a factor of three at a base rate of one in a hundred. 84% of reduced moves
+  have none or have it against them.
+
+## E76: the clock spends by how long the best move has held
+
+The clock gives every move a share and starts no iteration past half of it, whatever the search has
+found. E73 tuned its seven numbers and gained nothing it could show. What it never had is a signal
+from the search, so one was measured before it was built, on E74's engine.
+
+**What foretells that another iteration will change the move.** 580 searches of 14 of E72's games
+against syntaks in game order, 450,000 nodes each, every finished iteration from depth 6
+(`external/build/e74/stability.py`):
+
+| The best move has held for | 0 iterations | 1 | 2 | 3 | 4 | 5 | 6 | 7 or more |
+|---|---|---|---|---|---|---|---|---|
+| The next iteration names another | **33.9%** | 25.5% | 20.6% | 12.1% | 14.5% | 14.5% | 8.1% | **5.9%** |
+
+| At this iteration the score | fell 60 or more | fell 25 to 59 | moved under 25 | rose 25 or more |
+|---|---|---|---|---|
+| The next iteration names another move | 28.8% | 22.0% | 14.4% | 8.9% |
+
+Together they run from 53% just after a change with the score down 60, to 3.9% for a move held
+three iterations with the score up 25. An iteration costs 1.75 times the one before at the median.
+Of the 580 searches, 262 ended on a move held seven iterations or more, and 95 on one that had just
+changed: the same threshold for both.
+
+**Which rule.** 7,466 searches of 184 more of those games, each to 1.8M nodes, seven times what a
+move gets at 8+0.08, with every iteration's nodes, score and move logged
+(`external/build/e74/tmlog.py`). A rule is replayed over a search's iterations and ends where it
+would have, and is right if it ends on the move the whole search chose. Every rule is scaled to
+spend what the engine's rule spends, 260,500 nodes a move, so they differ only in where they spend
+it (`tmsim3.py`). The 5,886 searches that finished an iteration past 900,000 nodes are counted.
+
+| The engine's rule, at a budget of | half | 0.71 | 1 | 1.41 | twice |
+|---|---|---|---|---|---|
+| Ends on the long search's move | 72.7% | 74.0% | **75.6%** | 77.0% | 79.0% |
+
+| Rule, as a percent of the engine's threshold | Against the engine's rule, at equal spend |
+|---|---|
+| 228 when the move has just changed, 43 less for each iteration held, never under 57, and 30% more for every 100 the score fell | **+2.43 +/- 0.39** |
+| 207, 25 less, never under 46, the same for a fall | +2.43 +/- 0.39 |
+| 245, 49 less, never under 57, nothing for a fall | +2.41 +/- 0.39 |
+| 165, 21 less, never under 72, the same for a fall: the shares first guessed | +1.51 +/- 0.32 |
+| The best of 885 rules on a quarter of the searches, read on the other three quarters | +1.65 to +2.29, **+2.00** on average |
+
+Two points of agreement is what the engine's own rule gains from half as much time again. The top
+twenty rules are within 0.12 of each other and differ in shape, so the shape is not what matters:
+any rule that gives a move that has just changed about twice the threshold and one that has held
+for four iterations about half of it does the same. A fall in the score adds little beside that.
+The measure has a known lean: a move that changes back and forth between two near-equal moves
+counts as much as one that is refuted, and a rule that waits on the first kind is paid for it here.
+
+**As built.** `TimeStableMax` 228, `TimeStableStep` 43, `TimeStableMin` 57, `TimeFall` 30 and
+`TimeFallMax` 100 in `src/tune.h`, as percents of the threshold `TimeIteration` already sets, which
+stays 50, as do the hard limit and the share itself. A search given a fixed time for the move keeps
+the old rule. Bench is unchanged, 1013724, since bench has no clock. The clock's tunables are now
+twelve: a tune that leaves the clock out has five more names to exclude.
+
+| Match | Result |
+|---|---|
+| Against E74, 8+0.08, [0, 10], 7 games at once | **PASSED**, 1066 games, +364 -293 =409, **+23.2 +/- 15.2**, pairs [39, 87, 216, 146, 45], none on time |
+
+It did not win by spending more. Read from the games' own times (`external/build/e74/clockuse.py`),
+it used 9.83 s a game to E74's 10.10 and 0.213 s a move to 0.219, and its searches ended a little
+shallower on average, depth 11.83 to 11.99: the same clock, put where a move was still in doubt.
+
+**The room left.** A rule that knew each search's future could end every one of the 5,886 on the
+long search's move for 211,500 nodes a move, less than the engine's rule spends to be right three
+times in four (`tmoracle.py`). The rule here takes 2.4 points of those 24, so a better sign that the
+move is settled is worth looking for.
+
+Bench 1013724 from `make`, `make release` and `make TUNE=on`; selftest and perft pass. The binary
+that played is `external/baselines/e76.exe`; the logs, the simulators and the tree are in
+`external/build/e74` and `external/build/e76`. The share of an iteration's nodes under its best
+move, the sign chess programs add to this one, was logged for the same searches and adds nothing
+here: a rule with it read +1.92 to +1.99 on the games it was not fitted on, to +1.85 without it,
+and a model of whether the move is final fitted no better for knowing it (`tmsim4.py`).
+
+Two more signs were logged the same way and add as little (`tmsim5.py`, `tmsim6.py`). How long the
+reply to the best move has stood, or its line of three moves, shifts the share of unsettled moves
+by a few points once the move's own hold is known, and rules with them read +1.48 to +1.85 on the
+games they were not fitted on, to E76's +1.85. What the search before planned does foretell the
+move. Where the game went as that search expected, 2,171 of the 5,886 searches, a best move other
+than the one it had planned is not the long search's 43% to 64% of the time however long it has
+held, and the planned one 6% to 29%. But time does not mend it: twice or three times the share for
+such a move, and less for the planned one, read +0.07 to +0.31 over E76's rule in ten forms, each
++/- 0.13 to 0.22.
+
+## E77: the head's two layers by pairs of inputs
+
+After E74's cache the network is still the dearest part of a node, and E61 put scoring an
+accumulator at as much as bringing it up to date. Read off the compiler's output, the scoring was
+mostly sums across a register: the second layer is 16 dot products of 128 pools and the third 32
+of 16 units, each its own call ending in a sum across, because E48 found that rows sharing a loop
+were widened to 32-bit multiplies.
+
+A layer's weights are now kept by pairs of inputs, `[pair][unit][which of the two]`. The two
+activations of a pair are set in every pair of lanes of a register and multiplied into a register
+of units at once, adjacent products added, so a layer is one multiply-add and one add for every
+pair and register: as many multiply-adds as before, and none of the 48 sums across a register, each
+of which was a call. The second layer keeps two sets of sums, turn about, so that an add does not
+wait for the one before. The sums are the same integers added in another order.
+
+Neither clang 15 nor gcc 12 finds that multiply-add from a loop over the lanes or from shuffles:
+both widen and use 32-bit multiplies, which is slower than what it replaced. So on x86 it is asked
+for by its builtin, `pmaddwd` for AVX2 and for SSE2, and everything else takes the same products
+written as even lanes times even and odd times odd, each widened, which NEON has as one multiply,
+or a plain loop for a compiler without that. All of them compute the same thing:
+
+| Build | bench |
+|---|---|
+| clang, AVX2 | 1013724 |
+| clang, no CPU assumptions (SSE2) | 1013724 |
+| gcc, AVX2 and SSE2 | 1013724, 1013724 |
+| the shuffle form forced on x86, 16 and 32 bytes | 1013724, 1013724 |
+| the plain loop forced on x86, 16 and 32 bytes | 1013724, 1013724 |
+
+Selftest passes 984,138,986 checks, which score random networks of every size through it, and perft
+153 positions. Speed against E74's build, alternated, the same nodes in every row:
+
+| Conditions | Before | Paired | |
+|---|---|---|---|
+| bench, five runs each | 2.24M nps | 2.34M | +4.4% |
+| 203 searches of 5 games in game order, alone, three runs each | 36.6 s | 34.6 s | **+5.7%** |
+| 28 games, seven engines at once, two runs each | 1229 knps | 1309 | **+6.5%** |
+
+Not run on ARM: there it takes the shuffle form, which is right by the table above and untimed.
+No match was played, since not one node differs. A cache of the prior's lists, the third thing a
+node pays for, was counted in E75 and is not worth building.
+
+**The three together against syntaks at full strength**, E74's cache, E76's clock and this: 8+0.08
+each, 2 komi, `tools/match.py` with the 6s_4ply book at seed 1, 7 games at once, nothing else
+running, back to back on 2026-11-12 (`external/build/e77/gauntlet.sh`):
+
+| Engine | Result | Score | Lost by road, on flats |
+|---|---|---|---|
+| E77 | +70 -352 =78, **-222 [-256, -191]** | 0.218 | 116, 236 |
+| E72 again, straight after | +65 -373 =62, -250 [-287, -217] | 0.192 | 112, 261 |
+
+Paired game by game (`external/build/e77/paired.py`): +0.026 +/- 0.032 in score, about **+28 +/-
+35**. The same E72 binary read -260 two days earlier, +10 +/- 37 against itself, which is what one
+build moves between days. The gain is the size self-play's has shown against syntaks before, and
+as before 500 games do not separate it from none.
+
+| Match | Result |
+|---|---|
+| E77 against E72: the cache, the clock and the head together, 8+0.08, [0, 10], seed 2 | **PASSED**, 284 games, +129 -54 =101, **+94.0 +/- 31.8**, pairs [5, 13, 56, 38, 30], none on time |
+
+A test that stops this early reads high. The parts say less: E76's +23.2, and about 15% more nodes a
+second from E74 and this, 1.076 times 1.065 under a match's load. It used 9.80 s a game to E72's
+10.07.
+
+Bench 1013724 from clang and gcc, each for this machine and with no CPU assumptions, and from `make
+release` and `make TUNE=on`; `make check` passes. The binary is `external/baselines/e77.exe`.
+
+A profile-guided build was tried and left: gcc's, trained on bench and on four games in game order,
+benched within 1% of plain gcc and of clang, alternated. clang's own needs a runtime this machine
+does not have.
+
+## E78: gen 14 listed four times
+
+E71 listed gen 14 once (+44.7) and twice (+76.4, the network since). Listed four times, as gens 11
+and 13 are, with E71's trainer, recipe and other lists to the byte (`external/build/e79/fit.sh`), the
+fit took 17 minutes and scored better on every 6x6 group held out, against results:
+
+| Held out | E71's f2, the network | Four times |
+|---|---|---|
+| 6x6 gen 10 | 0.409626 | **0.407610** |
+| 6x6 gen 11 | 0.403621 | **0.401174** |
+| 6x6 gen 13 20k | 0.431332 | **0.428122** |
+| 6x6 gen 14 | 0.465092 | **0.461829** |
+| 5x5 gen 11 | 0.382710 | 0.382844 |
+| 7x7 gen 11 | 0.462166 | 0.461942 |
+
+| Match | Result |
+|---|---|
+| Against E77, the same build with E71's network, 8+0.08, [0, 10] | INCONCLUSIVE at the cap, 2000 games, +610 -593 =797, **+3.0 +/- 11.1**, pairs [76, 218, 392, 241, 73], none on time |
+
+About what E71's step from once to twice moved the loss, and nothing like what it played. Not kept:
+the network is still E71's f2. The binary is `external/baselines/e79-f4.exe`, bench 1032641.
+
 ## Mistakes worth not repeating
 
 - **Bench is not a tree-size measure.** Its 13 positions are mostly openings and other sizes. E62's

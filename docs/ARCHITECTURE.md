@@ -127,6 +127,11 @@ Anything else leaves a road to be placed, which selftest holds for every move it
 The clock is shared out over the moves the game has left, worked out from the shorter reserve, so
 it runs down towards the end of the game rather than being spent early and left over. Moving time
 towards the end passed where moving it towards the opening did not: EXPERIMENTS.md E22 and E25.
+Within a move it goes by what the search has found. No iteration starts past a threshold, and the
+threshold is more than twice as late when the best move has just changed and about half once it
+has held for four iterations, with a little more after a fall in the score: another iteration
+names another move a third of the time in the first case and one time in seventeen once a move has
+held for seven, E76.
 
 The tree's shape is still the textbook one. Treating spreads as threats, sparing moves that
 threaten a road from reductions, and the improving flag in reverse futility and reductions were
@@ -216,6 +221,10 @@ again. All of a carry's rows are applied in one pass, a slice of the accumulator
 vector registers, from the ancestor's accumulator straight into the node's. The head's loops are
 written for what the compiler makes of them: each part was timed alone, and the obvious forms ran
 two to four times slower, E48.
+Its two layers are kept by pairs of inputs and summed with the multiply-add of adjacent lanes, a
+register of units at a time, with no sum across a register. No compiler found that from portable
+code, so x86 is asked for it by its builtin and everything else takes the same products written
+out: E77.
 
 **A score is kept once it is paid for.** Four nodes in five are evaluated and return at once, by
 reverse futility or as leaves, and neither writes to the transposition table. So the search keeps
