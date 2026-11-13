@@ -3571,6 +3571,42 @@ fit took 17 minutes and scored better on every 6x6 group held out, against resul
 About what E71's step from once to twice moved the loss, and nothing like what it played. Not kept:
 the network is still E71's f2. The binary is `external/baselines/e79-f4.exe`, bench 1032641.
 
+## E79: 6x6 from gen 10 on
+
+The user asked whether the network still learned from the early generations. It did: E71's recipe
+listed 6x6 gens 7 and 8, 5,000-node games from the first networks, and gen 9's 20,000-node games, and
+gens 7 and 8 were the largest lists in it. E39 had found that dropping gen 7 lost 80, when it was a
+large share of what 6x6 had. With gens 10 to 14 since, and a fit warm from E49, which had already
+learned from those games, they were taken out (`external/build/e79/fit10.sh`): E71's f2 recipe to the
+byte otherwise, gen 14 listed twice, the other sizes' first generations kept. 204.5M positions to
+fit where f2 had 340.6M, in 4 minutes where it took 17.
+
+| Held out, against results | E71's f2, the network | From gen 10 on |
+|---|---|---|
+| 6x6 gen 10 | 0.409626 | **0.398620** |
+| 6x6 gen 11 | 0.403621 | **0.391274** |
+| 6x6 gen 13 20k | 0.431332 | **0.419476** |
+| 6x6 gen 14 | 0.465092 | **0.455665** |
+| 5x5 gen 11 | 0.382710 | 0.382315 |
+| 7x7 gen 11 | 0.462166 | 0.461647 |
+| 8x8 gen 11 | 0.504366 | 0.504020 |
+
+0.009 to 0.012 on every 6x6 group, four times what E71's step moved them and three times E78's, and
+the other sizes a little better too. The engine reads within 0.49 of the fit on average on 6x6, 0.82
+on 3x3, 8 at worst.
+
+| Match | Result |
+|---|---|
+| Against E77, the same build with E71's network, 8+0.08, [0, 10] | **PASSED**, 666 games, +241 -174 =251, **+35.1 +/- 19.7**, pairs [18, 62, 126, 89, 38], none on time |
+
+A test that stops this early reads high, and 0.01 of held-out loss played for less than E42's rate
+of 10 Elo a thousandth would say: the early games taught something the loss does not measure, or
+the rate does not hold this far. Only 6x6 was played.
+
+This is the network now, bench 837239 from `make`, `make release` and `make TUNE=on`, and `make check`
+passes. The binary that played is `external/baselines/e79-f5.exe`. Next: the same data fitted from
+nothing, which now takes a fraction of the time it did.
+
 ## Mistakes worth not repeating
 
 - **Bench is not a tree-size measure.** Its 13 positions are mostly openings and other sizes. E62's
