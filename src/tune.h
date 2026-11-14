@@ -71,6 +71,14 @@
     X(AspirationWindow,    21,    5,    200)                                                \
     X(AspirationGrowth,    174,   120,  400)                                                \
     X(AspirationLimit,     460,   100,  2000)                                               \
+    /* The evaluation's error, learned in the search: percent of what is held for the move  \
+     * that led to a node and for the mover's own move before it, 4096ths of each error     \
+     * taken in for each ply of depth, up to a most, and the most the two may add. */       \
+    X(CorrLast,            100,   0,    200)                                                \
+    X(CorrOwn,             100,   0,    200)                                                \
+    X(CorrRate,            5,     0,    128)                                                \
+    X(CorrRateMax,         80,    1,    1024)                                               \
+    X(CorrMax,             400,   0,    1000)                                               \
     /* What the evaluation takes off for one road threat by the other side, and for more. */ \
     X(ThreatOne,           49,    0,    400)                                                \
     X(ThreatMany,          219,   0,    1000)                                               \

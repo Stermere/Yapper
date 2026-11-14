@@ -4122,8 +4122,196 @@ found: the evaluation's error on the search's own positions is not a shape's to 
 a sixth left to give, and the target's look-ahead is where it should be. What has paid every time
 it was tried is a generation of games from a stronger engine, 30 to 45 a step: E69, E71.
 
+## E82: the search learns the evaluation's error by move
+
+E80 found the evaluation 149 short for the side to move, with a spread of 230, on the positions the
+search asks it about, and E81 that no shape of network reads that swing off the board. The other
+place to look is the search itself: whether the error of one node says anything about the error of
+another node of the same search.
+
+**It does.** E80's tree samples are six nodes of one search each, with the evaluation and a fresh
+search's score (`external/build/e82/icc.py`, 1.98M nodes of 426,527 searches of own games, no road
+to answer). Pairs of nodes of one search, by the error for the side to move:
+
+| Pair | Pairs | Correlation of the two errors |
+|---|---|---|
+| The other side to move | 1,850,534 | +0.002 |
+| The same side to move | 2,003,177 | +0.195 |
+| The same side, nothing of the path shared | 1,003,014 | +0.178 |
+| The same side, three plies of path or more shared | 278,557 | +0.247 |
+| The same side, reached by the same move | 26,628 | +0.337 |
+| The same side, the same own move before | 151,201 | +0.331 |
+
+Nothing carries from one side to the other, so it is not that one colour stands better than the
+evaluation says. A fifth of the swing belongs to the side and the search, and a third to the move:
+after a given move by the other side, the side to move is better off than the evaluation says by
+much the same amount wherever in the tree the move was played. Seven facts of the board held a
+ninth (E80).
+
+E74 had counted this from the other end, a running mean of the error by a key of the position,
+and not built it: one number for each side took the mean error at depth 5 from 126 to 88, the last
+move as a key to 88 as well, four keys summed to 82, "and a constant is only a margin the tuner
+already set". That count was right about the constant and wrong about the keys, as the table above
+and the matches below say: what a key adds to the mean over every node is small, and what it adds
+at the nodes a margin decides is the point.
+
+**The change.** This is the correction history of chess engines, with its keys taken from the
+table above: generic, and said to be. The search keeps, for each side to move, what its finished
+nodes found beyond the evaluation: in one slot for the side, and beyond that in a slot for the move
+that led to the node and one for the mover's own move before it, 65,536 moves each. A node that
+ends with a score on the far side of its bound from the fitted evaluation moves the slots toward
+it, by `CorrRate` 4096ths of the error for each ply of depth up to `CorrRateMax`. The side's slot is
+fitted on its own and the two by move to what it leaves. Reverse futility, the null move's test and
+"improving" read the evaluation with the two move slots added, at most `CorrMax`; the table and the
+evaluation cache keep the network's own word. The slots carry from move to move of a game and
+`search_clear()` empties them.
+
+**What went wrong first, and why it matters.** The first build read all three slots, and lost by
+176 +/- 48 in 180 games at 8+0.08. The side's slot alone, read, lost 191 +/- 44 at 100,000 nodes a
+move. Read at every node of a side it feeds on itself: one side's reverse futility returns more,
+the other side's nodes score lower and their slot falls, their reverse futility returns less, and
+the first side's slot rises again. Chess engines read every table; here the one keyed by nothing
+but the side runs away, and the gain is in the keys that tell one node of a side from another. The
+side's slot is still fitted, so the others hold only what a move adds, and never read: the pruning's
+margins were tuned with it in them.
+
+Screens at 100,000 nodes a move, the tune build with options against E79, 6s_4ply
+(`external/build/e82/nscreen.sh`, results in `chain.log`). A screen ranks; it is not a result.
+
+| Read by the search, rate a ply to its most, in 4096ths | Games | Against E79 |
+|---|---|---|
+| The side's slot alone, 32 to 512 | 200 | -190.8 +/- 43.5 |
+| Last move and own move, 32 to 512 | 200 | +6.9 +/- 39.3 |
+| The same at three tenths weight, which is three tenths the rate | 200 | +43.7 +/- 35.9 |
+| The same, 16 to 64 | 200 | +1.7 +/- 38.8 |
+| Last move and own move, 10 to 160 | 400 | +27.9 +/- 28.4 |
+| **Last move and own move, 5 to 80** | 400 | **+49.0 +/- 28.7** |
+| 10 to 160, the leaves' stand pat reading it too | 400 | +42.8 +/- 28.0 |
+| 10 to 160, with a slot by the walls, capstones and stacks | 400 | +29.6 +/- 28.3 |
+| 10 to 160, with a slot by the pair of moves together | 400 | +16.5 +/- 29.5 |
+| 10 to 160, last move alone | 400 | +49.0 +/- 29.4 |
+| 10 to 160, own move alone | 400 | +5.2 +/- 28.4 |
+
+**The SPRT**, the plain build at 5 to 80 against E79, 8+0.08, [0, 10], seed 1:
+
+| | Result |
+|---|---|
+| E82 vs E79 | **PASSED**, 486 games, +178 -119 =189, **+42.4 +/- 21.8**, pairs [8, 48, 87, 77, 23] |
+
+Then what might add to it, each against E82 itself at 100,000 nodes a move, 400 games:
+
+| Change to E82 | Against E82 |
+|---|---|
+| Last move alone | +14.8 +/- 29.7 |
+| Last move alone, 10 to 160 | +11.3 +/- 26.8 |
+| The leaves read it too | +0.9 +/- 28.4 |
+| 3 to 48 | +12.2 +/- 26.3 |
+| At most 200 | +1.7 +/- 22.1 |
+
+None is outside its error. The last move's slot carries the gain and the own move's is not shown to
+add; it stays, by the rule that a piece goes only when its going gains, and its weight is the
+tuner's to settle. The slots by the pair and by the standing pieces, the leaves' reading and the
+side's weight are not in the code.
+
+**Against syntaks** at full strength, 8+0.08, 6s_4ply, the machine otherwise idle
+(`external/build/e82/gauntlet2.sh`). No rerun of the old build beside it from here on: the games
+go to the new build instead, 500 on each of two seeds, pooled by pairs (`pool.py`).
+
+| | Games | Result |
+|---|---|---|
+| E82, seed 1 | 500 | +79 -361 =60, -221.9 +/- 32.6 |
+| E82, seed 2 | 500 | +72 -350 =78, -217.9 +/- 31.9 |
+| **E82, pooled** | 1000 | +151 -711 =138, **-220 [-243, -198]** |
+| E77's build, for reference (E77) | 500 | -222 [-256, -191] |
+
+The 42 against E79 do not show against syntaks: E77's build read -222 and E79 was never measured
+there, so the bounds leave room for a gain of a few tens or none, and the middle says none. As with
+E36 (+82 in self-play, nothing against syntaks), a gain against Yapper's own evaluation is not yet
+a gain against an engine that reads the position differently.
+
+Bench 888446 from `make`, `make TUNE=on`, `make release` and `make ARCH=generic`, the count of the
+binary that passed (`external/baselines/e82-r5.exe`), which had the unread slots still in it. Both
+perft suites pass and selftest passes 984,138,986 checks. Five lines in `src/tune.h`: `CorrLast`
+100, `CorrOwn` 100, `CorrRate` 5, `CorrRateMax` 80, `CorrMax` 400.
+
+## E83: the table's score in place of the evaluation, stopped
+
+A table entry too shallow to end a node has still searched it. Where its bound lies beyond the
+evaluation, reverse futility and the null move's test read its score instead, as chess engines do;
+the log had no trace of it. On E82, `external/build/e83/ttev`, bench 723923 with it and 888446
+without.
+
+| | Result |
+|---|---|
+| E83 vs E82, 8+0.08, [0, 10] | stopped by hand at 652 games, +186 -194 =272, **-4.3 +/- 18.6**, LLR -1.03 |
+
+A fifth fewer nodes to the bench's depths and nothing for it in play: not kept. E74 found the same
+of the table at the leaves, and E80 that a class of nodes that holds is not a class worth pruning
+by.
+
+## E85: does more data still pay
+
+E61 and E81 found the network at a plateau: no shape and no width fitted the games there are any
+better. Before a run of a billion positions, whether that plateau is the network's or the data's.
+
+**From nothing, by share of the games.** E81's prototype trainer with one switch
+(`external/build/e85/gproto.c`, `run.sh`): the 6x6 games of gens 10, 11, 13 and 14, the same
+sixteenth of them held out every time (3.38M positions), and of the rest a quarter, a half or all
+fitted, at equal steps, so fewer games get more epochs. No tree positions.
+
+| Templates a view | Games fitted | Positions | Epochs | Fit | Held out: target / results |
+|---|---|---|---|---|---|
+| 64, the engine's | a quarter | 13.5M | 16 | 0.489430 | 0.521716 / 0.453997 |
+| 64 | half | 27.0M | 8 | 0.494598 | 0.513181 / 0.444226 |
+| 64 | all | 50.7M | 4 | 0.497599 | 0.507457 / 0.437298 |
+| 64 | all | 50.7M | 8 | 0.495688 | 0.507637 / 0.436896 |
+| 128 | half | 27.0M | 8 | 0.494020 | 0.522086 / 0.456293 |
+| 128 | all | 50.7M | 8 | 0.495356 | 0.514350 / 0.445992 |
+
+Against results, each doubling of the games is worth 0.0098 and then 0.0069 at twice the games less
+an eighth, and twice the epochs on all of them 0.0004: it is the games that are short, not the
+steps. The fit and the held-out loss are 0.012 apart at 64 templates on all the games and 0.019 at
+128, where the held-out loss rises from the third epoch while the fit goes on falling. So E81's
+"32 templates tie 64, and 96 and 128 fit worse" was the data: a wider network has more to fit than
+50M positions hold, and gains as much from a doubling (0.0103) as the engine's does. The plateau
+is the data's.
+
+These are fits from nothing on four generations. The network that plays is carried on from E49's,
+which had learned from every generation before, so its place on the curve is further along and
+flatter. For that, in play:
+
+**In play, by E79's own recipe.** E79's fit to the byte (`fith.sh`, the trainer of
+`external/build/e80/trainer`, warm from E49) with every other game of gens 13 and 14 in place of
+all of them, 40.5M of their 81.0M plies, the older generations and other sizes as they were.
+E79 is the same fit on all of them, so the match is what the second half of the newest games is
+worth:
+
+| | Result |
+|---|---|
+| E79, all of gens 13 and 14, vs the fit on half, 8+0.08, [0, 10] | **PASSED**, 902 games, +309 -239 =354, **+27.0 +/- 16.8**, pairs [26, 93, 160, 129, 43] |
+
+Its held-out losses cannot be laid beside E79's, the held-out games being half as many and not the
+same ones. 27 for a doubling of the newest two generations, in a network already carried through
+every generation before them: the data is still what the evaluation is short of, and a run of ten
+times everything since gen 10 is worth making. What it could teach a wider network is the other
+half of the case: 128 templates overfit 50M positions and gain as much from a doubling as 64.
+
 ## Mistakes worth not repeating
 
+- **A measured mean is not what a table will learn, and a table every node reads feeds on itself.**
+  E80 measured the evaluation 149 short on the positions it is asked about; E82's first build read
+  a slot for the side alone, expecting it to hold that, and lost 176. The slot held 20 to 60, and
+  read at every node it ran away between the two sides. Print what a table holds before playing it.
+- **A count is not a match, and "not built" is not "lost".** E74 kept a running mean of the
+  evaluation's error by several keys, the last move among them, found the keys took 2% to 7% more
+  off the mean error than one constant did, and did not build it. Built, it gained 42, E82. The
+  mean error over every node says little about the few nodes where a margin decides, and a count
+  cannot say what the search does with a better guess. What a count rules out, a screen of 400
+  games at fixed nodes checks in six minutes.
+- **Ideas are not left out for coming from chess.** Each is thought through for what changes in
+  Tak, and E82's gain was in exactly that: which key to read, and which never to.
+- **A rival gauntlet is one build and more games.** Rerunning the old build beside the new one
+  halves the games behind the number that matters. 1000 games of the new build from E82 on.
 - **A shape judged on a game's positions is judged where the network has nothing left to give.**
   On them the evaluation is level with a deep search; on the positions the search asks it about it
   is 230 off, position by position. E42 to E61 compared shapes on games alone. Read both, E81.

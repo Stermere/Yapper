@@ -47,6 +47,14 @@ typedef struct Worker {
      * direction in one slot, and a spread east in a flat placement's, whatever it carried. */
     i32 history[2][65536];
     Move played[MAX_PLY + 1];
+    /* What the searches so far found the evaluation short by, for the side to move, in 4096ths:
+     * at any node of that side, then beyond that after the move that led to the node, and after
+     * that side's own move before it. A move leaves the same thing on the board wherever in the
+     * tree it is played, and the evaluation misses it each time: within one search the errors of
+     * two nodes reached by the same move correlate at 0.34, E82. */
+    i32 corr_side[2];
+    i32 corr_last[2][65536];
+    i32 corr_own[2][65536];
     /* The static evaluation of each node on the path. */
     int evals[MAX_PLY + 1];
     /* The move a node at this ply leaves out, while it asks whether its table move is the only
@@ -132,6 +140,9 @@ void search_clear(void) {
     memset(EvalCache, 0, EVAL_CACHE_SIZE * sizeof(u64));
     memset(Search.killers, 0, sizeof(Search.killers));
     memset(Search.history, 0, sizeof(Search.history));
+    memset(Search.corr_side, 0, sizeof(Search.corr_side));
+    memset(Search.corr_last, 0, sizeof(Search.corr_last));
+    memset(Search.corr_own, 0, sizeof(Search.corr_own));
 }
 
 static inline int score_to_tt(int score, int ply) {
@@ -185,6 +196,57 @@ static inline i32 *history_slot(Worker *w, int us, Move m) { return &w->history[
 
 static inline void history_update(i32 *slot, int bonus) {
     *slot += bonus - *slot * abs(bonus) / HistoryLimit;
+}
+
+#define CORR_GRAIN 4096
+
+/* What the moves that led to the node at `ply` add to its evaluation, for `us` to move there, and
+ * in `fitted` that with the side's own slot, which is what the slots are fitted as. The search
+ * never reads the side's slot: its margins were tuned with that already in them, and read at every
+ * node it feeds on itself, one side's up and the other's down, to -190 in E82. A null move and the
+ * moves before the root share the slot of no move. */
+static inline int correction(const Worker *w, int us, int ply, int *fitted) {
+    const Move last = ply >= 1 ? w->played[ply - 1] : MOVE_NONE;
+    const Move own  = ply >= 2 ? w->played[ply - 2] : MOVE_NONE;
+    const i64 sum   = (i64)CorrLast * w->corr_last[us][last] + (i64)CorrOwn * w->corr_own[us][own];
+    const int keyed = (int)(sum / (100 * CORR_GRAIN));
+    const int all   = w->corr_side[us] / CORR_GRAIN + keyed;
+    *fitted         = all > CorrMax ? CorrMax : all < -CorrMax ? -CorrMax : all;
+    return keyed > CorrMax ? CorrMax : keyed < -CorrMax ? -CorrMax : keyed;
+}
+
+static inline void correction_learn(i32 *slot, int step) {
+    const int limit = CorrMax * CORR_GRAIN;
+    const int next  = *slot + step;
+    *slot           = next > limit ? limit : next < -limit ? -limit : next;
+}
+
+/* A bound only says the evaluation was wrong when it lies on the far side of it. */
+static inline bool correction_tells(int score, Bound bound, int guess) {
+    return bound == BOUND_EXACT || (bound == BOUND_LOWER && score > guess) ||
+           (bound == BOUND_UPPER && score < guess);
+}
+
+/* The side's slot is fitted to the search's score on its own, so it holds what any node of that
+ * side is short by; the two by move are fitted together to what it leaves, so each holds only
+ * what its move adds, and deeper searches count for more. */
+static inline void correction_update(Worker *w, int us, int ply, int depth, int raw_eval, int score,
+                                     Bound bound) {
+    const Move last = ply >= 1 ? w->played[ply - 1] : MOVE_NONE;
+    const Move own  = ply >= 2 ? w->played[ply - 2] : MOVE_NONE;
+    const int rate  = depth * CorrRate < CorrRateMax ? depth * CorrRate : CorrRateMax;
+    int fitted;
+    correction(w, us, ply, &fitted);
+    const int side = raw_eval + w->corr_side[us] / CORR_GRAIN;
+    if (correction_tells(score, bound, side)) {
+        correction_learn(&w->corr_side[us], (score - side) * rate);
+    }
+    fitted += raw_eval;
+    if (correction_tells(score, bound, fitted)) {
+        const int step = (score - fitted) * rate;
+        correction_learn(&w->corr_last[us][last], step);
+        correction_learn(&w->corr_own[us][own], step);
+    }
 }
 
 /* The evaluation of the node at `ply`. Make and unmake know nothing of the network: the moves on
@@ -477,7 +539,11 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, bool cut_n
         board_road_ends(b, !us, their_ends);
         threats = board_road_gaps(their_ends) & board_empty(b);
     }
-    const int eval = hit ? entry.eval : node_eval(w, ply, threats);
+    /* The table and the cache hold the network's word; what the search has learned since is
+     * added each time it is read. The leaves do without: reading it there gained nothing. */
+    const int raw_eval = hit ? entry.eval : node_eval(w, ply, threats);
+    int fitted;
+    const int eval = raw_eval + correction(w, us, ply, &fitted);
 
     /* A side whose position has got better since its last move is more likely to find something
      * late in its list. */
@@ -685,8 +751,12 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, bool cut_n
     const Bound bound = best_score >= beta            ? BOUND_LOWER
                         : best_score > original_alpha ? BOUND_EXACT
                                                       : BOUND_UPPER;
-    tt_store(key, best_move != MOVE_NONE ? best_move : tt_move, score_to_tt(best_score, ply), eval,
-             depth, bound);
+    tt_store(key, best_move != MOVE_NONE ? best_move : tt_move, score_to_tt(best_score, ply),
+             raw_eval, depth, bound);
+    /* With a road to answer the evaluation was never asked to stand for the node. */
+    if (!threats && !root && abs(best_score) < SCORE_WIN_BOUND) {
+        correction_update(w, us, ply, depth, raw_eval, best_score, bound);
+    }
     return best_score;
 }
 

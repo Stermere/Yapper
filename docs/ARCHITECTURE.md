@@ -119,6 +119,17 @@ for scoring every move that way, and there the prior is set by hand: a flat or c
 a road to finish next move, one on a square where the other side would leave one, and a spread by
 the tops it takes less those it gives up, read off the stack's bits, E50.
 
+The evaluation the pruning reads is corrected by what the search has learned of its error, the
+correction history of chess engines with keys taken from a measurement. A move leaves the same
+thing on the board wherever in the tree it is played, and the evaluation misses it each time:
+within one search the errors of two nodes reached by the same move correlate at 0.34. So for each
+side to move the search keeps what its finished nodes found beyond the evaluation, in a slot for
+the move that led to the node and one for the mover's own move before it, fitted on top of one slot
+for the side, and reverse futility, the null move's test and the improving flag read the evaluation
+with the two move slots added. The side's own slot is fitted and never read: read at every node it
+feeds on itself, one side's up and the other's down, and lost 190. The table and the evaluation
+cache keep the network's own word, and the slots carry from move to move of a game: E82.
+
 A node answering a road plays only what can stop it, which `movegen_road_answer()` works out from
 the squares the road would be placed on: a placement on the one such square, a spread that lands on
 each of them or on a stone of a group each would join, and no placement at all when there are two.
