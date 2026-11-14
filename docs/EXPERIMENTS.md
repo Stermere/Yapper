@@ -3607,8 +3607,531 @@ This is the network now, bench 837239 from `make`, `make release` and `make TUNE
 passes. The binary that played is `external/baselines/e79-f5.exe`. Next: the same data fitted from
 nothing, which now takes a fraction of the time it did.
 
+## E80: where the gap to syntaks is, fifteen reductions, and what the evaluation is asked
+
+Everything here is measured on E79's build, bench 837239, in trees of their own under
+`external/build/e80`. Fifteen search changes and three fits were played and none is kept: the
+engine is E79's.
+
+**Depth in the games at 8+0.08.** E77's 500 games against syntaks (`e77-stc-match.ptn`), by move
+number: the depth each side's last iteration reached and the time it took.
+
+| Moves | Yapper depth | syntaks depth | Yapper s a move | syntaks s a move |
+|---|---|---|---|---|
+| 3-10 | 12.4 | 14.6 | 0.185 | 0.464 |
+| 11-20 | 12.4 | 13.9 | 0.222 | 0.230 |
+| 21-30 | 12.1 | 13.0 | 0.256 | 0.200 |
+| 31 on | 10.4 | 11.6 | 0.216 | 0.140 |
+
+STATUS had syntaks at depth 18 to Yapper's 13, from E34. It is 1.5 plies at equal time now and 1
+later. Of 352 losses 236 are on flats and 116 by road, in games of 50 moves at the median; Yapper's
+own score stays under -0.5 from move 13, 24 and 36 at the quartiles, and in 125 only after move 30.
+In the 78 draws its own score was +1.3 at the median twenty of its moves before the end.
+
+**Both to a fixed depth, no clock.** `external/build/e79/fixeddepth.sh`, 200 games a leg on the same
+openings. A depth is each engine's own count.
+
+| Yapper - syntaks depth | Result | Elo | Yapper ms a move | syntaks ms a move | Yapper won by road | lost by road |
+|---|---|---|---|---|---|---|
+| 6 - 6 | +190 -6 =4 | +552 +/- 130 | 2.7 | 8.7 | 158, in 23 moves at the median | 1 |
+| 8 - 8 | +135 -48 =17 | +162 +/- 50 | 19 | 31 | 63 | 18 |
+| 10 - 10 | +78 -92 =30 | -24 +/- 42 | 76 | 66 | 15 | 39 |
+| 12 - 12 | +61 -113 =26 | -93 +/- 46 | 260 | 187 | 11 | 37 |
+| 10 - 12 | +31 -150 =19 | -238 +/- 54 | 64 | 144 | 1 | 54 |
+
+Yapper's ply costs 1.85 times the last from depth 10 to 12 and syntaks's 1.7. The last leg is the
+games at 8+0.08 without the clock, and reads what they read: about 90 at equal depth and the rest
+from the plies syntaks is ahead.
+
+**A forced road of k plies, by the depth that first reports it.** `external/build/e79/roadprobe.py`,
+on positions k plies before the end of 173 of Yapper's own self-play games that ended by road, kept
+when Yapper to depth 10 says a win in exactly k. That choice favours Yapper, most in the last row.
+
+| Road in | Positions | syntaks | Yapper |
+|---|---|---|---|
+| 3 plies | 138 | 33 by depth 2, none at 3-4, 79 at 5-7, 26 not by 7 | 87 by depth 2, 26 at 3-7, 25 not by 7 |
+| 5 plies | 84 | 1 by depth 5, 27 at 6-7, 32 at 8-9, 24 not by 9 | 43 by depth 5, 22 at 6-7, 9 at 8-9, 10 not by 9 |
+| 7 plies | 46 | none by 7, 12 at 8-9, 14 at 10-11, 20 not by 11 | 21 by 7, 17 at 8-9, 8 at 10 |
+
+syntaks's `seldepth` is never more than a ply past its depth, where Yapper's is two, and its depth 7
+is 6,400 nodes on the 7-ply positions to Yapper's 22,700. It sees roads later at a depth, searches a
+third of the tree and wins at equal depth 12: what carries it is how it judges quiet positions,
+by its evaluation or by which moves it reduces. That is all the probing of it there will be.
+
+**What a ply more of reduction costs and finds** (`diag` tree, `lmrtab.py`, `lmr-cf*.txt`). 480
+searches of 12 self-play games, 143.6M nodes, with every reduced move searched one and two plies
+shallower first, counted only.
+
+| Place in the list | Reduced moves | Mean reduction | Beat alpha in full | Nodes under them |
+|---|---|---|---|---|
+| 4-7 | 15.7M | 1.2 | 1.77% | 67% |
+| 8-15 | 23.7M | 1.7 | 0.43% | 52% |
+| 16-31 | 17.7M | 2.8 | 0.089% | 31% |
+| 32-63 | 10.1M | 3.6 | 0.019% | 12% |
+| 64 on | 6.2M | 3.3 | 0.002% | 5% |
+
+Shares count a subtree again under its ancestors. A move past the 32nd at depth 10 and up costs 4
+nodes. One ply more of reduction cuts a reduced search to 28% to 36% of its nodes from depth 8 and
+lets go of 35% to 50% of the moves that were right in full, at every depth and place: the price of
+a miss for a node saved is level by depth and within a factor of 2 to 4 across the list. SPSA has
+evened the formula out, and a different shape of it has nothing to find.
+
+**What a player would say of the move, against whether it beat alpha** (`feattab.py`, `feat.txt`).
+1,094 searches of 24 other games, 314.7M nodes, 55.8M reduced moves at depth 6 and up, of which
+0.190% beat alpha in full. Lift is that rate against moves at the same place in the list, so it is
+what the order does not already hold.
+
+| Fact | Share of moves | Share of reduced nodes | Lift |
+|---|---|---|---|
+| Evaluation under alpha by 300 or more | 13.2% | 4.9% | 0.09 |
+| under by 150 to 300 | 15.9% | 9.0% | 0.22 |
+| under by 50 to 150 | 21.0% | 18.9% | 0.50 |
+| over by 50 to 150 | 14.3% | 21.5% | 1.95 |
+| over by 150 or more | 10.7% | 15.0% | 4.28 |
+| Improving / not | 35.8% / 64.2% | 35.2% / 64.8% | 1.87 / 0.62 |
+| Table entry a lower bound / an upper bound | 13.1% / 69.1% | 12.7% / 64.6% | 1.94 / 0.6-0.7 |
+| Leaves a road to finish by a placement | 2.2% | 6.5% | 2.36 |
+| by a spread only | 3.1% | 4.8% | 3.66 |
+| A spread that wins no top | 30.8% | 10.0% | 0.56 |
+| A stone placed beside nothing | 3.2% | 3.4% | 0.26 |
+| A wall beside none of theirs | 2.5% | 1.0% | 0.53 |
+| On the square of their last move | 6.6% | 8.6% | 1.84 |
+| Three or more squares from it | 38.0% | 36.1% | 0.77 |
+| A flat with under 12 stones left, at places 16-31 / 32 on | | | 2.85 / 16.2 |
+
+The evaluation against alpha separates 47 to 1, and no fact about the move comes near it. Of the
+Tak facts, a move that leaves a road to finish is the one a late move is likeliest to be, and a flat
+late in the game is ranked far lower by the order than it plays.
+
+**Candidates**, each a tree of its own in `external/build/e80`, timed to depth 12 on 263 searches of
+6 games (E79: 83.2M nodes, 49.3 s):
+
+| Tree | Change | bench | To depth 12 |
+|---|---|---|---|
+| `below` | reduce 1 more with the evaluation 100 under alpha, 2 more at 300 | 780918 | 45.6 s, -7.5% |
+| `lmpbelow` | half the late-move count with the evaluation 150 under alpha | 751678 | 44.6 s, -9.5% |
+| `evaldir` | `below`, and 1 less with the evaluation 150 over alpha | 762700 | 47.3 s, -3.9% |
+| `lateflat` | a flat with under 12 stones left is reduced as the 12th move at most | 847472 | 51.4 s, +4.2% |
+| `threat` | 1 less for a move that leaves a road to finish | 762406 | 65.3 s, +33% |
+| `idle` | 1 more for a spread that wins no top, a stone beside nothing, a wall beside none of theirs | 670528 | 56.6 s, +15%: not played |
+
+`idle` reduces more and takes longer. Why was not found: a reduced search that beats alpha and
+fails in full is only about half of the 12% of nodes spent searching again, so there is little
+there to explain 15%.
+
+**Round one**, each alone against E79, 8+0.08, [0, 10], 7 at once, the night of 2026-11-12:
+
+| Tree | Result |
+|---|---|
+| `below` | **FAILED**, 460 games, +118 -161 =181, **-32.6 +/- 21.7**, pairs [18, 70, 86, 49, 7] |
+| `lmpbelow` | INCONCLUSIVE at the cap, 2000 games, +619 -592 =789, **+4.7 +/- 11.3**, pairs [71, 239, 363, 246, 81] |
+| `evaldir` | **FAILED**, 1356 games, +388 -428 =540, **-10.3 +/- 14.0**, pairs [65, 166, 241, 156, 50] |
+| `lateflat` | **FAILED**, 848 games, +234 -271 =343, **-15.2 +/- 16.2**, pairs [37, 91, 189, 86, 21] |
+| `threat` | INCONCLUSIVE at the cap, 2000 games, +615 -576 =809, **+6.8 +/- 11.4**, pairs [77, 223, 367, 250, 83] |
+
+Nothing passed. The evaluation under alpha held the widest spread in the counts, 47 to 1, and
+reducing by it lost the most: how often a move beats alpha does not say what missing it costs. The
+moves that beat alpha from far under it are the ones that show the other side's last move was
+wrong, and a search that reaches them a ply or two later believes that move. It is what E55 and
+E75 found of futility and of a shallow cut below alpha. `evaldir` is `below` with a ply back over
+alpha, and reads 22 better than it, which is what round two's `above` tests alone.
+
+`threat` is E36's ns3 and E21 again, which lost 27 by sparing such moves any reduction; a ply less
+costs a third more time to depth 12 and reads level or a little ahead. `idle` is E55's quiet
+spreads. Both should have been read off the log before a night was spent on them.
+
+**Round two**, three the log does not hold, the morning of 2026-11-13. Timed on 240 searches of 6
+games to depth 12 (E79: 52.2M nodes, 28.8 s):
+
+| Tree | Change | bench | To depth 12 |
+|---|---|---|---|
+| `forced6` | a road to answer with 6 or fewer moves that may stop it costs no depth | 829876 | +1.7% nodes |
+| `forced12` | the same with 12 or fewer | 870095 | +17% nodes, +22% time against the same tunable build at 0 |
+| `above` | 1 less with the evaluation 150 over alpha | 813595 | +10% nodes, +8.5% time |
+
+With no limit on the replies the extension doubles the nodes to depth 12; with 1, 3 or 6 it costs
+the same 1.5% to 1.8%.
+
+| Tree | Result |
+|---|---|
+| `forced12` | **FAILED**, 878 games, +249 -296 =333, **-18.6 +/- 17.3**, pairs [41, 116, 165, 83, 34] |
+| `above` | INCONCLUSIVE at the cap, 2000 games, +600 -600 =800, **-0.0 +/- 11.6**, pairs [86, 231, 368, 227, 88] |
+| `forced6` | Stopped by hand at 1442 games, +415 -434 =593, **-4.6 +/- 13.3**, LLR -2.07 of -2.94 |
+
+Eight tests in two rounds, and each trade of nodes for sight came out level or behind, whichever
+way it went: what E75's cut found at 30% less time and E21, E36 and E55 before it.
+
+**Where the width that no reduction reaches is** (`answer.txt`, the `diag` tree again, 517 searches
+of 12 games, 100.6M nodes). Nodes under each kind of move as a share of all nodes, by the parent's
+depth, a subtree counted again under its ancestors:
+
+| Parent's depth | Second and third moves, quiet node | They beat alpha | Every reduced move | A road to answer: first reply | later replies |
+|---|---|---|---|---|---|
+| 4-5 | 32.4% | 11.6% | 34.4% | 6.1% | 7.3% |
+| 6-7 | 42.7% | 8.1% | 34.9% | 8.8% | 8.3% |
+| 8-9 | 44.4% | 5.4% | 30.4% | 11.3% | 7.5% |
+| 10 on | 67.6% | 3.2% | 38.0% | 16.6% | 6.6% |
+
+Reductions start at the fourth move, `LmrMoves`, a default neither SPSA run moved, so the second
+and third are searched to full depth and hold more of the tree than every reduced move together.
+The table would give the second move nothing below depth 8 either, since it rounds 0.93 down.
+A reply past the third at a node with a road to answer beats alpha 0.9% of the time or less from
+depth 6 and is one node 43% to 99% of the time; the later replies together are a fifth of what the
+second and third moves hold, too little to be worth reducing first.
+The leaf search is 35.1% of all nodes at the leaf itself, 6.5% a reply deeper and 1.0% beyond.
+
+The score moves by 24 to 36 from one iteration to the next at depths 8 to 12 and has no swing by
+odd and even from depth 7, so the window is centred where it should be (`iters.py`).
+
+**Round three: the second and third moves reduced.** A least reduction for them from depth 3, on
+240 searches of 6 games to depth 12 (E79: 52.2M nodes, 25.9 s):
+
+| Tree | Change | bench | To depth 12 |
+|---|---|---|---|
+| `early` | a ply at least | 677698 | 41.6M nodes, 19.6 s, -24% |
+| `early2` | two plies at least | 667063 | 38.7M nodes, 18.1 s, -30% |
+| | a ply, off the PV only | | 49.1M nodes, -6% |
+| | a ply, the third move only | | 46.1M nodes, -12% |
+| | a ply, from depth 6 | | 44.3M nodes, -15% |
+
+Most of it is at PV nodes: the second and third moves of the root and of the line under it are
+each a whole search at full depth.
+
+| Tree | Result |
+|---|---|
+| `early` | **FAILED**, 526 games, +137 -179 =210, **-27.8 +/- 19.9**, pairs [15, 83, 107, 45, 13] |
+| `early2` | **FAILED**, 234 games, +41 -103 =90, **-94.3 +/- 32.2**, pairs [19, 41, 42, 13, 2] |
+
+The largest share of the tree that is not reduced is the share that most needs its depth: a
+quarter less time to depth 12 cost 28, and 30% less cost 94. E75's table says why a smaller tree is
+so hard to come by here: with the evaluation 200 to 299 over beta a node at depth 9 or more still
+ends under it one time in five, and 400 under alpha it recovers three times in ten. A margin that
+cannot foretell the search cannot stand in for it.
+
+**Round four: the other way, on two settings neither SPSA run moved.** `LmrMoves`, `LmrCutNode`
+and `LmrPvNode` are whole numbers with a step of 1, and both runs left them at their defaults,
+while `LmrBase` went 50, 39, 25 and `LmrDivisor` 160, 170, 183: less reduction each time. To
+depth 12 on the same 240 searches, in the tunable build (52.2M nodes, 26.4 s):
+
+| Setting | Nodes | Time |
+|---|---|---|
+| `LmrMoves` 5 | 62.7M | +24% |
+| `LmrMoves` 6 | 74.2M | +48% |
+| `LmrMoves` 8 | 106.3M | +115% |
+| `LmrPvNode` 1 | 66.9M | +30% |
+| `LmrPvNode` 2 | 91.6M | +82% |
+| `LmrCutNode` 0 | 56.0M | +7.6% |
+| `LmrCutNode` 2 | 51.7M | +0.8% |
+
+`lmr5` (bench 977750) and `cut0` (bench 807399) play.
+
+| Tree | Result |
+|---|---|
+| `lmr5`, reductions from the fifth move | **FAILED**, 1716 games, +512 -540 =664, **-5.7 +/- 11.8**, pairs [63, 208, 338, 192, 57] |
+| `cut0`, no extra reduction at a cut node | **FAILED**, 1720 games, +487 -515 =718, **-5.7 +/- 11.7**, pairs [61, 221, 312, 217, 49] |
+
+Twelve tests in four rounds, none ahead: every trade of nodes for accuracy, in either direction,
+comes out level or behind. The reductions are where the tuner left them because nothing near them
+is better.
+
+**Where the evaluation and the search part.** With the reductions settled, the question became
+what the evaluation gets wrong. The instrumented copy counts, at every node off the PV with no road
+to answer, whether the search ends on the side of beta the evaluation said (`diagnode 1`,
+`nodetab.py`): 60 of Yapper's own games from `above.ptn`, each move searched to 300,000 nodes,
+532M nodes in all. Lift is a kind of node's failures against what its own margins and depths
+would give.
+
+| What stands on the board | Share of nodes | Lift, evaluation over beta | Lift, at reverse futility's returns |
+|---|---|---|---|
+| The other side has a road by spread | 7% to 8% | 3.3 to 4.0 | **11.0**: 4.5% of the returns, 57% of the wrong ones |
+| 5 stones or fewer left | 24% to 30% | 1.4 to 1.6 | 1.9 to 2.4 |
+| The evaluation fell over the last two plies | 23% to 36% | 1.4 to 1.7 | 1.9 to 3.6 |
+| 5 walls or more, a stack of 5 or more | 27% to 33% | 1.2 to 1.5 | 1.6 to 2.2 |
+
+All of it is known. The road by spread was acted on four ways in the search and lost each time
+(E23, E41 twice, E54's r5), `improving` in reverse futility lost as ns4, and the late game, walls
+and stacks are E61's table again on E79's network. A flat lead against the evaluation showed a lift
+of 1.5 on positions from the match against syntaks and 1.0 to 1.2 on Yapper's own, so it is not one.
+
+**On the game's line and off it.** 8882 positions of 300 of those games, and 17,764 a move away,
+by two moves drawn evenly from each one's legal moves; 4613 of those ended the game or forced it
+and are left out. Each read by its evaluation and a depth 12 search from an empty table
+(`offline.py`, `offcond.py`). The search's score less the evaluation, at the same evaluation:
+
+| Evaluation, side to move | On the line | A move off it |
+|---|---|---|
+| -250 to -100 | +19 | **+178** |
+| -100 to 0 | +10 | **+151** |
+| 0 to 100 | -2 | **+141** |
+| 100 to 250 | -8 | **+148** |
+| 250 to 500 | +56 | +182 |
+
+On a game's line the evaluation is level with the search. After a move a game would not hold it is
+a flat and a half short for the side to move, at every evaluation, and no shallow search finds the
+difference: against depth 12 the same positions read -230 static, -126 at depth 1, -176 at depth
+2 and -143 at depth 4, where the game's own read -7, +69, -15 and -16 (`offdepth.py`). Datagen
+leaves a game's line only by a move within 0.4 of a flat of the best, so no network has been
+fitted on such a position, and most of the tree is made of them.
+
+**The node's expected type sorts it better than any fact on the board.** The same count by whether
+the node is a null window expected to fail high, and by which of its parent's moves led to it
+(`cametab.py`). The share ending at or over beta, at depth 6 to 8:
+
+| Evaluation against beta | Expected to fail low | Cut, by the first move | Cut, by the 2nd to 15th | Cut, by the 16th or later |
+|---|---|---|---|---|
+| 400 or more under | 5.7% | 76.1% | 72.2% | 84.7% |
+| under 50 under | 22.7% | 82.9% | 90.6% | 96.0% |
+| under 50 over | 26.2% | 85.5% | 93.1% | 97.4% |
+| 200 to 299 over | 33.9% | 97.3% | 98.8% | 99.9% |
+| 400 or more over | 56.1% | 99.4% | 99.7% | 100.0% |
+
+At a node expected to fail low the evaluation says next to nothing: 400 over beta it holds 56% of
+the time, and at depth 9 or more 20%. At one expected to fail high it hardly matters either: 400
+under beta, three in four still end over it. Reverse futility's own returns, sampled and searched
+all the same: wrong **8.8%** of the time at a node expected to fail low, 2.6% at a cut node reached
+by the first move, 1.5% by the 2nd to 15th and 0.4% by the 16th or later. It treats them alike.
+
+A generic fact about an alpha-beta tree and not one about Tak. To depth 12 on 1145 searches of 24
+of Yapper's own games, in a tunable build (403.7M nodes; 6 games gave figures 20% apart in either
+direction, so those are not used):
+
+| Setting | Nodes |
+|---|---|
+| No reverse futility at a node expected to fail low | +3.7% |
+| To depth 6, 8 and 12 at a node expected to fail high | -2.4%, -9.3%, -3.9% |
+| By 40 a ply at one, for 55 | -12.9% |
+| To depth 12 by 40 a ply, and by 70 | -25.8%, +6.7% |
+
+**Round five.** `rfplow` (bench 831463), `rfpdeep` to depth 8 (934899) and `rfpmargin` at 40
+(1049113), each alone against E79.
+
+| Tree | Result |
+|---|---|
+| `rfplow`, no reverse futility at a node expected to fail low | **INCONCLUSIVE** at the cap, 2000 games, +596 -580 =824, **+2.8 +/- 10.9**, pairs [68, 232, 383, 250, 67] |
+| `rfpdeep`, to depth 8 at a node expected to fail high | **FAILED**, 1014 games, +284 -320 =410, **-12.3 +/- 14.9**, pairs [38, 124, 209, 108, 28] |
+| `rfpmargin`, by 40 a ply at a node expected to fail high | **FAILED**, 1102 games, +305 -342 =455, **-11.7 +/- 14.6**, pairs [43, 135, 224, 114, 35] |
+
+Nodes that hold 99.4% of the time or better, returned at, cost 12; the returns that are wrong 8.8%
+of the time, searched, gain nothing to measure. The share of a class that holds is not what a
+return there costs: the few that do not hold are the moves the search is there to find. Fifteen
+tests in five rounds, none ahead.
+
+**A pilot of games a move off the line.** `external/data/pilot15`, generation 150 in the files so
+that no fit takes it for gen 15: 98,000 games by E79 at 20,000 nodes on 15 jobs in 2 hours 43
+minutes, 5.5M scored positions. Every game starts from a position of one of Yapper's own match games
+since E74 (25,984 games, none with another engine) and one legal move drawn evenly, kept when
+Yapper's own depth 6 search says the move gave up 0.4 to 7 flats (`offseeds.py`: 146,085 seeds of
+300,000 positions, 3.8 flats at the median). The seed's plies are book plies, unscored, so the
+format is unchanged and the move is not pinned on the positions before it. 23.3% drawn, and takref
+replayed 49 games without a fault.
+
+E79's recipe to the byte with the pilot listed four times beside it (`fitp.sh p4 4`), 4 minutes 45
+seconds. Held out, against results:
+
+| Held out | E79, the network | With the pilot |
+|---|---|---|
+| 6x6 gen 10 | 0.398620 | **0.397642** |
+| 6x6 gen 11 | 0.391274 | **0.389898** |
+| 6x6 gen 13 20k | 0.419476 | **0.417795** |
+| 6x6 gen 13 60k | 0.416370 | **0.413971** |
+| 6x6 gen 14 | 0.455665 | **0.453978** |
+| 5x5 gen 11 | 0.382315 | 0.382394 |
+| 7x7 gen 11 | 0.461647 | 0.461502 |
+| 8x8 gen 11 | 0.504020 | 0.504157 |
+
+Better on every 6x6 group, by 0.0010 to 0.0024, on games it holds none of: positions a move off
+the line teach something the games' own positions use. Bench 1032662, `external/baselines/e80-p4.exe`.
+
+The gap off the line did not move. The same 300 games and moves read by the pilot's network and
+its own depth 12 search: +145 to +181 at evaluations from -250 to 250, where E79's read +141 to
++178, and -5 on the line for -7. The pilot cannot say whether the gap can be taught: a game gives
+one position a move off the line, its first, so the 98,000 of them were 0.17% of what the fit
+read, and the other 5.4M are positions of games played on properly from there. What the held-out
+loss gained is as likely 5.5M fresh positions from the newest engine as where they started.
+
+| Match | Result |
+|---|---|
+| The pilot's network against E79, 8+0.08, [0, 10] | Stopped by hand at 1014 games, +316 -294 =404, **+7.5 +/- 15.9**, pairs [37, 117, 182, 129, 42], LLR +0.38: heading for the cap, and the machine was wanted for the two tests below |
+
+**The search's own positions.** The user's question: why a position one move off a game, when the
+evaluation is asked about the positions of the search? So a copy of datagen and the search
+(`external/build/e80/stub`, bench 837239 with it off) searches a position of one of Yapper's own
+games to 20,000 nodes, draws six of the nodes where that search asked the evaluation, evenly and
+with their paths, and searches each to 20,000 nodes itself. 3.3M positions in 2 hours 13 minutes on
+15 jobs, from 2.18M positions of 26,586 games (`stubdata`, generation 151, a placeholder outcome,
+and a README that says they are no training data: a record stops after its one search).
+
+24.9% are a forced result inside that search. On the other 2,476,740 (`treetab.py`), the search's
+score less the evaluation, for the side to move:
+
+| | Share | Score less evaluation | Spread |
+|---|---|---|---|
+| Every position | | **+149** | 230 |
+| 1 ply into the tree, 2, 3 to 4, 5 to 6, 7 to 8, 9 to 11, 12 or more | 4%, 5%, 20%, 26%, 25%, 18%, 2% | +180, +141, +148, +147, +150, +148, +142 | 212 to 237 |
+| The root's side to move, the other side | 47%, 53% | +141, +156 | 231, 228 |
+| The game at ply 8-19, 20-39, 40-59, 60-89, 90 on | 14%, 30%, 28%, 26%, 3% | +94, +114, +129, +221, +341 | 131, 160, 193, 304, 442 |
+| Evaluation -250 to -100, -100 to 0, 0 to 100, 100 to 250 | 7%, 7%, 10%, 18% | +77, +91, +104, +120 | 199 to 212 |
+
+The flat and a half of the one-move test is the whole tree's, at every depth into it and for both
+sides, where a game's own positions read level. The side to move is 4.6 flats ahead on average:
+most of the tree follows a move the other side would not play. Only 30% of the squared gap is the
+shift; the search is worse for the side to move than the evaluation says 22% of the time, better by
+300 or more 19% of the time, and where the evaluation is within 250 of level the search's sign
+differs 21% of the time.
+
+**Can the network learn them?** The trainer was rebuilt from git (E70's `nntrain.c` at 968c8f2 with
+E49's network, bench 1485338) with one change, that a record of generation 151 is fitted to its
+search's score alone; with no new data it gives E79's network byte for byte (`fitx.sh v5 0`). With
+the tree's positions listed four times, 10M of 214M (`t4`), on the 154,962 it holds out
+(`evaldump.sh`, `gate.py`: the same positions and scores, each network's own evaluation):
+
+| Network | Mean gap | Spread | Correlation | Search under a bound 55, 110, 165 below the evaluation | Sign wrong within 250 of level |
+|---|---|---|---|---|---|
+| E79 | +148.3 | 230.0 | 0.890 | 13.4%, 7.6%, 4.3% | 20.6% |
+| With the tree's positions | +125.8 | 224.4 | 0.893 | 15.7%, 8.8%, 4.8% | 20.5% |
+| Lambda by the end, below, no tree positions | +137.1 | 224.7 | 0.891 | 14.4%, 8.4%, 4.7% | 20.7% |
+
+The mean moved by 22 and the spread by 2%, no more than a fit that never saw them. The gate set
+beforehand was that the spread must fall and not only the mean, so `t4` is not played: a shift for
+the side to move mostly cancels in a search. Held-out games read 0.0007 to 0.0013 better with them.
+Either this shape cannot see what the search finds there, or a warm fit at this weight cannot be
+moved to: E81 fits shapes from nothing on the same positions to tell which.
+
+**Lambda by how near the end a position is.** The user's idea. On a game's positions the search's
+score moves 0.71 to 0.75 for a point of evaluation before ply 40 and 1.24 to 1.37 after ply 60,
+and late is where the network is furthest from the search. `NT_LAMBDA_END=0.4,10,40` in the rebuilt
+trainer: on 6x6 the search's share of the target is 0.4 within 10 plies of the game's last, 0.7
+from 40 plies out, a line between (`fitx.sh le 0 0.4,10,40`, bench 687904). Its held-out loss
+against results is better by 0.0006 to 0.0020 and means nothing: a target nearer the results always
+scores nearer them, E42. So it plays whatever the loss says.
+
+**What the swing goes with.** The 154,962 held-out tree positions against what stands on the board
+(`featdump`, `feattab.py`): the share of the gap's variance that lies between the bins of each fact.
+
+| Fact | Share | The gap across its bins |
+|---|---|---|
+| The fewer stones left | 6.4% | +92 with 20 or more, +293 with 2 or fewer |
+| The game's ply | 5.9% | +81 before 20, +324 from 90 |
+| Tops the side to move's best spread wins | 5.2% | +111 for one, +320 for four or more |
+| Its spreads that win a top | 3.5% | +95 to +233 |
+| Its tallest stack | 3.4% | +86 to +243 |
+| The other side has a road by spread | 1.5% | +27 with one, +155 without |
+| Everything about the other side's spreads, walls and stacks | 0.6% to 1.8% each | |
+| Squares a placement from a road threat, either side | 0.1% | |
+| Seven of them crossed, 771 cells | **11.0%** | |
+| The evaluation's own size and the stones left | **13.4%** | |
+
+No fact a node could count carries the swing: all of them together hold a ninth of it, and the
+evaluation's own size with the stones left holds more, which is scale and not sight. The rest is
+what the search finds.
+
+| Match | Result |
+|---|---|
+| Lambda 0.4 near the end against E79, 8+0.08, [0, 10] | Stopped by hand at 178 games, +54 -50 =74, **+7.8 +/- 34.7**: the user called it a few Elo at most with larger things to look for. Not measured, not kept |
+
+## E81: shapes on the search's own positions, a perfect order, and the target's look-ahead
+
+E80 found the evaluation level with the search on a game's positions and 230 off, position by
+position, on the positions the search asks it about, and that a warm fit of the network on those
+positions moved the mean and not the spread. Every shape so far, E42 to E61, was judged on games'
+positions. So: each shape fitted from nothing by one trainer on the same data, and read on tree
+positions it holds out.
+
+The trainer is E61's GPU prototype, `gproto`, copied to `external/build/e81` and taught that a
+record of generation 151 is a tree position, fitted to its search's score alone and reported apart:
+the gap, its spread, and how often the search ends under a bound below the evaluation. 6x6 gens 10,
+11, 13 and 14 once each and E80's tree positions four times: 60.0M positions to fit, 4.0M held out,
+619,848 of them tree positions. 3 epochs (`run.sh`).
+
+| Shape | Parameters | Games held out: target / results | Tree: loss | Gap | Spread | Search under a bound 55, 110, 165 below |
+|---|---|---|---|---|---|---|
+| E79's network, warm, no tree positions (E80) | 2.4M | | | +148.3 | 230.0 | 13.4%, 7.6%, 4.3% |
+| The engine's shape, 64 templates a view | 2.4M | 0.507479 / 0.435931 | 0.484680 | +119.7 | 233.2 | 18.3%, 10.7%, 6.0% |
+| Feature map, 16 filters, 3x3 box with the rank and file | 278k | 0.512000 / 0.446065 | 0.491347 | +140.5 | 253.2 | 17.5%, 10.7%, 6.3% |
+| Both: the engine's templates with the 16-filter map's pools beside them | 2.7M | 0.509822 / 0.440290 | 0.486087 | +122.9 | 239.6 | 18.2%, 10.8%, 6.1% |
+| Feature map, 32 filters | 513k | 0.511449 / 0.444918 | 0.490281 | +137.6 | 249.7 | 17.6%, 10.7%, 6.3% |
+
+No shape reads the tree's positions better than the engine's own, and its own, from nothing with a
+sixth of its fit made of them, reads them with the spread E79 has without ever seeing one: 233 to
+230. The map is worse on games as well, by 0.010 against results, at 16 filters and at 32, and
+beside the engine's templates it takes away rather than adds; E61's tie was on gens 7 to 11. The
+swing between the evaluation and the search on the search's own positions is not on the board for a
+static shape to read: seven facts a node could count hold a ninth of it (E80), and a depth 4 search
+of the same position still leaves most of it.
+
+**The engine's shape by width**, the same fit:
+
+| Templates a view | Parameters | Games held out: target / results | Tree spread |
+|---|---|---|---|
+| 16 | 0.6M | 0.509288 / 0.440447 | 245.1 |
+| 32 | 1.2M | 0.507470 / 0.436939 | 235.4 |
+| 48 | 1.8M | 0.508377 / 0.437630 | 236.6 |
+| 64, the engine's | 2.4M | 0.507479 / 0.435931 | 233.2 |
+| 96 | 3.6M | 0.515719 / 0.448988 | 255.8 |
+| 128 | 4.8M | 0.514747 / 0.446694 | 250.7 |
+
+Level from 32 to 64, a thousandth against results, which is a seed's spread. 96 and 128 fit worse
+than 64 as well as holding out worse, so three epochs of this schedule have not fitted them and
+their rows say nothing about width; E42 found 256 no better with a proper fit. Half the width for
+the same judgement would be a faster search, not a better one.
+
+**What knowing every node's best move would save** (`oracle.py`, the instrumented copy with
+`diagnocut 1`: the table gives its move and never a cutoff). 650 positions of 48 of Yapper's own
+games, each searched to depth 12 from an empty table and then again at once, the table still
+holding the first search's best move at every node it reached:
+
+| Search | Nodes |
+|---|---|
+| As the engine plays | 253.4M |
+| The table's cutoffs off, first search | 323.4M |
+| The same again, every reached node's best move known | 324.4M |
+
+A position's second search takes 0.84 of its first at the median, 0.65 and 1.08 at the quartiles,
+and the total is level: the few large trees grow as often as they shrink, since a different order
+is a different tree. The order is already within a sixth of what any prior could give it. A better
+prior cannot make the tree much smaller by ordering it; only by saying what need not be searched,
+which is trust in a reduction, and E80's fifteen tests are what that costs today.
+
+So neither half of the idea the night started from holds a large step: no shape reads the
+positions better, and the order has little left to give.
+
+**The target's look-ahead.** E68 took a position's score in the target as the mean of the next 4
+scored plies' and gained 16.3; no other number was tried. E66 found syntaks reading a level position
+as lost about six plies before Yapper does, and scores from further down the same game are the one
+place a fit can learn that from. E79's recipe to the byte by the rebuilt trainer, which gives E79's
+network byte for byte at `--smooth 4` (`SMOOTH=n fitx.sh`):
+
+| Smoothed over | Bench | 6x6 gen 14 held out, against results |
+|---|---|---|
+| 4, E79 | 837239 | 0.455665 |
+| 8 | 1029147 | 0.454375 |
+| 16 | 1065656 | 0.452723 |
+
+The loss means nothing here, as with any target nearer the results. Each plays E79.
+
+| Match against E79, 8+0.08, [0, 10] | Result |
+|---|---|
+| Smoothed over 8 | **INCONCLUSIVE** at the cap, 2000 games, +603 -578 =819, **+4.3 +/- 11.0**, pairs [66, 234, 383, 243, 74] |
+| Smoothed over 16 | **FAILED**, 626 games, +177 -227 =222, **-27.8 +/- 20.3**, pairs [29, 93, 111, 59, 21] |
+
+Four plies is about right: eight is level with it and sixteen loses. A score from far down the
+game is nearer the result, and that pulls the fit as a lower lambda does, which has lost before.
+
+Nothing here is kept, and the engine is E79's. What the night rules out is worth more than what it
+found: the evaluation's error on the search's own positions is not a shape's to fix, the order has
+a sixth left to give, and the target's look-ahead is where it should be. What has paid every time
+it was tried is a generation of games from a stronger engine, 30 to 45 a step: E69, E71.
+
 ## Mistakes worth not repeating
 
+- **A shape judged on a game's positions is judged where the network has nothing left to give.**
+  On them the evaluation is level with a deep search; on the positions the search asks it about it
+  is 230 off, position by position. E42 to E61 compared shapes on games alone. Read both, E81.
+- **How often a class of node holds is not what pruning it costs.** Nodes that held 99.4% of the
+  time, returned at, lost 12: the few that do not hold are the moves the search is there to find.
+  And time to a depth on 6 games read 20% either way for one change; 24 games agree, E80.
+- **Read the log before a night is spent.** Two of E80's first six candidates were E21, E36 and
+  E55 again.
 - **Bench is not a tree-size measure.** Its 13 positions are mostly openings and other sizes. E62's
   leaf-search order benched 8% fewer nodes and took 17% to 22% more on real 6x6 middlegames, then
   lost 25 to 32. Time to depth on positions from games (`external/build/e62/ttd.py`) first.

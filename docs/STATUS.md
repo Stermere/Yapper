@@ -140,6 +140,22 @@ E79 dropped 6x6 gens 7 to 9 from the fit, keeping gens 10 to 14: held-out loss f
 every 6x6 group, and it passed against E77, **+35.1 +/- 19.7** over 666 games at 8+0.08. It is the
 network now.
 
+E80 and E81 kept nothing and measured where the gap to syntaks is. Both to a fixed depth, Yapper
+leads by 552 at depth 6 and 162 at 8, on roads it sees sooner, and trails by 24 at 10 and **93 at
+12**, where syntaks searches a third of the nodes; at equal time syntaks is a ply to a ply and a
+half deeper. Fifteen changes to what the search reduces or returns at, in either direction, each
+read level or behind at 8+0.08: the reductions are where the tuner left them. The reason is in the
+evaluation. On a game's own positions it is level with a deep search; on the positions the search
+asks it about, drawn from the tree itself, the search reads **149 higher for the side to move with
+a spread of 230**, at every depth into the tree. No shape learns that: the network fitted with
+those positions, warm or from nothing, the feature map at 16 and 32 filters, both together and the
+engine's shape from 16 to 128 templates all read them no better, and none beats the engine's shape
+on games; 32 templates tie 64. Knowing every node's best move beforehand saves a sixth of a
+position's nodes at the median and nothing in total, so the order has little left to give. The
+target smoothed over 8 plies is level with E68's 4 and over 16 loses 28. A pilot of games started
+a move off a game's line fitted 0.001 to 0.002 better on every 6x6 group and read +7.5 +/- 15.9
+when it was stopped.
+
 ## Done and verified
 
 | Piece | State | Evidence |
@@ -203,6 +219,11 @@ has to be the one of its commit's day: `topaz-tei.exe` is dcb8cd2 on branch `bac
    at full strength, where E70 run beside it scored 0.145: self-play gains show there at about two
    fifths of their size, E72.
    E77 scores 0.218 at full strength, where E72 run beside it scored 0.192.
+   The depths above are E34's and E42's. E80 measured E79: syntaks is 1.5 plies deeper at equal
+   time early in a game and 1 later, its ply costs 1.7 times the last to Yapper's 1.85, and at
+   depth 12 each it leads by 93 on a third of the nodes. About 90 of the gap is judgement at equal
+   depth and the rest the plies. Fifteen ways of reducing or returning sooner did not find them,
+   E80, and neither a new shape for the network nor a better order holds them, E81.
    E42 still finds syntaks two to three plies deeper at less time, its tree growing 1.5 times a ply
    to Yapper's 1.8 to 2.4. syntaks also spends three times Yapper's time on each opening move. Its
    10 ms `MoveOverhead` takes more than the clock says at an eighth. Both sticks move with the
