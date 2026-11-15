@@ -142,8 +142,9 @@ pass.
   lets it build for anything. No x86 intrinsics in the core: use compiler builtins and let
   them lower to POPCNT or NEON, or keep any faster path behind a portable fallback.
 - The tools may use an NVIDIA GPU, through `src/gpu.c`, which finds the driver and NVRTC when
-  it runs. No build may need CUDA, a machine without a GPU must fall back to the CPU, and
-  `make release` leaves all of it out with the other tools.
+  it runs. No build may need CUDA, and `make release` leaves all of it out with the other tools.
+  `nntrain` fits on the GPU only, since the data outgrew the CPU; the engine and every other tool
+  run without one.
 - `tools/` is Python, stdlib only.
 
 ## Where things live

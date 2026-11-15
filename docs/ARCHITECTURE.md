@@ -259,8 +259,15 @@ in play. The weights are `src/net.h`.
 at four bytes a ply, and replay gives every position back, so data never depends on the evaluation
 that is being fitted to it.
 
-A network is fitted on an NVIDIA GPU when the machine has one. `src/gpu.c` finds the driver and
-its runtime compiler when the tool runs, so no build depends on CUDA, and the kernels are the CPU
-fit's own loops, one hidden unit a thread, with the output added up a warp of 32 filters at a
-time, so the width must be a multiple of 32. Gradients are added in fixed point, which makes a fit
-repeatable to the byte however the card orders its adds.
+A network is fitted on an NVIDIA GPU, and only there: a CPU is a hundred times slower, which
+hundreds of millions of positions rule out. `src/gpu.c` finds the driver and its runtime compiler
+when the tool runs, so no build depends on CUDA. The kernels run one hidden unit a thread, with the
+output added up a warp of 32 filters at a time, so the width must be a multiple of 32, and their
+forward pass is `forward()`'s, which still scores the held-out positions on the CPU. Gradients are
+added in fixed point, which makes a fit repeatable to the byte however the card orders its adds.
+
+The trainer keeps the games, not the positions: at four bytes a ply a billion positions' games
+fit in memory, where the positions made from them, at about 80 bytes each, would not. Each game is
+replayed once when it is read, to count what the fit takes from it, and then again whenever its
+block comes round: an epoch shuffles the games and makes their positions a block at a time, on
+every thread, each game's into slots its count fixes, so a fit is the same whatever the threads.

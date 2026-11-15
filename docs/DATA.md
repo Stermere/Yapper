@@ -142,14 +142,23 @@ yapper nntrain src/net.h 1 0.7 2 15 --warm --rate 0.0005 --share 7=0.33 --share 
 ```
 
 E69's is the same from E49's `net.h`, with gen 13 listed four times after gen 11, one file a cell:
-`external/data/gen13/joined/gen13-*.ydg`. E70's is E69's with `--smooth 4`, and E71's, which
-plays now, is E70's with gen 14 listed twice after gen 13, one file a set:
-`external/data/gen14/joined/gen14-*.ydg`.
+`external/data/gen13/joined/gen13-*.ydg`. E70's is E69's with `--smooth 4`, E71's is E70's with
+gen 14 listed twice after gen 13, one file a set: `external/data/gen14/joined/gen14-*.ydg`, and
+E79's is E71's without 6x6 gens 7 to 9. E86's, which plays now, is E79's with gen 15's first
+10,800 files listed once after gen 14, from E49's `net.h` by `--from`, so any build makes it:
+
+```sh
+yapper nntrain src/net.h 1 0.7 2 15 --from external/nets/e49.h --rate 0.0005 --share 7=0.33 \
+    --share 8=0.2 --lambda 3=0.5 --lambda 4=0.5 --smooth 4 @external/build/e86/full.list
+```
+
+`full.list` is E79's games, gen 11 four times, gen 13 four times and gen 14 twice, then gen 15's.
 
 Gen 11 is listed four times, which weighs it four times as heavily: listed once, as a twentieth of
-the positions, it hardly moved the network. Windows starts no command longer than 32,767
-characters, and E49's recipe is 28,000; join a run's files into one before listing it again,
-since joining files joins datasets, E69. The arguments are the
+the positions, it hardly moved the network. A file listed again is read once and weighed again.
+Windows starts no command longer than 32,767 characters, so a long list goes in a file, a path a
+line, `#` for a comment, and is given as `@file`: `ls ... > games.list`, then `@games.list` among
+the games. The arguments are the
 output, the one-in-N positions to keep, `lambda`, the epochs and the threads, then the options,
 then the games. A size is in the network when the games have some of it, and a size they do not
 have counts flats. The engine picks up `net.h` the next time it is built. After swapping one in by
@@ -181,7 +190,8 @@ further, so the mean is the steadier target. The data does not change: the train
 the game it already holds. It gained 16 on E49's games and 28 more on gen 13's: E68, E70.
 
 `--warm` starts the fit from the network the binary was built with instead of random weights, and
-prints its held-out loss before the first step, so the report says what the fit added. `--rate r`
+`--from net.h` from that file, so any build can carry on any network of its shape; either prints
+the held-out loss before the first step, so the report says what the fit added. `--rate r`
 sets the first step's rate, which then falls on the usual cosine; a fit from a network that has
 already learned wants a smaller one than the 0.002 a fit from nothing starts at. A warm fit at a
 rate near zero writes back the `net.h` it started from, byte for byte.
@@ -222,17 +232,24 @@ A network is fitted on the same rounded weights the engine runs, so the last lin
 against the fit on held-out positions, should read within a hundredth or so. Anything more means
 the engine and the trainer read a position differently.
 
-An NVIDIA GPU does the fitting if the machine has one. Nothing is needed to build for it: the
-tooling build finds the CUDA driver and NVRTC, the toolkit's runtime compiler, when it runs, on
-the path or under `CUDA_PATH`, and compiles its kernels for the card it finds. `make release`
-leaves it out. `--cpu` before the game files fits on the CPU instead, and the first line of the
-report says which was used and why. The threads then only lay out batches and score the held-out
+An NVIDIA GPU does the fitting, and `nntrain` stops at once on a machine without one: a CPU is a
+hundred times slower, which the data has outgrown. Nothing is needed to build for it: the tooling
+build finds the CUDA driver and NVRTC, the toolkit's runtime compiler, when it runs, on the path
+or under `CUDA_PATH`, and compiles its kernels for the card it finds. `make release` leaves it
+out. The threads read the games, make their positions, lay out batches and score the held-out
 positions.
 
-The two fit the same network to within the rounding of floats, not bit for bit, and each gives
-the same bytes on every run: the GPU adds gradients in fixed point, where order does not matter.
-The engine is still checked against the fit on the CPU, so a kernel that read a position
-differently would show in the last line.
+A fit gives the same bytes on every run and whatever the threads: the GPU adds gradients in fixed
+point, where order does not matter. The held-out positions are scored, and the engine checked
+against the fit, on the CPU, so a kernel that read a position differently would show in the last
+line.
+
+The trainer keeps the games in memory as the files hold them, 4 bytes a ply, and makes positions
+from them as it goes. Reading replays each game once, to count what the fit takes from it, and
+makes the held-out positions then. When the positions to fit are more than a block, 64 million
+unless `--block m` says how many millions, each epoch shuffles the games and makes their
+positions a block of games at a time, while the card waits; a block of 6x6 takes about 6 GB.
+Otherwise they are made once. Gen 15's first 4.3 million games were 1.83 GB.
 
 A fit takes every core it is given, so nothing can be timed or matched alongside it. A lower loss
 is not a claim of strength: only an SPRT makes one.

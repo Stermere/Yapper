@@ -98,11 +98,11 @@ int main(int argc, char **argv) {
         return datagen_run(&config);
     }
     if (strcmp(command, "nntrain") == 0 && argc >= 8) {
-        bool cpu = false, warm = false;
-        int smooth                 = 0;
-        unsigned long long seed    = 0;
-        double rate                = 0.0;
-        const char *status         = NULL;
+        bool warm               = false;
+        int smooth              = 0;
+        unsigned long long seed = 0;
+        double rate = 0.0, block = NT_BLOCK_DEFAULT;
+        const char *status = NULL, *from = NULL;
         double scale[MAX_SIZE + 1] = {0};
         double share[MAX_SIZE + 1] = {1, 1, 1, 1, 1, 1, 1, 1, 1};
         double lambda[MAX_SIZE + 1];
@@ -114,9 +114,15 @@ int main(int argc, char **argv) {
             int size;
             double part;
             if (strcmp(argv[first], "--cpu") == 0) {
-                cpu = true;
+                printf("nntrain fits on the GPU only: a CPU is a hundred times too slow\n");
+                return 2;
             } else if (strcmp(argv[first], "--warm") == 0) {
                 warm = true;
+            } else if (strcmp(argv[first], "--from") == 0 && first + 1 < argc) {
+                from = argv[++first];
+            } else if (strcmp(argv[first], "--block") == 0 && first + 1 < argc &&
+                       atof(argv[first + 1]) >= 1.0) {
+                block = atof(argv[++first]);
             } else if (strcmp(argv[first], "--seed") == 0 && first + 1 < argc) {
                 seed = strtoull(argv[++first], NULL, 10);
             } else if (strcmp(argv[first], "--status") == 0 && first + 1 < argc) {
@@ -152,8 +158,9 @@ int main(int argc, char **argv) {
                 break;
             }
         }
-        return nntrain_run(argv[2], atoi(argv[3]), lambda, atoi(argv[5]), atoi(argv[6]), !cpu, seed,
-                           rate, warm, share, scale, smooth, status, argv + first, argc - first);
+        return nntrain_run(argv[2], atoi(argv[3]), lambda, atoi(argv[5]), atoi(argv[6]), seed, rate,
+                           warm, from, share, scale, smooth, block, status, argv + first,
+                           argc - first);
     }
     if (strcmp(command, "policyfit") == 0 && argc >= 7) {
         unsigned long long seed = 0;
@@ -176,10 +183,11 @@ int main(int argc, char **argv) {
         "usage: yapper [tei | bench [depth] | selftest | perfttest <suite> [max depth] |\n"
         "               perft <size> <depth> [position] |\n"
         "               datagen <out> <games> <seed> <nodes> [size] [generation] [openings] |\n"
-        "               nntrain <net.h> <keep one in> <lambda> <epochs> <threads> [--cpu]\n"
-        "                       [--seed n] [--rate r] [--warm] [--share size=part]...\n"
-        "                       [--lambda size=lambda]... [--scale [size=]s]... [--status file]\n"
-        "                       [--smooth n] <games>...] |\n"
+        "               nntrain <net.h> <keep one in> <lambda> <epochs> <threads>\n"
+        "                       [--seed n] [--rate r] [--warm | --from net.h] [--block millions]\n"
+        "                       [--share size=part]... [--lambda size=lambda]...\n"
+        "                       [--scale [size=]s]... [--status file] [--smooth n]\n"
+        "                       <games or @list>...] |\n"
         "               policyfit <policy_net.h> <keep one in> <epochs> <threads>\n"
         "                         [--seed n] [--rate r] <games>...]\n");
 #else

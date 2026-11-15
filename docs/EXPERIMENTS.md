@@ -4296,6 +4296,115 @@ every generation before them: the data is still what the evaluation is short of,
 times everything since gen 10 is worth making. What it could teach a wider network is the other
 half of the case: 128 templates overfit 50M positions and gain as much from a doubling as 64.
 
+## E84: SPSA on E82, stopped
+
+`tools/tune.py` over every tunable but the clock's, on E82 with five refinements that start at
+nothing (`external/build/e84/knobs`: reverse futility's margin less when improving, a deeper null
+move when the evaluation clears beta, reductions by history, by not improving and by the
+correction's size), 10,000 pairs at 8+0.08. The candidate moved four of the five off nothing
+(`RfpImproving` 3, `NmpEvalMax` 1, `LmrHistory` 1, `LmrCorrection` 1; `LmrNotImproving` stayed 0)
+and the rest a little.
+
+| | Result |
+|---|---|
+| The candidate vs E82, the tune build, 8+0.08, [0, 5] | stopped by hand at 842 games, +252 -223 =367, **+12.0 +/- 16.2**, LLR 0.69, pairs [18, 106, 153, 117, 27] |
+
+Not kept: E82's values stay, and the refinements are not in the code. Tuning waits until the gap
+to syntaks has closed; it is the evaluation that is short.
+
+## E86: gen 15's first games, and a trainer that keeps games rather than positions
+
+Gen 15 is 6x6 by E82 (a3417ec, bench 888446) at 20,000 nodes on four rented 16-core machines,
+rounds of 36,000 games a machine in five sets, so a run stopped after any round is balanced:
+people's PlayTak games 18%, variants of Yapper's own 22%, swings 33%, positions a move off a game's
+line 15% and random plies 12%, as gen 14's with the fourth set new. It stops at a billion positions
+a fit takes, 124 rounds; `external/data/gen15/README.txt` has the run, and takref replayed 379 of
+its games, sampled across machines, rounds and sets, without a fault. With about 480M plies
+played, a fit on what was home: does it already pay?
+
+**What a fit could hold.** The trainer kept every position made, at about 83 bytes (a 24-byte
+record and two bytes a stack), in arrays that doubled as they filled. E79's recipe alone is 204.5M
+positions, and the arrays' next doubling past 268M positions wants more than this machine's 32 GB,
+so a fit could take at most 64M of gen 15's: an eighth of what was home. Two fits by E79's recipe
+from E49, `external/build/e86/fit.sh`, on that ceiling (and 3,177 files are past Windows' command
+line, so gen 15 went in joined by set):
+
+- a: E79's lists to the byte, and gen 15's rounds 1 to 8 of every box, 53M positions
+- b: gens 13 and 14 listed once rather than four times and twice, and rounds 1 to 15, 100M
+
+**The trainer.** On the user's suggestion, it now keeps the games, not the positions. Every
+distinct file is read once into memory, at 4 bytes a ply; each listing's games are replayed once,
+on every thread, to count what the fit takes from each game and to make the held-out positions;
+then each epoch shuffles the games and makes their positions a block at a time, 64M unless
+`--block` says otherwise, each game's into slots its count fixes, so a fit is the same whatever the
+threads. A position is drawn for `--share` (and keep) by its game's listing and place in its file.
+When everything fits one block its positions are made once. With it: `--from net.h` starts from a
+network file, so any build carries on any network of its shape, where `--warm` could only start
+from the one built in, and fits ran from a build of an old tree (`external/build/e80/trainer`) for
+that alone; `@file` lists games a path a line, past the command line's limit. The CPU fit is gone:
+at 1.05M positions a second against the card's 18M it cannot fit these games, and the CPU still
+scores the held-out positions through `forward()` and checks the engine against the fit.
+
+Checks, on six files of 3x3, 6x6 and 7x7, 6.1M positions, fitted from nothing:
+
+| Check | Result |
+|---|---|
+| Positions taken and held out, against the old trainer | 6,062,345 and 402,145 both, 25.4 stacks a position both |
+| 15 threads against 4, one block; 15 against 3 in blocks of 1M | the same bytes, both |
+| 6x6 gen 13 held out, seeds 0, 1, 2 | old 0.4466, 0.4420, 0.4408; new 0.4489, 0.4418, 0.4399; blocks of 1M or 3M 0.4512, 0.4376, 0.4390, 0.4450, 0.4362: one spread |
+| `--from` E49's net.h at a rate of 1e-30 | every weight back unchanged; only `NetSizes` differs, which follows the sizes read |
+
+And at scale, the control: E79's recipe on the new trainer from E49's net.h, four blocks an epoch.
+It read the 617 listings in 3 seconds, where the old trainer took about two minutes, took the same
+204,506,667 positions, and fitted in 2 minutes 50 against E79's 4. Held out, against results, it
+lands on E79 in every group, within 0.0002 (6x6 gen 14 0.455820 against 0.455665, gen 10 0.398621
+against 0.398620).
+
+**The full fit:** E79's recipe and lists to the byte, from E49's net.h, with every gen 15 file home
+and checked against its box listed once: 10,800 files, 4.4M games, 219.8M of the 424.3M positions.
+It held 2.78 GB of games and about 10 GB in all, and took 7 minutes.
+
+| Held out, against results | E79, the network | a, 53M of gen 15 | b, 100M | full, 220M |
+|---|---|---|---|---|
+| 6x6 gen 10 | 0.3986 | 0.3955 | 0.3940 | **0.3920** |
+| 6x6 gen 11 | 0.3913 | 0.3875 | 0.3856 | **0.3830** |
+| 6x6 gen 13 20k | 0.4195 | 0.4148 | 0.4120 | **0.4095** |
+| 6x6 gen 13 60k | 0.4164 | 0.4108 | 0.4074 | **0.4045** |
+| 6x6 gen 14 | 0.4557 | 0.4509 | 0.4482 | **0.4455** |
+| 6x6 gen 15 | | 0.4635 | 0.4620 | **0.4587** |
+| 5x5 gen 11 | 0.3823 | 0.3816 | 0.3810 | 0.3821 |
+| 7x7 gen 11 | 0.4616 | 0.4615 | 0.4612 | 0.4614 |
+| 8x8 gen 11 | 0.5040 | 0.5040 | 0.5040 | 0.5042 |
+| 3x3 gen 1 | 0.2710 | 0.2718 | 0.2710 | 0.2736 |
+| 4x4 gen 1 | 0.3480 | 0.3483 | 0.3480 | 0.3493 |
+
+Every 6x6 group falls with every step of gen 15, by 0.007 to 0.012 at the full fit, as much as E79's
+step from gen 10 on (0.009 to 0.012, +35.1). Gen 15's own group cannot be compared between fits,
+each holding out the games of the rounds it read. 5x5, 7x7 and 8x8 hold; 3x3 and 4x4 lose a
+little, diluted by 6x6. The engine reads within 0.49 of the fit on 6x6, 0.84 on 3x3, 10 at worst.
+`e86-full`, bench 817253 from HEAD's source with the network:
+
+| Match | Result |
+|---|---|
+| E86 full vs E82, the same build with E79's network, 8+0.08, [0, 10] | **PASSED**, 302 games, +141 -53 =108, **+104.3 +/- 33.1**, pairs [8, 13, 47, 49, 34], none on time |
+
+More than any network step since E44's two views (+87.7 at 2+0.02), from a fifth of gen 15 with
+four fifths of it still to come, and three times what E79's same fall in held-out loss played for (+35.1): at this
+end of the curve 0.01 of held-out loss is worth far more than E42's 10 Elo a thousandth said. A
+test that stops this early reads high; the interval's floor is still +71.
+
+This is the network now: `src/net.h` is `external/build/e86/net-full.h`, kept with E49's start as
+`external/nets/e86.h` and `external/nets/e49.h`. Bench 817253 from `make`, `make release`,
+`make TUNE=on` and `make ARCH=generic`, as from the binary that played
+(`external/baselines/e86-full.exe`), and `make check` passes. The recipe, from any build:
+
+```sh
+yapper nntrain src/net.h 1 0.7 2 15 --from external/nets/e49.h --rate 0.0005 --share 7=0.33 \
+    --share 8=0.2 --lambda 3=0.5 --lambda 4=0.5 --smooth 4 @external/build/e86/full.list
+```
+
+Next: the same games fitted from nothing (E87), and then all of gen 15 once its machines finish.
+
 ## Mistakes worth not repeating
 
 - **A measured mean is not what a table will learn, and a table every node reads feeds on itself.**
