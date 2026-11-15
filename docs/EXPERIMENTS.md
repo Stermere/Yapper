@@ -4405,6 +4405,82 @@ yapper nntrain src/net.h 1 0.7 2 15 --from external/nets/e49.h --rate 0.0005 --s
 
 Next: the same games fitted from nothing (E87), and then all of gen 15 once its machines finish.
 
+## E87: E86's games fitted from nothing
+
+The user asked for a network fitted from nothing. Every network since E49 had been carried on from
+the one before, and E49's own games, 254M positions with gen 11 listed four times, fitted from
+nothing had lost to it by 28.7. The fit now reads 424M, 220M of them gen 15's.
+`external/build/e87/scratch.sh`: E86's games and options to the byte
+(`@external/build/e86/full.list`), no start and the first rate of a fit from nothing, 0.002, over
+8 epochs where a warm fit takes 2. 23 minutes on the streaming trainer, beside `make check` for
+part of it.
+
+| Epoch | Fit | Held out | Against results |
+|---|---|---|---|
+| 1 | 0.501897 | 0.505460 | 0.458343 |
+| 2 | 0.495847 | 0.504221 | 0.457103 |
+| 4 | 0.493942 | 0.502258 | 0.454168 |
+| 6 | 0.492773 | 0.500368 | 0.451573 |
+| 8 | 0.492256 | 0.499384 | 0.450256 |
+| Averaged | | 0.499288 | 0.450309 |
+
+It passed E86's 0.453305 against results in the sixth epoch and was still falling at the last,
+where the cosine schedule ends: more epochs may yet pay.
+
+| Held out, against results | E79 | E86, from E49 | E87, from nothing |
+|---|---|---|---|
+| 6x6 gen 10 | 0.3986 | 0.3920 | **0.3896** |
+| 6x6 gen 11 | 0.3913 | 0.3830 | **0.3809** |
+| 6x6 gen 13 20k | 0.4195 | 0.4095 | **0.4060** |
+| 6x6 gen 14 | 0.4557 | 0.4455 | **0.4409** |
+| 6x6 gen 15 | | 0.4587 | **0.4546** |
+| 5x5 gen 11 | 0.3823 | 0.3821 | **0.3809** |
+| 7x7 gen 11 | 0.4616 | 0.4614 | 0.4630 |
+| 8x8 gen 11 | 0.5040 | 0.5042 | 0.5058 |
+| 3x3 gen 1 | 0.2710 | 0.2736 | 0.2811 |
+| 4x4 gen 1 | 0.3480 | 0.3493 | 0.3515 |
+
+Every 6x6 group 0.002 to 0.005 better than E86, and 5x5 too; 7x7 and 8x8 0.0016 worse, 3x3 and 4x4
+more. The sizes with few games are where the networks carried on had the most still to give: what
+E49's line learned of games no longer listed, 6x6's older generations among them, which no fit from
+nothing sees. Only 6x6 has been played. The engine reads within 0.49 of the fit on 6x6, 0.93 on 3x3.
+
+| Match | Result |
+|---|---|
+| E87 vs E86, the same build, 8+0.08, [0, 10] | **PASSED**, 382 games, +159 -87 =136, **+66.3 +/- 27.2**, pairs [10, 27, 63, 63, 28], none on time |
+
+So with enough games, the start that every fit since E49 kept had become a weight: a network from
+nothing fits the games it is given better than one carried through generations it no longer reads.
+E49's 28.7 the other way was on 254M positions, with no generation near gen 15's size. The two
+steps together, E86 and E87, are about +170 on E82 by addition; E87 and E82 have not met.
+
+This is the network now: `src/net.h` is `external/build/e87/net-scratch.h`, kept as
+`external/nets/e87.h`. Bench 852343 from `make`, `make release`, `make TUNE=on` and
+`make ARCH=generic`, as from the binary that played (`external/baselines/e87-scratch.exe`), and
+`make check` passes. The recipe, which needs no network to start from:
+
+```sh
+yapper nntrain src/net.h 1 0.7 8 15 --share 7=0.33 --share 8=0.2 --lambda 3=0.5 --lambda 4=0.5 \
+    --smooth 4 @external/build/e86/full.list
+```
+
+**Against syntaks** at full strength, 8+0.08, 6s_4ply, on E82's 1000 openings (seeds 1 and 2),
+this machine running nothing else (`external/build/e87/gauntlet.sh`):
+
+| | Games | Result | E82 on the same openings |
+|---|---|---|---|
+| E87, seed 1 | 500 | +116 -280 =104, -118.3 +/- 27.0 | -221.9 +/- 32.6 |
+| E87, seed 2 | 500 | +94 -303 =103, -154.7 +/- 26.8 | -217.9 +/- 31.9 |
+| **E87, pooled** | 1000 | +210 -583 =207, **-136 [-156, -118]** | **-220 [-243, -198]** |
+
+84 nearer syntaks, the intervals well apart, none on time: where E82's +42 in self-play did not show
+against syntaks, the networks' +170 shows as half of itself. The gap that is left looks no less a
+matter of the evaluation and its data than it did, so gen 15 was stopped there and gen 16 is
+played by E87.
+
+Next: the other sizes from nothing want their own look (their older games back in the lists, or a
+larger share), more epochs, and a refit partway through gen 16.
+
 ## Mistakes worth not repeating
 
 - **A measured mean is not what a table will learn, and a table every node reads feeds on itself.**
