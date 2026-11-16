@@ -55,8 +55,13 @@ scores it left in its own games.
 **No other engine's play goes into the data**: not its games, moves or scores, as games,
 openings, seeds, targets or anything a fit or a tuner is chosen by. Matches against other engines
 only measure. `mkopenings.py` leaves out any game with another engine on either side, and
-`playtak.py` any game with a program on either side. Gen 12, `external/data/gen12`, was seeded from
-the openings of games against syntaks and Topaz, E60, and is never to be fitted on.
+`playtak.py` any game with a program on either side.
+
+Gen 12 came before that rule. E60 seeded it from the openings of games against syntaks and Topaz.
+It was fitted on once, in E60, and that network was not kept. No network since has read it. Every
+later fit starts from E49's network or from nothing, and names its files without gen 12. The prior
+reads gens 10 and 11 only. The network now, E87's, was fitted from nothing. Gen 12's games were
+deleted on 2026-11-15, so no list or pattern can reach them, and the generations skip from 11 to 13.
 
 On about one ply in ten, a random move is searched as well, and played in place of the search's
 choice if it comes within 0.4 of a flat of it. That is about one such deviation in 110 plies, for

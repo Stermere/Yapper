@@ -4481,6 +4481,74 @@ played by E87.
 Next: the other sizes from nothing want their own look (their older games back in the lists, or a
 larger share), more epochs, and a refit partway through gen 16.
 
+## E88: scaling by what is left of the game
+
+Chess engines scale the evaluation by the material left on the board. The user asked where that idea
+lands in Tak. Material runs the other way here: in chess pieces come off the board, while in Tak
+stones go on, and a game's end comes from the last stones placed or from a road, so the measure
+was taken before any guess. `external/build/e88/phase.py` read E80's tree samples, 123,724
+positions from E79's own search (one record in 20). It replays each through takref and buckets
+score minus evaluation for the side to move by what is left. Slope is the score's slope on the
+evaluation, the scale that bucket would want.
+
+| Bucket | Share | Score - eval | sd | Slope |
+|---|---|---|---|---|
+| stones in hand 0.8 to 1 of the start | 0.6% | +56 | 77 | 1.06 |
+| stones in hand 0 to 0.2 | 18.8% | +268 | 354 | 1.24 |
+| buried stones 0 | 3.2% | +74 | 118 | 1.05 |
+| buried stones 15 to 25 | 28.3% | +193 | 267 | 1.21 |
+| buried stones 25 or more | 6.8% | +310 | 412 | 1.22 |
+
+The search strays furthest from the evaluation where the fewest stones are left to place and the
+most lie under the tops of stacks: the spread goes up fivefold, and the slope from 1.05 to 1.24.
+That gave three knobs, each zero by default so the build benched as HEAD's
+(`external/build/e88/patch_scale.py`):
+
+- `EvalPhase`: the evaluation scaled per mille by the phase, which goes from -32 with every stone
+  in hand to +32 with none, so it lowers the evaluation early in a game and raises it late.
+- `RfpPhase`: reverse futility's margin scaled the same way.
+- `RfpBuried`: the margin per mille more for every 12 stones under the tops of stacks beyond 12,
+  narrower below 12.
+
+Screens at 100,000 nodes a move against E87's own binary, 400 games each on 6s_4ply, seed 1
+(`screens.sh`), then the best three as SPRTs at 100k nodes, [0, 10]. The SPRTs used seed 2: at
+fixed nodes a game repeats exactly, so seed 1 would have replayed the screens (`sprts.sh`).
+
+| Knob | Screen, 400 games | SPRT at 100k nodes |
+|---|---|---|
+| EvalPhase 100 | +12.2 +/- 26.8 | INCONCLUSIVE, 2000 games, +1.2 +/- 11.7 |
+| EvalPhase 200 | -1.7 +/- 27.1 | |
+| RfpPhase 400 | -13.0 +/- 26.0 | |
+| RfpPhase 800 | +16.5 +/- 26.7 | INCONCLUSIVE, 2000 games, +6.1 +/- 12.2 |
+| RfpBuried 400 | +2.6 +/- 27.1 | |
+| RfpBuried 800 | +12.2 +/- 25.7 | **PASSED**, 1862 games, +663 -576 =623, **+16.2 +/- 12.1**, pairs [78, 174, 357, 227, 95] |
+
+Scaling the evaluation itself measured nothing, perhaps because correction history already takes
+up much of what a slope by phase would. The margin by buried stones passed where the margin by
+phase did not, though the two are not shown to differ: RfpPhase's +6.1 sits inside RfpBuried's
+interval. A buried stone is material that one spread can turn over.
+
+The form that would have been staged kept `RfpBuried` alone, at 800 with a range of 0 to 1600, and
+took out `EvalPhase` and `RfpPhase` (`external/build/e88/patch_final.py`). At its defaults it
+searched node for node as the tune build did with `RfpBuried=800`, from six openings at 300,000
+nodes (`same.py`). Bench 537239, from 852343: with nothing buried the margin narrows to a fifth of
+what it was, so the opening prunes more, and bench is mostly openings.
+
+| Match | Result |
+|---|---|
+| E88 vs E87, 8+0.08, [0, 10] | stopped by the user, 1000 games, +270 -280 =450, **-3.5 +/- 14.9**, pairs [31, 119, 210, 109, 31], LLR -1.47 |
+
+The +16.2 at 100,000 nodes a move did not carry to 8+0.08, where a move gets several times the
+nodes. One reading is that more pruning in the opening pays for a shallow search and gives nothing
+back for a deeper one; the match cannot tell that from a 100k pass that was partly luck.
+Nothing staged: `src/` stays as E87's.
+
+So in Tak, the chess idea measured flat in both of its forms: scaling the evaluation by what is
+left, and scaling how far pruning trusts it. The measurement still holds. The evaluation is least
+sure late in a game and with stones buried, but that is for the network and its data to fix, not
+for a multiplier in the search. A pruning change that wins at 100k nodes needs the time control
+before it means anything.
+
 ## Mistakes worth not repeating
 
 - **A measured mean is not what a table will learn, and a table every node reads feeds on itself.**
