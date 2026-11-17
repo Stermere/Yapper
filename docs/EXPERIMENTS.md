@@ -4549,6 +4549,114 @@ sure late in a game and with stones buried, but that is for the network and its 
 for a multiplier in the search. A pruning change that wins at 100k nodes needs the time control
 before it means anything.
 
+## E89: gen 16 so far, the other sizes' gen 16, and twice the epochs
+
+The user asked for a refit on everything home the morning after gen 16 of the other sizes finished,
+and whether more than 8 epochs pays. Two fits from nothing with E87's options, one change each
+(`external/build/e89/run.sh`):
+
+- **8 epochs.** E87's listings, plus the 960 files of gen 15 it never read, plus gen 16's 6x6
+  files home at 07:53 on 2026-11-16. That is 7,648 files, about 24 of each box's 124 rounds, both
+  mixes. It adds gen 16 of the other sizes, played overnight on this machine by E87 at 20,000
+  nodes from random plies: 45,000 games each of 7x7, 5x5 and 4x4, 36,000 of 8x8 and 15,000 of
+  3x3, 14.5M scored positions (`external/data/gen16/README.txt`). 20,775 listings, 612,979,081
+  positions to fit against E87's 424M, in 34 minutes.
+- **16 epochs.** The same listings and options, the cosine falling over twice the steps: 67
+  minutes.
+
+```sh
+yapper nntrain net.h 1 0.7 8 15 --share 7=0.33 --share 8=0.2 --lambda 3=0.5 --lambda 4=0.5 \
+    --smooth 4 @external/build/e89/full.list
+```
+
+| Epoch | 8 epochs: held out, against results | 16 epochs |
+|---|---|---|
+| 2 | 0.502749, 0.455805 | 0.503327, 0.456277 |
+| 4 | 0.500893, 0.453341 | 0.502862, 0.455454 |
+| 8 | 0.496843, 0.448472 | 0.500214, 0.452057 |
+| 12 | | 0.497924, 0.449556 |
+| 16 | | 0.496624, 0.447948 |
+| Averaged | 0.496695, 0.448317 | 0.496423, 0.447763 |
+
+Held out against results, by group:
+
+| Group | E87 | 8 epochs | 16 epochs |
+|---|---|---|---|
+| 6x6 gen 10 / 11 | 0.3896 / 0.3809 | 0.3871 / 0.3784 | 0.3870 / 0.3775 |
+| 6x6 gen 13 at 20k / 60k | 0.4060 / 0.4025 | 0.4018 / 0.3972 | 0.4016 / 0.3971 |
+| 6x6 gen 14 | 0.4409 | 0.4375 | 0.4366 |
+| 6x6 gen 15 / 16 | | 0.4504 / 0.4517 | 0.4495 / 0.4509 |
+| 5x5 gen 11 / 16 | 0.3809 / | 0.3752 / 0.3768 | 0.3743 / 0.3775 |
+| 7x7 gen 11 / 16 | 0.4630 / | 0.4583 / 0.4676 | 0.4592 / 0.4683 |
+| 8x8 gen 11 / 16 | 0.5058 / | 0.5024 / 0.4962 | 0.5045 / 0.4971 |
+| 4x4 gen 1 / 16 | 0.3515 / | 0.3461 / 0.4281 | 0.3448 / 0.4273 |
+| 3x3 gen 1 / 16 | 0.2811 / | 0.2808 / 0.6031 | 0.2786 / 0.6008 |
+
+E87 held out fewer of gen 15's files, so its gen 15 group is left out.
+
+At 8 epochs, every group E87 also read is better:
+- 6x6 by 0.0025 to 0.0053.
+- 5x5 by 0.0057, 4x4 by 0.0054.
+- 7x7 by 0.0047 and 8x8 by 0.0034. These were the two sizes E87 had fitted worse than E86.
+
+16 epochs lowered every 6x6 group again, by 0.0001 to 0.0009, and 3x3, 4x4 and 5x5's older games
+too. 7x7 and 8x8 came out 0.0007 to 0.0021 worse: at shares of 0.33 and 0.2 they see each game
+about five times instead of 2.6. The engine reads within 0.50 of the 8-epoch fit on 6x6, and 0.94
+on 3x3.
+
+| Match | Result |
+|---|---|
+| 8 epochs vs E87, 6x6, 8+0.08, [0, 10] | **PASSED**, 1486 games, +482 -405 =599, **+18.0 +/- 13.0**, pairs [48, 149, 295, 180, 71] |
+| 16 epochs vs 8, the same | INCONCLUSIVE at the cap, 2000 games, +631 -572 =797, +10.3 +/- 11.1, pairs [64, 229, 371, 256, 80], LLR 1.64 |
+| 8 epochs vs E87, 7x7, 2 komi, 7s_4ply, 8+0.08, [0, 10] | **PASSED**, 490 games, +275 -172 =43, **+74.1 +/- 29.8**, pairs [29, 16, 99, 25, 76] |
+| 8 epochs vs E87, 5x5, 2 komi, 5s_4ply, 8+0.08, [0, 10] | **PASSED**, 1330 games, +513 -458 =359, **+14.4 +/- 10.9**, pairs [21, 106, 365, 143, 30] |
+
+The first 5x5 SPRT was stopped at 850 games, +15.1 with an LLR of 2.22, to free the machine for
+E90's fit. The one above was run again from the start on the same seed. The first is kept as
+`external/games/e89/s5-stopped.*`.
+
+These are the first games on any size but 6x6 since E39, and a night of the other sizes on this
+machine was enough for 7x7's +74. On 6x6, 424M to 613M positions is about half a doubling. E85
+found the second half of gens 13 and 14 worth 27, so +18 is in line with the data's growth.
+
+The 8-epoch network goes in: `src/net.h` is `external/build/e89/net-8.h`, kept as
+`external/nets/e89-8.h`. It benches 683290 from `make`, `make release`, `make TUNE=on` and
+`make ARCH=generic`, as does the binary that played (`external/baselines/e89-8.exe`), and
+`make check` passes. Twice the epochs leaned the right way, in the games and in 6x6's held-out
+loss, but it did not pass and it cost 7x7 and 8x8. It is to be asked again on more of gen 16,
+where it doubles a fit's time as well.
+
+## E90: 6x6 from gens 15 and 16 alone
+
+The user asked whether 6x6's older generations still help, now that gens 15 and 16 come from much
+stronger players. E89's frozen list with 6x6 gens 10, 11, 13 and 14 taken out and nothing added
+(`external/build/e90/mklist.py`, which reads each file's headers). The other sizes keep all their
+games. E89's recipe at 8 epochs, from nothing.
+
+The cut removes 167 of 20,775 listings: gen 10's 15, gen 11's 30 files listed four times, gen 13's
+6 listed four times, and gen 14's 4 listed twice. That leaves 491,597,730 positions to fit against
+E89's 612,979,081, in 27 minutes.
+
+| Held out, against results | E89 | E90 |
+|---|---|---|
+| 6x6 gen 15 / 16 | 0.4504 / 0.4517 | **0.4479 / 0.4488** |
+| 5x5 gen 11 / 16 | 0.3752 / 0.3768 | 0.3747 / 0.3759 |
+| 7x7 gen 11 / 16 | 0.4583 / 0.4676 | 0.4598 / 0.4669 |
+| 8x8 gen 11 / 16 | 0.5024 / 0.4962 | 0.5029 / 0.4975 |
+| 4x4 gen 1 / 16 | 0.3461 / 0.4281 | 0.3453 / 0.4277 |
+| 3x3 gen 1 / 16 | 0.2808 / 0.6031 | 0.2801 / 0.5984 |
+
+Gens 15 and 16 are foretold 0.0025 and 0.0029 better, three times what E89's 16 epochs bought them.
+The other sizes move both ways, by about 0.001. The engine reads within 0.50 of the fit on 6x6.
+
+| Match | Result |
+|---|---|
+| E90 vs E89, 6x6, 8+0.08, [0, 10] | INCONCLUSIVE at the cap, 2000 games, +629 -565 =806, +11.1 +/- 10.8, pairs [53, 229, 401, 235, 82], LLR 2.03 |
+
+Bench 599213 (`external/baselines/e90.exe`). Not kept: an SPRT that does not pass changes nothing.
+It leans the same way as E89's 16 epochs, and further: the older 6x6 games now cost the newest a
+little, by held-out loss and by about 11 in play, as far as 2000 games can tell.
+
 ## Mistakes worth not repeating
 
 - **A measured mean is not what a table will learn, and a table every node reads feeds on itself.**

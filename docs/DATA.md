@@ -150,8 +150,8 @@ E69's is the same from E49's `net.h`, with gen 13 listed four times after gen 11
 `external/data/gen13/joined/gen13-*.ydg`. E70's is E69's with `--smooth 4`, E71's is E70's with
 gen 14 listed twice after gen 13, one file a set: `external/data/gen14/joined/gen14-*.ydg`, and
 E79's is E71's without 6x6 gens 7 to 9. E86's is E79's with gen 15's first 10,800 files listed
-once after gen 14, from E49's `net.h` by `--from external/nets/e49.h`. E87's, which plays now, is
-the same games from nothing, over 8 epochs at the first rate, and needs no network to start from:
+once after gen 14, from E49's `net.h` by `--from external/nets/e49.h`. E87's is the same games
+from nothing, over 8 epochs at the first rate, and needs no network to start from:
 
 ```sh
 yapper nntrain src/net.h 1 0.7 8 15 --share 7=0.33 --share 8=0.2 --lambda 3=0.5 --lambda 4=0.5 \
@@ -160,7 +160,10 @@ yapper nntrain src/net.h 1 0.7 8 15 --share 7=0.33 --share 8=0.2 --lambda 3=0.5 
 
 `full.list` is E79's games, gen 11 four times, gen 13 four times and gen 14 twice, then gen 15's.
 With 424M positions, a fit from nothing beat the one carried on from E49 by 66, E87, where on
-E49's 254M it had lost by 29.
+E49's 254M it had lost by 29. E89's, which plays now, is E87's command on E87's list plus the 960
+files of gen 15 it never read, gen 16's 6x6 files home at 07:53 on 2026-11-16 and gen 16 of the
+other sizes, each listed once after the rest: `external/build/e89/full.list`, 20,775 listings,
+613M positions.
 
 Gen 11 is listed four times, which weighs it four times as heavily: listed once, as a twentieth of
 the positions, it hardly moved the network. A file listed again is read once and weighed again.
