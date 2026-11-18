@@ -5139,14 +5139,63 @@ more, and one more ply at the bottom loses 23: E80 again.
 
 ## E102: SPSA over every tunable, the clock's with them
 
-Running. The values are E72's, tuned on E71's network, with the correction's five as E82 set
-them; the network has gained some 290 in self-play since, bench has gone from 1013724 nodes to
-631025, and E84's run on E82 came before most of that. `external/build/e100/tune.sh`:
-`tools/tune.py --name e102-stc --pairs 10000 --tc 8+0.08 --book tests/books/6s_4ply.txt
---concurrency 8 --r-end 0.004`, with E84's smaller steps for the correction's five, on all 55
-tunables. The clock's twelve are in for the first time since E73, which left them for one tune of
-every parameter at once. Started 21:53 on 2026-11-17 from the engine before E103, which searches
-the same tree. Its candidate and the SPRT that decides it go here.
+The values were E72's, tuned on E71's network, with the correction's five as E82 set them; the
+network had gained some 290 in self-play since, bench had gone from 1013724 nodes to 631025, and
+E84's run on E82 came before most of that. `external/build/e100/tune.sh`: `tools/tune.py --name
+e102-stc --pairs 10000 --tc 8+0.08 --book tests/books/6s_4ply.txt --concurrency 8 --r-end 0.004`,
+with E84's smaller steps for the correction's five, on all 55 tunables. The clock's twelve were in
+for the first time since E73, which left them for one tune of every parameter at once. 10,000
+pairs from 21:53 on 2026-11-17 to 12:18 the next day, 14 h 18 m of play, from the engine before
+E103, which searches the same tree. E104's and E105's screens ran beside it at idle priority; two
+of its 20,000 games were lost on time.
+
+Where it ended, rounded, for the 42 that moved a whole step; the other 13 rounded back to their
+defaults (NmpDepth, NmpDivisor, SingularDepth, LmpDepth, LmpBase, LmpSlope, LmpImprovingSlope,
+LmrMoves, LmrCutNode, PriorWeight, AspirationWindow, CorrRate, TimeMovesPerStone):
+
+| Tunable | Was | Now | | Tunable | Was | Now |
+|---|---|---|---|---|---|---|
+| QuiesceDepth | 2 | 1 | | OrderSwing | 497 | 570 |
+| RfpDepth | 5 | 7 | | AspirationDepth | 5 | 4 |
+| RfpMargin | 55 | 53 | | AspirationGrowth | 174 | 154 |
+| NmpBase | 4 | 5 | | AspirationLimit | 460 | 478 |
+| SingularTtDepth | 2 | 3 | | CorrLast | 100 | 105 |
+| SingularMargin | 44 | 41 | | CorrOwn | 100 | 98 |
+| LmpImprovingBase | 27 | 26 | | CorrRateMax | 80 | 86 |
+| LmrBase | 25 | 19 | | CorrMax | 400 | 395 |
+| LmrDivisor | 183 | 194 | | ThreatOne | 49 | 42 |
+| LmrDepth | 2 | 3 | | ThreatMany | 219 | 222 |
+| LmrPvNode | 0 | 1 | | TimeMoves | 4 | 3 |
+| HistoryBonusMul | 21 | 20 | | TimeMovesMin | 10 | 9 |
+| HistoryBonusMax | 3766 | 3698 | | TimeIncrement | 75 | 78 |
+| HistoryLimit | 8716 | 6300 | | TimeHard | 300 | 303 |
+| HistoryKeep | 11 | 12 | | TimeHardCap | 50 | 49 |
+| PriorDepth | 3 | 4 | | TimeIteration | 50 | 57 |
+| OrderFlatNear | 311 | 339 | | TimeStableMax | 228 | 240 |
+| OrderFlat | 67 | 91 | | TimeStableStep | 43 | 40 |
+| OrderCap | 221 | 222 | | TimeStableMin | 57 | 60 |
+| OrderRoadOurs | 7644 | 6080 | | TimeFall | 30 | 31 |
+| OrderRoadTheirs | 3727 | 3918 | | TimeFallMax | 100 | 118 |
+
+Three trends ran on for a third tune: the leaf search a ply shorter each time (4, 3, 2, now 1),
+the reductions' base down each time (50, 39, 25, now 19) and history's limit too (16384, 12966,
+8716, now 6300). Reductions are lighter all round: a smaller log term, from depth 3, and a ply
+less again at PV nodes, which E72 had taken away. Reverse futility reaches two plies deeper, and
+the prior starts a ply later, at depth 4, where E100 played only 1 and 5 by hand and both lost.
+The order by hand gives less to a placement that leaves our road to finish (down a fifth) and more
+to flats away from our road stones (up a third, partly undoing E72) and to spreads by the tops
+they win. The clock went the way E73's stopped run
+took it, more time a move: one move fewer counted, a later last iteration, more of the increment,
+and more time while the best move is new and after a fall in score.
+
+| Match | Result |
+|---|---|
+| The candidate against the values it started from, the same tune build both sides, 8+0.08, [0, 5] | **PASSED**, 1640 games, +491 -386 =763, **+22.3 +/- 11.2**, pairs [34, 174, 304, 269, 39], none on time |
+
+Bench 1009458 from `make`, `make TUNE=on` and `make release`, and from the tune build that played
+the SPRT given the candidate's options; given none, that build benches 631025. `make check`
+passes. Not yet done: a confirmation at another time control, which TESTING.md asks for. The
+gains in self-play since E87 now come to some 120 on the clock: E89's 18, E97's 79.5 and this 22.
 
 ## E103: the prior's moves cheaper to score
 
@@ -5190,6 +5239,186 @@ beside the tune, which keeps 16 engines busy, so the machine alone may read diff
 Not yet done: the speed with the machine alone, and whether a prior this much cheaper pays from
 depth 2.
 
+## E104: a prior of filters on the value network's tokens, not kept
+
+Why is the prior not fitted on the value network's trunk? The trunk has nothing per move to read:
+a node keeps 1,024 sums, 64 whole-board filters under eight orientations from each side, which the
+head pools over the orientations. E61 and E62 had used E58's feature map, a vector per square, as
+the trunk: 28.3% top 1 on the GPU at seven times policy.c's cost, never played. This is the shape
+that costs what policy.c costs. Work in `external/build/e104`; nothing in `src/` changed.
+
+**The shape**, `pfilter.c` beside policy.c. K = 16 filters, each a weight for every cell of nn.h's
+8x8 grid and every token, laid on the board in the eight orientations from each side as nn.c lays
+the value network's: 256 units. A node sums its squares' rows once. A move is scored by the
+position it leaves, the node's units less the rows of what it takes off the squares it changes
+and plus what it leaves there, clipped and pooled over the orientations, then weighed by output
+weights that the value network's 128 pools of the node set, one product of 32 by 128 a node.
+`pf_changes()` says what a move leaves on each square without making it. Turning or recolouring
+the board only permutes orientations and views, so it reads alike under all of them by
+construction. A head with a hidden layer of 16 was written first and cost 155 of a move's 300
+cycles.
+
+**Gates**, in selftest on random weights: what `pf_changes()` says each legal move leaves against
+`nn_feature()` after the move is made, the squares it names against `move_squares()`, one move in
+seven scored at once against a sum from nothing, and one position in four under the eight
+symmetries and a colour swap. Three bugs planted one at a time were caught by 1.05M, 12.1M and
+1.56M failures. 1,032,411,557 checks pass; bench 631025 with the prior off.
+
+**Cost**, on 3,886 positions of gen 16, least of 30 passes, beside the tune: policy.c 122 to 158
+cycles a move and 650 to 900 a node; the filters 147 to 164 a move and 1,450 to 1,550 a node. In
+the search from depth 3: policy.c 16,440 cycles a list, 15.9% of the search; the filters 19,770,
+18.6%, the node's value frame derived where the table had answered for it.
+
+**The fit**, `yapper pffit`: positions read through the engine's own `nn_feature()`, `nn_pools()`
+and `movegen_all()`, a softmax over each position's moves aimed at the move played, Adam on the
+GPU, then the weights rounded as the engine reads them and the held-out games scored by
+`pf_logits()` itself beside policy.c. The engine reads what was fitted within 0.001 to 0.009.
+
+| Fit, held out from gen 16 | Positions | Held out | Top 1 | Top 4 | Top 8 | Mean rank |
+|---|---|---|---|---|---|---|
+| policy.c as it plays | | 2.8685 | 21.00% | 50.48% | 69.65% | 7.79 |
+| Filters, a sixteenth of gen 16, 8 epochs | 3.61M | 2.8311 | 22.86% | 54.09% | 73.37% | 7.23 |
+| Filters, an eighth, 10 epochs | 7.22M | 2.7513 | 23.87% | 55.99% | 75.26% | 6.74 |
+| Filters, all of gen 16, a new eighth of the files each epoch | 115M over 16 epochs | **2.6900** | 24.83% | 57.67% | 76.85% | 6.38 |
+| A third of policy.c's logit in the filters' | | **2.5822** | 26.73% | 60.52% | 79.18% | 5.84 |
+
+Unlike policy.c, the filters were short of games until they had all of gen 16. The two err
+apart: mixed, the move played falls outside the first 48 0.28% of the time, to the filters' 0.48%
+and policy.c's 0.53%, policy.c's road features catching what the filters put last.
+
+**In the tree**, 80 positions of E97's games at 300,000 nodes, the eighth's fit: the list's first
+move cuts at 59.5% of nodes from depth 3 to policy.c's 55.0%, the first four at 87.6% to 85.3%.
+Nodes to depth 12 on 90 positions came out 3.4% to 7.8% more, as E62 found of a better root
+predictor.
+
+**In play**, at 200,000 nodes so neither list's cost is in it: the tune build against itself,
+6s_4ply, 400 games each, four at once at idle priority beside E102's tune, node counts not
+depending on the load.
+
+| Against policy.c | Result |
+|---|---|
+| The eighth's fit from depth 3 | +123 -116 =161, +6.1 +/- 25.5 |
+| All of gen 16's fit from depth 3 | +133 -129 =138, +3.5 +/- 25.1 |
+| All of gen 16's fit from depth 1, the order by hand gone, against policy.c from depth 1 | +128 -124 =148, +3.5 +/- 24.5 |
+| The mix from depth 3 | +123 -116 =161, +6.1 +/- 23.8 |
+| The mix from depth 1, against policy.c from depth 1 | +129 -108 =163, +18.3 +/- 24.9 |
+
+Together **+7.5 +/- 11.1** over 2,000 games at equal nodes, and the clock takes some of it back:
+the filters' lists cost a fifth more, the mix costs both priors, and policy.c from depth 1 lost
+15.5 on the clock to the depth 3 that plays, E100. Not kept, and no clocked match was played. Four
+priors now, from E51's 14% top 1 to these at 25% and the mix at 27%, have played alike once
+history was there: the order the tree needs is the table's move, the killers and history, and
+E81's perfect order saved nothing in total.
+
+What stays, in `external/build/e104`: `pfilter.c` and its gates, the GPU fitter, the fits in
+`nets/`, and the search's knobs (`patch_search.py`, `patch_mix.py`).
+
+## E105: a ply off a table move that is not singular, level on the clock
+
+E101 built three knobs and did not play them. While E102's tune held the machine at 8+0.08 on
+2026-11-18 they were screened at fixed nodes: the tune build of `external/build/e100/sing` (bench
+631025 at its defaults) against itself, 6s_4ply, 400 games each, four at once at idle priority.
+Node counts do not depend on the load, so the tune left the screens' results alone, and the tune
+lost two of its 20,000 games on time. A screen ranks and the clock decides, as E88 found of a
+pruning knob that passed at 100,000 nodes and read -3.5 at 8+0.08.
+
+| Knob, against the defaults unless said | Bench | Openings | Result, 400 games |
+|---|---|---|---|
+| `SingularNegative=1`: a ply off a table move that is not the only one to reach the singular bound but whose score clears beta | 584981 | seed 2 | +147 -112 =141, **+30.5 +/- 25.9**, pairs [9, 46, 72, 47, 26] |
+| the same | | seed 3 | +136 -119 =145, **+14.8 +/- 26.3**, pairs [15, 47, 63, 56, 19] |
+| `SingularNegative=1` at 400,000 nodes | | seed 4 | +110 -106 =184, +3.5 +/- 23.7, pairs [11, 49, 78, 49, 13] |
+| the same | | seed 5 | +116 -103 =181, +11.3 +/- 25.3, pairs [12, 47, 78, 42, 21] |
+| `SingularNegative=2`, two plies | | seed 2 | +124 -97 =179, +23.5 +/- 25.3, pairs [6, 55, 69, 46, 24] |
+| the same | | seed 3 | +133 -106 =161, +23.5 +/- 23.6, pairs [7, 44, 82, 49, 18] |
+| the same at 400,000 nodes | | seed 4 | +117 -122 =161, -4.3 +/- 25.6, pairs [16, 49, 77, 40, 18] |
+| `SingularCutNode=1`: a ply off such a table move at a node expected to cut | 610786 | seed 2 | +123 -113 =164, +8.7 +/- 24.1, pairs [12, 45, 78, 51, 14] |
+| the same on top of `SingularNegative=1`, against it | | seed 2 | +123 -114 =163, +7.8 +/- 24.2, pairs [12, 43, 86, 42, 17] |
+| `IirDepth=4`: a ply off a node expected to cut that has no table move, from depth 4 | 574041 | seed 2 | +122 -108 =170, +12.2 +/- 25.0, pairs [14, 40, 83, 44, 19] |
+| the same on top of `SingularNegative=1`, against it | | seed 2 | +132 -114 =154, +15.6 +/- 25.3, pairs [11, 49, 70, 51, 19] |
+| the same | | seed 3 | +122 -118 =160, +3.5 +/- 25.3, pairs [13, 50, 76, 42, 19] |
+| `IirDepth=6`, from depth 6 | 624696 | seed 2 | +111 -118 =171, -6.1 +/- 23.4, pairs [11, 55, 74, 50, 10] |
+
+The negative extension stands out, and gives less as the search goes deeper: one ply off reads
+**+22.6 +/- 18.5** over its two samples at 200,000 nodes and **+7.4 +/- 17.3** over its two at
+400,000, +15.0 +/- 12.7 over all four. Two plies read +23.5 +/- 17.3 at 200,000 and -4.3 at
+400,000, on openings where one ply read +3.5. At 8+0.08 a move reaches depth 12.6 on average
+(E100's games on the clock), at 200,000 nodes 11.6 and at 400,000 nodes 13.0: the clock sits near
+the weaker screens. Neither the cut-node ply nor IIR from depth 4 adds to it; IIR from depth 4
+reads +10.4 +/- 14.5 over its three samples, against two bases.
+
+By E100's counters the singular search extends 40% of the nodes it tries and returns at once at
+42%. At the rest other moves reach the singular bound too, and a table move whose score clears
+beta was still searched to the full depth. A ply less is cheaper as well: bench falls 7%.
+
+**The change**, in `external/build/e105`, not in `src/`: one line in `src/tune.h`,
+`SingularNegative` in plies, and one branch after the singular search. Built from `src/` at
+fac59be with the knob at 0 it benches 631025, that commit's count, from `make` and `make TUNE=on`;
+at 1 it benches 584981, the count of the binary screened. Its clocked SPRT, one ply against none
+at 8+0.08 [0, 10] on E102's values, which passed, started at 13:28 on 2026-11-18 as E102's ended.
+Rebuilt on E102's `src/tune.h` (`patch_negext_e102.py`, the same change), it benches 925847
+from `make`, `make TUNE=on` and `make release`, as does the binary that played the SPRT given its
+options, and `make check` passes.
+
+| Match | Result |
+|---|---|
+| `SingularNegative=1` against 0, both on E102's values, the same tune build, 8+0.08, [0, 10] | **INCONCLUSIVE** at the cap, 2000 games, +556 -525 =919, **+5.4 +/- 10.3**, pairs [44, 254, 387, 257, 58], LLR +0.14, none on time |
+
+Not kept. On the clock it reads what the screens at 400,000 nodes did, +7.4 +/- 17.3, and not
+what they did at 200,000: the ply saved is worth less the deeper the search, and 8+0.08 searches
+deep enough that what is left, if anything, is under what 2,000 games can show.
+
+## E106: the filters' prior made narrow, to cost less than policy.c, not pursued
+
+E104 spent policy.c's budget on accuracy, and accuracy past policy.c's has not played since E51:
+cost is the lever, E100. Could a narrower shape of E104's prior read the same tokens for a
+fraction of the cost? A move's work was taken to go as the width of a row, 2 views x 8
+orientations x 16 filters = 256 in E104. Work in `external/build/e106`; nothing in `src/` changed.
+
+**Shapes.** `pfilter.h` took three switches: eight orientations pooled, or one, the orientation
+the node reads as its least of eight, so turning the board still changes nothing; both views or
+the mover's alone; output weights set by the value pools, or fixed. At E104's shape it scores bit
+for bit as E104 did, polbench's checksum on its random weights unchanged. The fitter's kernel
+takes a lane to a unit, so any shape fits; narrow shapes take 4 to 8 s an epoch on the GPU.
+
+**Where a move's cycles go**, polbench on 3,886 positions, least of 30 passes, beside the tune, so
+each shape is read against policy.c in the same run. At 16 filters in one orientation, about 105
+cycles a move: the loop 7, clip and score 7 to 15, working out what the move leaves 31, and rows
+taken off and added about 60, of which about 40 are the table's misses: aliased to a few
+kilobytes, the table took the move to 76 at 16 filters and 72 at 32. Once cached, width costs
+next to nothing. A move changes 2.11 squares on average; sharing each spread's source, as E104
+does, makes 1.54 rows a move, and sharing every prefix of the drops as a tree would make 1.43.
+Asking for every move's rows first helped one orientation, 130 to 140 cycles to 113, and not
+eight.
+
+| Shape | Width | A move, against policy.c | Held out, the engine | Top 1 |
+|---|---|---|---|---|
+| policy.c | | 1 | 2.8685 | 21.00% |
+| E104: 16 filters, 8 orientations, both views | 256 | 1.10 to 1.14 | 2.6900 | 24.83% |
+| 16 x 8, the mover's view | 128 | about 1.0 | **2.7290** | 24.19% |
+| 8 x 8, both views | 128 | about 1.0 | 2.8181 on the GPU | 22.7% |
+| 8 x 8, the mover's view | 64 | 0.75 to 0.92 | 2.8909 | 21.44% |
+| 8 x 8, the mover's view, no gate | 64 | about 0.9 | 3.0745 | 18.19% |
+| 32 filters in one orientation, the mover's view | 32 | about 0.9 | 2.9130 | 20.95% |
+
+Fits on all of gen 16, 16 epochs, a new eighth of the files each, as E104's. The orientations
+matter most: one orientation starts at 3.10 to eight's 2.92 after an epoch, each weight learning
+from an eighth as much, and local patterns turn up in every orientation anyway. The gate is worth
+0.19 at 8 x 8.
+
+**A fault found: what was fitted was not what played.** The engine read the gated narrow shapes
+0.035 to 0.10 worse than the GPU had fitted them. A node's output weight was held to 16 in the
+engine and to nothing on the GPU, and with few filters the weights grow. At 64 in both, which keeps
+every shape's sums inside 32 bits, with no gradient past it, 16 x 8 reads 2.7290 in the engine to
+the GPU's 2.7287. E104's own fit lost at most its 0.008. Selftest passes 1,033,210,149 checks on
+the 8 x 8 shape.
+
+**Not pursued.** The cheapest shape that reads as well as policy.c costs 0.8 to 0.9 of it a move
+and some 150 cycles more a node, before the value pools and the node's frame where the table
+answered: about policy.c's cost in all. Without the gate it needs no pools and reads 0.21 worse
+than policy.c. The floor is a move's 1.5 rows from a table too big to stay in cache and working
+out what the move leaves, not the width. 16 x 8 from the mover's view is 0.14 better than policy.c
+at about its cost, which is E104's case again. No match was played.
+
 ## Mistakes worth not repeating
 
 - **A gain at equal nodes is not a gain until its cost has been on the clock.** The prior from
@@ -5198,6 +5427,14 @@ depth 2.
   first would have said what the cost was worth.
 - **One change at values that have been looked at.** E100's first match on the clock set two
   knobs at once from guesses, and the counts that would have set them took ten minutes.
+- **A tail is read by place in the list, not by a margin in nats.** E104's first reading had the
+  filters losing the move played twice as often as policy.c below a margin. They spread their
+  logits wider; by place, which is what move-count pruning and the reductions read, they kept it
+  better at every depth.
+- **Find where the cycles go before costing a new shape.** E106 was put to the user on a move's
+  cost going as the width of its rows, 40 to 70 cycles for a narrow prior. Switching parts off
+  showed the table's misses and the move's changes were most of it, and the narrowest shapes cost
+  0.8 to 0.9 of policy.c. The probes took minutes; they belonged before the estimate.
   Four hundred games on the clock, about twenty minutes, ranks a knob well enough to say
   whether an SPRT is worth its hour.
 - **A chain is shown dead before it is started again.** Killed by a name that did not match
