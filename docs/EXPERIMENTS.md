@@ -5012,8 +5012,199 @@ the best of ten runs each). Not kept: 0.0004 on 6x6 is what two seeds of one rec
 the match at equal nodes leans by 8, which is a seed's lead too, and a clock would take an eighth
 of the speed off that. A third layer was to follow only if the second paid.
 
+## E100: the prior on gen 16, and where it starts
+
+The user's direction on 2026-11-17, with gen 16 stopped for it: the prior, now that gens 15 and
+16 exist, then the search, since its tree has halved since either was last worked on, then a
+tune. Nothing here was kept. The work is in `external/build/e100`, every match in its
+`chain.log`, and all matches are 6x6 with 2 komi on 6s_4ply, the tune build against itself at
+its defaults.
+
+**Is the prior stale?** It was fitted on gens 10 and 11, the choices of engines some 600 of
+self-play ago. Held out, one game in 64 of every sixteenth file of gen 16's 6x6, 476k positions,
+scored by the engine's own `policy_logits()`:
+
+| Prior | On gens 10-11 | On gen 16 | Top 1 on gen 16 |
+|---|---|---|---|
+| The engine's, fitted on gens 10-11 | 2.8451 | 2.8731 | 20.95% |
+| DATA.md's recipe on that sixteenth of gen 16, 3.66M positions | | 2.8584 | 21.28% |
+
+Not stale: 0.015 for a refit, where E65 took 0.045 out and played the same. Not short of games
+either: the refit's loss on what it fitted, 2.8559, is its held-out loss, so the rest of gen 16's
+656M positions would move nothing. The refit was not played.
+
+**Where the search's time and nodes go now.** Counters in a copy of `search.c` that still benches
+631025 (`patch_diag.py`), over 199 positions of E97's own games at 500,000 nodes each, mean depth
+13.1:
+
+| | Share of the search's time | Calls | Cycles a call |
+|---|---|---|---|
+| The evaluation | 33.0% | 83.2M | 847 |
+| The prior's lists, depth 3 and up | 18.5% | 3.03M | 13,078 |
+| of that, the node's context | 0.9% | | 1,235 |
+| of that, its moves, 86 a list | 16.1% | | |
+| The order by hand, depth 1 and 2 | 5.3% | 6.32M | 1,782 |
+| Road by spread | 4.6% | 25.0M | 392 |
+| Move generation | 1.3% | 9.35M | 292 |
+
+| Nodes by remaining depth | 1 | 2 | 3 | 4-5 | 6+ |
+|---|---|---|---|---|---|
+| Nodes | 35.5M | 17.4M | 9.0M | 6.8M | 1.7M |
+| Returned by reverse futility | 25.2M | 11.0M | 5.0M | 2.9M | |
+| Built a list | 3.74M | 2.29M | 1.37M | 1.13M | 0.40M |
+| Cut by the table's move or a killer | 1.43M | 1.06M | 0.95M | 1.05M | 0.49M |
+| Cut by a move from the list | 1.56M | 0.75M | 0.45M | 0.33M | 0.07M |
+| Every move failed low | 2.14M | 1.51M | 0.90M | 0.77M | 0.29M |
+| of those, stopped by move-count pruning | 1.87M | 1.32M | 0.78M | 0.67M | 0.24M |
+| Null move tried / cut | | | | 1.20M / 0 | 0.75M / 0.11M |
+| Singular search: tried / extended / returned | | | | 259k / 117k / 106k | 366k / 135k / 159k |
+| Moves reduced / searched again | | | 8.2M / 138k | 13.9M / 169k | 12.3M / 50k |
+
+Another 29.5M nodes are the leaf search's. A list scored by the prior costs fifteen evaluations,
+and nearly all of that is the moves, not the node. Two lists in three are at nodes where every
+move fails low, and four in five of those are ended by move-count pruning, which at depth 1
+searches 4 moves of 86 and at depth 2 six: there the order does not sort the moves, it chooses
+them. The null move from depth 4 never cut at depths 4 and 5, since its reduction leaves no
+search.
+
+**The prior lower, at equal nodes.** The prior from depth 1 and from depth 2, against depth 3,
+at 200,000 nodes a move, so its cost is not in it. Both stopped by hand to free the machine:
+
+| | Games | Result |
+|---|---|---|
+| The prior from depth 1 | 274 | +105 -68 =101, **+47.2 +/- 30.4** |
+| The prior from depth 2 | 306 | +95 -90 =121, +5.7 +/- 27.8 |
+
+**A light order for depth 1 and 2**, to have that for nothing. A table of 909 cells over what such
+a node works out anyway (a placement beside our road stones, near either side's road, on a threat;
+a spread's tops won, its shape, what it lands on) and where the last two moves were, three cells
+a placement and five a spread, fitted like the prior on the same sixteenth of gen 16
+(`patch_litefit.py`, `policyfit --lite` in the scratch tree). Held out, each without the history:
+
+| Order | Top 1 | Top 4 | Top 6 | Top 8 | Mean rank |
+|---|---|---|---|---|---|
+| By hand, the six tuned terms | 7.5% | 17.9% | 22.9% | 27.6% | 20.1 |
+| The light table | 15.8% | 41.0% | 51.4% | 59.5% | 10.4 |
+| The prior | 21.0% | 50.4% | 61.5% | 69.6% | 7.8 |
+| The prior on the light table's first 8 / 12 / 16 / 24 | 20.4 / 20.7 / 20.9 / 20.9% | 46.8 / 48.8 / 49.7 / 50.2% | | | |
+
+In the tree, 80 positions at 300,000 nodes, the lists at depth 1 that ended in a cut: by hand
+40.9%, the light table at weight 5 42.6% and at 10 to 15 43.2%, the prior 44.5%. It costs what
+the order by hand costs. With the light table below it the prior from depth 6 reaches depth 12 in
+the nodes it takes from depth 3.
+
+**On the clock**, 8+0.08, nothing else running:
+
+| | Games | Result |
+|---|---|---|
+| The light table at depth 1-2, weight 5, and the prior on its first 8 from depth 3 | 150, stopped | +36 -41 =73, -11.6 +/- 34.9 |
+| The light table at depth 1-2, weight 12 | 400, stopped | +94 -101 =205, **-6.1 +/- 22.4**, pairs [10, 52, 81, 49, 8] |
+| The prior from depth 1, the order by hand gone | 314, stopped | +82 -96 =136, **-15.5 +/- 26.2**, pairs [12, 34, 77, 24, 10] |
+| The prior from depth 5 | 400 | +102 -135 =163, **-28.7 +/- 25.6**, pairs [22, 51, 78, 36, 13] |
+
+The first was two changes at values not yet looked at, and was stopped when the counts above said
+so. The light table names the search's move twice as often as the order by hand, finds more cuts
+at depth 1, and plays level: E62 and E65 again, a better guess at the move is not a better order
+in the tree, and the six terms by hand were set by the tuner in games. From depth 5 the prior
+reaches a depth in the same nodes 14% sooner and loses 29, so it earns its sixth of the search at
+depths 3 and 4. From depth 1 it gains at equal nodes, and a fifth of the speed takes more than
+that back. Depth 3 is where the tuner left it and where it belongs from both sides: the prior is
+worth having at every depth, and is kept out of depths 1 and 2 by what a move costs to score.
+E103 takes that up.
+
+The trees: `fit` (the fitter with `@list` and a pass that only scores), `lite` and `two` (the
+light order, its fit and its two uses), `diag`, `diag2` and `diag3` (counters).
+
+## E101: two changes to the search's shape, neither kept
+
+E80's fifteen were reductions and reverse futility. These are what it did not try, each a knob off
+by default in `external/build/e100/sing`, which benches 631025 at its defaults: 400 games on the
+clock at 8+0.08 against the same binary at its defaults, as a triage for an SPRT neither reached.
+
+| Knob | Bench | Games | Result |
+|---|---|---|---|
+| A second ply of singular extension when the others fall 60 further short, `SingularDouble=60` | 674133 | 400 and 400 | +113 -117 =170, -3.5 +/- 22.0, and +123 -115 =162, +6.9 +/- 25.5 |
+| Reduced moves may fall to the leaf search, `LmrFloor=0` | 705499 | 400 | +94 -120 =186, **-22.6 +/- 22.8**, pairs [13, 57, 80, 43, 7] |
+
+The first knob's two runs were one by mistake: the chain that played it was started twice, so 14
+games were on the clock at once and each run played under twice the load. Both read level. Built
+and not played, the machine going to the tune: a ply off a table move that is not singular
+(`SingularNegative`, `SingularCutNode`), and a ply off a node expected to cut that has no table
+move (`IirDepth`).
+
+By E100's counters the singular search extends 40% of the nodes it tries and returns at once at
+42%, so it is already near to an extension of every table move, and a second ply on top gained
+nothing. Reduced moves are searched again 0.4% to 1.7% of the time, which reads as room to reduce
+more, and one more ply at the bottom loses 23: E80 again.
+
+## E102: SPSA over every tunable, the clock's with them
+
+Running. The values are E72's, tuned on E71's network, with the correction's five as E82 set
+them; the network has gained some 290 in self-play since, bench has gone from 1013724 nodes to
+631025, and E84's run on E82 came before most of that. `external/build/e100/tune.sh`:
+`tools/tune.py --name e102-stc --pairs 10000 --tc 8+0.08 --book tests/books/6s_4ply.txt
+--concurrency 8 --r-end 0.004`, with E84's smaller steps for the correction's five, on all 55
+tunables. The clock's twelve are in for the first time since E73, which left them for one tune of
+every parameter at once. Started 21:53 on 2026-11-17 from the engine before E103, which searches
+the same tree. Its candidate and the SPRT that decides it go here.
+
+## E103: the prior's moves cheaper to score
+
+A pure speedup: every logit the same, and the search's tree with them. Only `policy.c` changes.
+
+E100 found the prior kept from depths 1 and 2 by what a move costs to score. A harness
+(`external/build/e100/polbench.inc`, not in `src/`) scores 3,886 positions of gen 16, 104 moves
+each, through `policy_context()` and `policy_logits()`, takes the least cycles of 30 passes, and
+checksums every logit. With parts switched off, of a move's 146 cycles the units' dot product is
+28 and the row sums 17, and the rest is reading features; a placement cost about 165 cycles and a
+spread about 150.
+
+| Step | Cycles a move | Checksum |
+|---|---|---|
+| As it was | 137 to 153 | 9a5a36f5a26373da |
+| The dot product widened by halves and multiplied as vectors | 132 to 143 | the same |
+| A placement's rows as eight sums and no branch | 119 to 127 | the same |
+| A spread's landing as a line, its optional rows as the row of zeros | 122 | the same; not kept |
+
+Measured beside the tune, hence the ranges; each step was run in turn with the one before it.
+
+- **The dot product.** In `policy_logit()` the compiler made the loop over the 16 lanes one
+  `vpmaddwd`. Inlined four times into `policy_logits()`, which is the one the search calls, it
+  took each unit out of the vector and multiplied it alone: 22 scalar multiplies in the function
+  and no vector one. Written with `__builtin_convertvector` on the two halves it is a vector
+  multiply wherever it lands, from clang and gcc alike.
+- **Placements.** Which of nine kinds a square's neighbours are, and whether the last moves were
+  near, decided how many rows a placement summed, by loops and tests no predictor can learn. Now
+  a square's eight rows are in fixed slots, each neighbour's kind is read without a branch, and a
+  row that is not there is the row of zeros. `policy_features()` keeps the old path, which the
+  fitter and selftest read, and selftest holds the two equal on random weights for every size.
+- **Spreads** are three moves in four and no one piece of theirs stands out: the drop's features
+  about 52 cycles a spread, where it lands 27, source and carry 24, the rest 35. The same two
+  devices there measured nothing and are not in the code.
+
+Bench 631025 from clang native and generic, gcc, `make release` and `make TUNE=on`. `make check`
+passes, and selftest passes 984,138,986 checks from clang and gcc. The same nodes on 90 positions
+of E97's own games at 300,000 nodes each, best of five runs each in turn: 20.00 s against 20.96,
+**4.8% faster**; bench 1,656,298 nps against 1,573,334, best of six, 5.3%. Both were measured
+beside the tune, which keeps 16 engines busy, so the machine alone may read differently.
+Not yet done: the speed with the machine alone, and whether a prior this much cheaper pays from
+depth 2.
+
 ## Mistakes worth not repeating
 
+- **A gain at equal nodes is not a gain until its cost has been on the clock.** The prior from
+  depth 1 read +47 at 200,000 nodes a move, and three ways of having it for less were built
+  before the plain thing was played at 8+0.08, where it read -15, E100. One match on the clock
+  first would have said what the cost was worth.
+- **One change at values that have been looked at.** E100's first match on the clock set two
+  knobs at once from guesses, and the counts that would have set them took ten minutes.
+  Four hundred games on the clock, about twenty minutes, ranks a knob well enough to say
+  whether an SPRT is worth its hour.
+- **A chain is shown dead before it is started again.** Killed by a name that did not match
+  its host, E101's chain ran twice, 14 games on the clock into one log. Match the command line
+  across every process, count the matches after starting, and every line of
+  `external/games/queue.txt` that is not a comment is `<kind> <cap> <path> <label>`, or
+  `tools/progress.py` stops.
 - **A measured mean is not what a table will learn, and a table every node reads feeds on itself.**
   E80 measured the evaluation 149 short on the positions it is asked about; E82's first build read
   a slot for the side alone, expecting it to hold that, and lost 176. The slot held 20 to 60, and

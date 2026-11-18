@@ -57,6 +57,8 @@ int policy_feature_count(void) { return F_COUNT; }
 /* GCC's vectors, so one source lowers to AVX2, SSE or NEON. Unaligned, because Windows does not
  * keep the stack 32-byte aligned for every compiler. */
 typedef i16 PolicyVec __attribute__((vector_size(32), aligned(2), may_alias));
+typedef i16 PolicyHalf __attribute__((vector_size(16), aligned(2), may_alias));
+typedef i32 PolicyWide __attribute__((vector_size(32), aligned(4), may_alias));
 
 static const i16 *Rows;
 static i16 Bias[POLICY_LANES], Out[POLICY_LANES];
@@ -277,15 +279,10 @@ static void place_square(const Board *b, const PolicyContext *ctx, int sq, Place
     p->prev2      = (u8)ring_index(ctx->prev2, bit);
 }
 
-/* `node_rows` false leaves out the two features of the stone and the node alone, which a node
- * sums once for each stone. */
-static int place_emit(const PolicyContext *ctx, const PlaceSquare *p, int type, u16 *out,
-                      bool node_rows) {
-    int n = 0;
-    if (node_rows) {
-        out[n++] = (u16)(P_PHASE + type * 4 + ctx->phase);
-        out[n++] = (u16)(P_RACE + type * 4 + ctx->race);
-    }
+static int place_emit(const PolicyContext *ctx, const PlaceSquare *p, int type, u16 *out) {
+    int n    = 0;
+    out[n++] = (u16)(P_PHASE + type * 4 + ctx->phase);
+    out[n++] = (u16)(P_RACE + type * 4 + ctx->race);
     for (int k = 0; k < p->codes; k++) {
         out[n++] =
             (u16)(P_NEIGHBOURS + (type * NEIGHBOUR_CODES + p->code[k]) * 4 + p->count[k] - 1);
@@ -435,7 +432,7 @@ int policy_features(const Board *b, const PolicyContext *ctx, Move m, u16 *out) 
     if (move_is_place(m)) {
         PlaceSquare p;
         place_square(b, ctx, move_square(m), &p);
-        return place_emit(ctx, &p, (int)move_stone(m), out, true);
+        return place_emit(ctx, &p, (int)move_stone(m), out);
     }
     SpreadParts s;
     spread_parts(b, ctx, m, 15, &s);
@@ -455,17 +452,96 @@ int policy_features(const Board *b, const PolicyContext *ctx, Move m, u16 *out) 
     return n;
 }
 
+/* A placement's rows for policy_logits(), the same features as place_square() and place_emit()
+ * give, laid out so that scoring one is eight row sums and no branch: which neighbours a square
+ * has and what the last moves were differ from square to square with no pattern a predictor can
+ * learn, and a miss costs more than the sums do. An offset is within its group for one stone; a
+ * row that is not there is the row of zeros. */
+typedef struct FastSquare {
+    u16 off[8];
+    unsigned used;
+} FastSquare;
+
+#define NEIGHBOUR_ROWS (NEIGHBOUR_CODES * 4) /* a stone's rows of P_NEIGHBOURS */
+static const u16 FastBase[8]   = {P_NEIGHBOURS, P_NEIGHBOURS, P_NEIGHBOURS,  P_NEIGHBOURS,
+                                  P_ROAD,       P_DIST_OURS,  P_DIST_THEIRS, P_PREV};
+static const u16 FastStride[8] = {NEIGHBOUR_ROWS, NEIGHBOUR_ROWS, NEIGHBOUR_ROWS, NEIGHBOUR_ROWS,
+                                  4 * 32,         4 * 4,          4 * 4,          4 * 4 * 5};
+static const i16 ZeroRow[POLICY_LANES];
+
+/* neighbour_code() without its branches. */
+static inline int code_at(const Board *b, int sq, int us) {
+    const int mine = (int)((b->owned[us] >> sq) & 1), theirs = (int)((b->owned[!us] >> sq) & 1);
+    const int wall = (int)((b->walls >> sq) & 1), cap = (int)((b->caps >> sq) & 1);
+    const int tall = (int)((b->tall >> sq) & 1);
+    return (mine | theirs) * (1 + theirs * 4 + wall + 2 * cap + 3 * (tall & ~wall & ~cap));
+}
+
+static inline void fast_square(const Board *b, const PolicyContext *ctx, int sq, FastSquare *s) {
+    const u64 bit  = 1ULL << sq;
+    const int file = sq & 7, rank = sq >> 3, last = b->size - 1;
+    /* North, south, east and west. */
+    const int valid[4] = {(rank < last), (rank > 0), (file < last), (file > 0)};
+    const int at[4]    = {(sq + 8) & 63, (sq - 8) & 63, (sq + 1) & 63, (sq - 1) & 63};
+    int code[4];
+    for (int i = 0; i < 4; i++) {
+        /* A neighbour off the board is a kind of its own, so it matches nothing. */
+        code[i] = valid[i] ? code_at(b, at[i], ctx->us) : 16 + i;
+    }
+    unsigned used = 0x70;
+    for (int i = 0; i < 4; i++) {
+        int same = 0, earlier = 0;
+        for (int j = 0; j < 4; j++) {
+            const int eq = code[j] == code[i];
+            same += eq;
+            earlier |= eq & (j < i);
+        }
+        const int first = valid[i] & !earlier;
+        s->off[i]       = (u16)(first ? code[i] * 4 + same - 1 : 0);
+        used |= (unsigned)first << i;
+    }
+    const int road = ((ctx->near_road[0] & bit) != 0) | ((ctx->near_road[1] & bit) != 0) << 1 |
+                     ((ctx->threats & bit) != 0) << 2 | ((ctx->ends[0] & bit) != 0) << 3 |
+                     ((ctx->ends[1] & bit) != 0) << 4;
+    s->off[4]      = (u16)(ctx->phase * 32 + road);
+    s->off[5]      = (u16)(rel_at(ctx->rel_empty[0], sq) * 4 + dist_bucket(ctx->dist[0]));
+    s->off[6]      = (u16)(rel_at(ctx->rel_empty[1], sq) * 4 + dist_bucket(ctx->dist[1]));
+    const int prev = ring_index(ctx->prev, bit), prev2 = ring_index(ctx->prev2, bit);
+    const int any = (prev < 3) | (prev2 < 3);
+    s->off[7]     = (u16)(any ? (prev * 4 + prev2) * 5 + ctx->prev_kind : 0);
+    s->used       = used | (unsigned)any << 7;
+}
+
+static inline PolicyVec fast_place(PolicyVec acc, const FastSquare *s, int type) {
+    for (int k = 0; k < 8; k++) {
+        const i16 *row =
+            (s->used >> k) & 1
+                ? Rows + (size_t)(FastBase[k] + type * FastStride[k] + s->off[k]) * POLICY_LANES
+                : ZeroRow;
+        acc += *(const PolicyVec *)row;
+    }
+    return acc;
+}
+
 /* 256ths of a nat: the units' sum is in QA * QB a nat and the linear lane in QA. */
 static inline int finish(PolicyVec acc) {
     const PolicyVec zero = {0}, top = zero + POLICY_QA;
     PolicyVec h          = acc & (PolicyVec)(acc > zero);
     const PolicyVec over = (PolicyVec)(h > top);
     h                    = (h & ~over) | (top & over);
+    /* Widened by halves and multiplied as vectors. Left as a loop over the lanes, the compiler
+     * takes each unit out and multiplies it alone wherever this is inlined into a longer
+     * function, which is a fifth of what a move costs to score: E103. */
     i16 units[POLICY_LANES];
     *(PolicyVec *)units = h;
-    int dot             = 0;
-    for (int k = 0; k < POLICY_LANES; k++) {
-        dot += (int)units[k] * Out[k];
+    const PolicyWide products =
+        __builtin_convertvector(*(const PolicyHalf *)units, PolicyWide) *
+            __builtin_convertvector(*(const PolicyHalf *)Out, PolicyWide) +
+        __builtin_convertvector(*(const PolicyHalf *)(units + POLICY_LANES / 2), PolicyWide) *
+            __builtin_convertvector(*(const PolicyHalf *)(Out + POLICY_LANES / 2), PolicyWide);
+    int dot = 0;
+    for (int k = 0; k < POLICY_LANES / 2; k++) {
+        dot += products[k];
     }
     _Static_assert(POLICY_QA * POLICY_QB == 256 << 7, "the units' sum is shifted to 256ths");
     return (dot >> 7) + acc[POLICY_LANES - 1] * (256 / POLICY_QA);
@@ -491,7 +567,7 @@ void policy_logits(const Board *b, const PolicyContext *ctx, const Move *moves, 
     /* After rows_now(), which installs the biases on the first call. */
     const PolicyVec base = *(const PolicyVec *)Bias;
     const PolicyVec zero = {0};
-    PlaceSquare squares[SQUARE_COUNT];
+    FastSquare squares[SQUARE_COUNT];
     PolicyVec stone_acc[3], src_acc[SQUARE_COUNT], carry_acc[SQUARE_COUNT][8];
     PolicyVec land_acc[4][8], step_acc[2][SQUARE_COUNT];
     u64 have_square = 0, have_src = 0, have_carry[8] = {0}, have_step[2] = {0, 0};
@@ -505,7 +581,7 @@ void policy_logits(const Board *b, const PolicyContext *ctx, const Move *moves, 
         if (move_is_place(m)) {
             const int type = (int)move_stone(m);
             if (!(have_square & at)) {
-                place_square(b, ctx, sq, &squares[sq]);
+                fast_square(b, ctx, sq, &squares[sq]);
                 have_square |= at;
             }
             if (!(have_stone & (1u << type))) {
@@ -514,9 +590,7 @@ void policy_logits(const Board *b, const PolicyContext *ctx, const Move *moves, 
                 stone_acc[type]   = add_rows(base, node, 2);
                 have_stone |= 1u << type;
             }
-            u16 f[POLICY_MAX_ACTIVE];
-            const int n = place_emit(ctx, &squares[sq], type, f, false);
-            out[i]      = finish(add_rows(stone_acc[type], f, n));
+            out[i] = finish(fast_place(stone_acc[type], &squares[sq], type));
             continue;
         }
 
