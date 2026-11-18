@@ -230,7 +230,9 @@ measured beside a tune. E102, SPSA over all 55 tunables with the clock's, 10,000
 overnight, passed **+22.3 +/- 11.2** against the values it started from: the leaf search a ply
 shorter for the third tune running, lighter reductions, reverse futility two plies deeper and more
 time a move, bench 1009458. With it the gains in self-play since E87 come to some 120 on the clock,
-past the 100 a match against syntaks waits for. E104 fitted a prior of 16 filters on the value
+past the 100 a match against syntaks waited for. Against syntaks at full strength on E87's 1000
+openings it reads **-54 [-72, -36]** to E87's -136: **83 [61, 104] nearer**, paired opening by
+opening, and the first build within 100 of syntaks. E104 fitted a prior of 16 filters on the value
 network's tokens, weighed by its pools: 2.690 on gen 16's held-out games to policy.c's 2.869, and
 2.582 mixed with it. Five screens at equal nodes came to +7.5 +/- 11.1 over 2,000 games and its
 lists cost a fifth more; not kept. Narrower shapes of it cost no less than policy.c: a move's rows
@@ -306,6 +308,8 @@ has to be the one of its commit's day: `topaz-tei.exe` is dcb8cd2 on branch `bac
    E82 scores 0.220 over 1000 games, -220 [-243, -198]: its 42 in self-play do not show there.
    E87 scores 0.314 on the same 1000 openings, -136 [-156, -118]: the networks of E86 and E87,
    +170 in self-play, show there at half their size.
+   E102 scores 0.424 on the same 1000 openings, -54 [-72, -36]: the 120 in self-play since E87
+   show there at about two thirds of their size, +83 [+61, +104] paired game by game.
    The depths above are E34's and E42's. E80 measured E79: syntaks is 1.5 plies deeper at equal
    time early in a game and 1 later, its ply costs 1.7 times the last to Yapper's 1.85, and at
    depth 12 each it leads by 93 on a third of the nodes. About 90 of the gap is judgement at equal

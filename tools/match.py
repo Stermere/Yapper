@@ -351,6 +351,44 @@ class Tally:
                 f"Elo {elo:+7.1f} +/- {error:5.1f}  pairs {self.pairs}")
 
 
+def limit_text(tc: str, nodes: int, depth: int) -> str:
+    if nodes:
+        return f"{nodes} nodes a move"
+    if depth:
+        return f"depth {depth}"
+    return f"{tc}s"
+
+
+def summary(args: argparse.Namespace, names: tuple[str, str], tally: Tally, llr: float | None,
+            bounds: tuple[float, float], verdict: str | None, seconds: float) -> list[str]:
+    """The result in one block, for a reader rather than tools/progress.py: every line is
+    labelled so none can be taken for the running tally the tools parse."""
+    elo, error = pair_elo(tally.pairs)
+    elo += 0.0  # an even score is -0.0
+    score = (tally.wins + tally.draws / 2) / tally.games if tally.games else 0.0
+    dev_limit = limit_text(args.tc, args.dev_nodes, args.dev_depth)
+    base_limit = limit_text(args.tc, args.base_nodes, args.base_depth)
+    limits = dev_limit if dev_limit == base_limit else f"{dev_limit} against {base_limit}"
+    book = f"{Path(args.book).name}, seed {args.seed}" if args.book else f"no book, seed {args.seed}"
+    lines = [
+        f"Dev   | {names[0]} ({Path(args.dev).name})",
+        f"Base  | {names[1]} ({Path(args.base).name})",
+        f"Elo   | {elo:+.1f} +- {error:.1f} (95%), score {100 * score:.1f}%",
+        f"Match | {limits}, {args.size}x{args.size}, half komi {args.halfkomi}, {book}, "
+        f"{args.concurrency} at once, {seconds:.0f}s",
+    ]
+    if args.dev_options or args.base_options:
+        lines.append(f"Opts  | dev {args.dev_options or 'none'}; base {args.base_options or 'none'}")
+    if args.sprt:
+        lines.append(f"LLR   | {llr or 0.0:.2f} ({bounds[0]:.2f}, {bounds[1]:.2f}) "
+                     f"[{args.elo0:.2f}, {args.elo1:.2f}] {verdict or 'INCONCLUSIVE'}")
+    lines += [f"Games | N: {tally.games} W: {tally.wins} L: {tally.losses} D: {tally.draws}",
+              f"Penta | {tally.pairs}"]
+    if tally.endings:
+        lines.append("Ends  | " + ", ".join(f"{k} {v}" for k, v in sorted(tally.endings.items())))
+    return lines
+
+
 def read_book(path: str | None, size: int) -> list[list[str]]:
     if path:
         book = []
@@ -475,10 +513,13 @@ def main() -> int:
 
     # A bad path or option must fail here: an initializer that raises makes a pool respawn
     # its workers forever.
+    names = []
     for command, options in ((config.dev_command, config.dev_options),
                              (config.base_command, config.base_options)):
         try:
-            Engine(command, options).close()
+            engine = Engine(command, options)
+            names.append(engine.name)
+            engine.close()
         except (OSError, EngineError) as error:
             print(f"cannot start {command[0]}: {error}", file=sys.stderr)
             return 2
@@ -536,6 +577,10 @@ def main() -> int:
         print(f"endings: {tally.endings}")
     if args.sprt:
         print(f"SPRT [{args.elo0}, {args.elo1}]: {verdict or 'INCONCLUSIVE'}")
+    print()
+    for line in summary(args, (names[0], names[1]), tally, llr, (lower, upper), verdict,
+                        time.monotonic() - started):
+        print(line)
     status.update(finished=True, verdict=verdict or ("INCONCLUSIVE" if args.sprt else None))
     for _ in range(20):
         if write_status(status_path, status, tally, llr):

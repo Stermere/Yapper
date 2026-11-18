@@ -5197,6 +5197,22 @@ the SPRT given the candidate's options; given none, that build benches 631025. `
 passes. Not yet done: a confirmation at another time control, which TESTING.md asks for. The
 gains in self-play since E87 now come to some 120 on the clock: E89's 18, E97's 79.5 and this 22.
 
+**Against syntaks at full strength**, as E82 and E87 were measured: 910ab1d, 8+0.08, 2 komi,
+6s_4ply on seeds 1 and 2, so E87's 1000 openings, 7 games at once, nothing else running
+(`external/build/e102/gauntlet.sh`), on 2026-11-18. No rerun of E87 beside it.
+
+| | Games | Result | E87 on the same openings |
+|---|---|---|---|
+| E102, seed 1 | 500 | +151 -223 =126, -50.4 +/- 26.0 | -118.3 +/- 27.0 |
+| E102, seed 2 | 500 | +139 -220 =141, -56.8 +/- 24.9 | -154.7 +/- 26.8 |
+| **E102, pooled** | 1000 | +290 -443 =267, **-54 [-72, -36]**, pairs [94, 117, 170, 86, 33] | **-136 [-156, -118]** |
+
+Paired opening by opening with E87's games, Yapper scores 0.110 +/- 0.030 more, **+83 [+61,
++104]**. One game was lost on time, by syntaks. The first build within 100 of syntaks: what has
+come since E87, E89's and E97's networks, E103's speed and this tune, some 120 in self-play,
+shows there at about two thirds of its size, where E87's networks showed at half and E72's tune at
+two fifths.
+
 ## E103: the prior's moves cheaper to score
 
 A pure speedup: every logit the same, and the search's tree with them. Only `policy.c` changes.
