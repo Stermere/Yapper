@@ -4657,6 +4657,361 @@ Bench 599213 (`external/baselines/e90.exe`). Not kept: an SPRT that does not pas
 It leans the same way as E89's 16 epochs, and further: the older 6x6 games now cost the newest a
 little, by held-out loss and by about 11 in play, as far as 2000 games can tell.
 
+## E91: 128 filters a view, on gen 16 so far, stopped
+
+The user asked for a larger network now that gen 16 brings far more games than E40 or E42 had. 128
+filters a view in place of 64, so 2048 units and 256 pools; nothing else changed. A block on the
+card holds at most 1024 threads, and the step kernel had a thread a unit, so a thread now takes
+several units of one view and orientation, filters 64 apart, which keeps a warp's 32 filters
+neighbours and every sum in its old order. At 64 filters the new trainer writes the old one's
+network byte for byte; at 128 a fit repeats to the byte and the engine reads within 0.51 of it.
+The engine's 32-bit bounds allow 128 and no more. Selftest passes 984,152,444 checks at 128.
+
+One list for both, `external/build/e91/mklist.py`: E90's, and the 5,744 gen 16 6x6 files home at
+19:31 that it did not have (146M scored positions), 26,352 listings, 610,099,773 positions to fit.
+E89's recipe at 8 epochs, from nothing: 35 minutes at 64, 50 at 128.
+
+| Held out, against results | 64, the control | 128 |
+|---|---|---|
+| All | 0.450722 | **0.448710** |
+| 6x6 gen 15 / 16 | 0.4463 / 0.4434 | **0.4438 / 0.4408** |
+| 5x5 gen 11 / 16 | **0.3741 / 0.3762** | 0.3771 / 0.3828 |
+| 7x7 gen 11 / 16 | **0.4591 / 0.4677** | 0.4601 / 0.4692 |
+| 8x8 gen 11 / 16 | **0.5031** / 0.4974 | 0.5043 / **0.4966** |
+
+The same 16.25M positions of gen 15 are held out by every fit since E89: 0.4504 for E89, 0.4479 for
+E90, 0.4463 for this control and 0.4438 at 128. Bench 622682 at 64 and 554837 at 128, which runs
+at 0.75 to 0.78 of the speed (1.69M nps to 2.22M).
+
+| Match, 6x6, 6s_4ply | Result |
+|---|---|
+| 128 vs 64, 8+0.08, [0, 10] | stopped by the user at 316 games, +99 -91 =126, +8.8 +/- 24.8, LLR 0.24 |
+| 64 vs E89, 8+0.08, [0, 10] | stopped at 390 games to free the card for E92 to E98, +122 -114 =154, +7.1 +/- 26.4, LLR 0.12 |
+| 64 vs E89, 100,000 nodes a move, [0, 10] | **PASSED** at 930 games, +366 -288 =276, **+29.2 +/- 17.6**, pairs [38, 77, 181, 107, 62] |
+
+128 filters are not kept. 0.0025 on 6x6 at three quarters of the speed is a marginal trade, and the
+other sizes lost ground. The trainer's change waits in `external/build/e91/head` for a width that
+needs it. The control, E90's cut with twelve hours more of gen 16, is what E92 to E98 are each
+measured against (`external/baselines/e91-64.exe`).
+
+## E92: 16 epochs, and which size the filters serve
+
+The user gave eighteen hours to the training process, with a list to try: twice the epochs, a
+longer mean of the weights (E93), the older generations back at half weight with gen 16 at double
+(E94), the end of the game weighted up (E95), `lambda` by phase (E96), decay on the filters (E97)
+and a wider head (E98). Every fit read E91's list and seed, and each network played E91's control
+(`external/baselines/e91-64.exe`) at **100,000 nodes a move**, SPRT [0, 10], up to 2000 games on
+6s_4ply, beside the next fit: a count of nodes takes nothing from the clock, so a fit can slow
+such a match and cannot change a game. Two pairs that already had an 8+0.08 result were played
+again this way, to see that the two agree for networks of one speed:
+
+| Pair | 8+0.08 | 100,000 nodes a move, 2000 games |
+|---|---|---|
+| E89's 16 epochs vs its 8 | +10.3 +/- 11.1 | +11.3 +/- 12.7, pairs [112, 193, 344, 220, 131] |
+| E90 vs E89 | +11.1 +/- 10.8 | +5.0 +/- 12.6, pairs [115, 199, 356, 202, 128] |
+
+And the control was fitted again at seed 1, to see how far apart two fits of one recipe land:
+**+10.3 +/- 12.6** over 2000 games, pairs [113, 186, 355, 221, 125], and 0.0003 to 0.0004 apart
+on 6x6 held out. E39's 15 to 35 has shrunk with the games, but a lead under about 15 is still
+a seed's.
+
+**Twice the epochs.** E89's 16 epochs leaned +10 and fitted 7x7 and 8x8 worse, which was laid to
+their being seen twice as often. So 16 epochs with their shares halved, 0.165 and 0.1, and they
+are seen as often as in the control. 71 minutes.
+
+| Held out, against results | The control, 8 epochs | 16 epochs | 24 epochs, shares a third |
+|---|---|---|---|
+| 6x6 gen 15 / 16 | 0.4463 / 0.4434 | 0.4457 / 0.4428 | **0.4456 / 0.4426** |
+| 5x5 gen 11 / 16 | **0.3741 / 0.3762** | 0.3743 / 0.3765 | 0.3749 / 0.3777 |
+| 7x7 gen 11 / 16 | **0.4591 / 0.4677** | 0.4599 / 0.4688 | 0.4625 / 0.4710 |
+| 8x8 gen 11 / 16 | **0.5031** / 0.4974 | 0.5038 / **0.4968** | **0.5031** / 0.4996 |
+
+| Match, 100,000 nodes a move, [0, 10] | Result |
+|---|---|
+| 16 epochs vs the control, 6x6 | **PASSED** at 1242 games, +469 -384 =389, **+23.8 +/- 15.5**, pairs [50, 128, 212, 149, 82] |
+| 24 epochs vs 16, 6x6 | **FAILED** at 1070 games, +355 -405 =310, -16.2 +/- 16.5, pairs [71, 102, 216, 98, 48] |
+| 16 epochs vs E89, 5x5 | **PASSED** at 1610 games, +654 -581 =375, **+15.8 +/- 11.9**, pairs [48, 138, 388, 155, 76] |
+| 16 epochs vs E89, 7x7 | **FAILED** at 834 games, +345 -428 =61, **-34.7 +/- 22.5**, pairs [106, 34, 184, 23, 70] |
+| The control vs E89, 7x7 | INCONCLUSIVE at the cap, 2000 games, +936 -916 =148, +3.5 +/- 14.6, pairs [206, 68, 443, 66, 217] |
+| E89's 16 epochs vs its 8, 7x7 | **FAILED** at 984 games, +418 -504 =62, **-30.4 +/- 21.5**, pairs [135, 28, 207, 32, 90] |
+
+Twice the epochs is worth about 24 on 6x6 and 16 on 5x5, three readings on two lists agreeing on
+6x6, and no more than twice: 24 epochs lost to 16. But it costs 7x7 about 30 against E89 whether
+the big boards keep their share of each epoch, as in E89's, or their count of visits, as here,
+while the control is level there. A held-out loss 0.001 worse on 7x7 was all the fit showed of
+it; halving the shares was the wrong repair.
+
+**Where the loss sits.** E92's filters frozen and only the weights that are 7x7's and 8x8's own
+fitted again on those games (`--freeze`, three epochs, six minutes; `netdiff.py` finds the
+filters and every other size's weights byte for byte E92's): 7x7 gen 11 held out 0.4599 to
+0.4596, gen 16 and 8x8 unmoved. The big boards' own weights were already as good as those
+filters allow. What 16 epochs spends is in the filters every size shares, and it spends them on
+6x6, which has thirty times the games.
+
+**The big boards joining late.** `--join 7=9 --join 8=9`: 7x7 and 8x8 sit out the first 8 of 16
+epochs and then come in at their usual shares, 0.33 and 0.2, so they are seen as often as in the
+control, at their full share of every step while the fit settles, on filters 6x6 has already
+shaped. 73 minutes.
+
+| Held out, against results | The control | 16 epochs | 16 epochs, joining at 9 |
+|---|---|---|---|
+| 6x6 gen 15 / 16 | 0.4463 / 0.4434 | **0.4457 / 0.4428** | 0.4464 / 0.4434 |
+| 5x5 gen 11 / 16 | 0.3741 / 0.3762 | 0.3743 / 0.3765 | **0.3731 / 0.3755** |
+| 7x7 gen 11 / 16 | 0.4591 / 0.4677 | 0.4599 / 0.4688 | **0.4565 / 0.4653** |
+| 8x8 gen 11 / 16 | 0.5031 / 0.4974 | 0.5038 / 0.4968 | **0.5025 / 0.4923** |
+
+| Match, 100,000 nodes a move, [0, 10] | Result |
+|---|---|
+| Joining at 9 vs E89, 7x7 | **PASSED** at 468 games, +277 -162 =29, **+87.2 +/- 32.5**, pairs [31, 10, 92, 15, 86] |
+| Joining at 9 vs the control, 6x6 | INCONCLUSIVE at the cap, 2000 games, +695 -701 =604, -1.0 +/- 12.5, pairs [112, 224, 337, 212, 115] |
+| 16 epochs vs joining at 9, 6x6 | **PASSED** at 1498 games, +568 -480 =450, **+20.4 +/- 14.0**, pairs [66, 147, 255, 195, 86] |
+
+The big boards gain 87 on 7x7 from it, the largest step of the night. On 6x6 it read as a trade,
+the long fit worth 24 there and the late join nothing, and a second set of filters for the big
+boards was drafted on that reading (`external/build/e99/two`). The last list took the reading
+back.
+
+**The same recipes on the last list.** Every gen 16 6x6 file home at 05:27 added to E91's list
+(`external/build/e99/mklist.py`): 4,880 files and 124.7M scored positions more, 31,232 listings,
+711,393,066 positions to fit. 8 epochs in 45 minutes, 16 in 87 to 91.
+
+| Held out, against results | 8 epochs | 16 epochs, shares halved | 16 epochs, joining at 9 |
+|---|---|---|---|
+| 6x6 gen 15 / 16 | 0.4461 / 0.4416 | 0.4458 / 0.4413 | **0.4453 / 0.4408** |
+| 5x5 gen 11 / 16 | 0.3758 / 0.3771 | 0.3759 / 0.3794 | **0.3744 / 0.3764** |
+| 7x7 gen 11 / 16 | 0.4600 / 0.4689 | 0.4608 / 0.4701 | **0.4582 / 0.4662** |
+| 8x8 gen 11 / 16 | 0.5034 / 0.4956 | 0.5040 / 0.4971 | **0.5021 / 0.4951** |
+
+| Match, 100,000 nodes a move, [0, 10] | Result |
+|---|---|
+| 8 epochs vs the control, 6x6 | INCONCLUSIVE at the cap, 2000 games, +726 -695 =579, +5.4 +/- 12.3, pairs [110, 193, 364, 222, 111] |
+| 8 epochs vs E89, 7x7 | **FAILED** at 1188 games, +511 -585 =92, **-21.7 +/- 18.7**, pairs [141, 42, 262, 48, 101] |
+| Joining at 9 vs 8 epochs, 6x6 | INCONCLUSIVE at the cap, 2000 games, +696 -665 =639, +5.4 +/- 11.9, pairs [97, 207, 365, 230, 101] |
+| 16 epochs, shares halved, vs joining at 9, 6x6 | **FAILED** at 1466 games, +483 -532 =451, -11.6 +/- 14.6, pairs [92, 161, 265, 134, 81] |
+| 16 epochs, shares halved, vs E89, 5x5 | **FAILED** at 1034 games, +384 -417 =233, -11.1 +/- 14.5, pairs [48, 86, 263, 91, 29] |
+
+The long fit that beat the late join by 20 on E91's list lost to it by 12 on this one, and the
+held-out loss turned with it each time, by 0.0005. Both were one pair of fits, and a pair of fits
+is one draw of the seed: twice the epochs against the usual eight reads +24, +11, -1, +5 and
+about -6 on 6x6 over the five pairs there now are, some 7 in all, and no schedule owns more of
+it than another. What repeats is on the big boards, and it runs both ways. The plain recipe on
+the longer list now loses 22 on 7x7 to E89, where the control on the shorter one was level: as
+gen 16 grows, 6x6 takes more of every step and the filters go with it. The late join gives the
+big boards the filters 6x6 has shaped and their full share of the steps that settle them, and
+they gain on both lists. The halved shares did the same on 5x5 as on 6x6: +16 on E91's list
+and -11 on this one.
+
+**What E92 is.** The late join on the last list (`external/build/e99/net-join.h`), against E89,
+which played until now. On the clock the machine ran nothing else. E97 added decay to this recipe
+the same day, and its network is the one that was staged in the end.
+
+| Against E89 | 8+0.08 | 100,000 nodes a move, [0, 10] |
+|---|---|---|
+| 6x6 | **PASSED** [0, 10] at 328 games, +134 -72 =122, **+66.5 +/- 27.7**, pairs [4, 26, 63, 46, 25] | **PASSED** at 658 games, +263 -194 =201, +36.6 +/- 20.2, pairs [18, 61, 128, 78, 44] |
+| 7x7 | **PASSED** [-20, 5] at 128 games, +76 -40 =12, **+100.4 +/- 57.2**, pairs [5, 4, 26, 8, 21] | **PASSED** at 404 games, +242 -139 =23, +90.6 +/- 33.1, pairs [21, 9, 88, 14, 70] |
+| 5x5 | **PASSED** [-20, 5] at 338 games, +122 -115 =101, +7.2 +/- 21.0, pairs [6, 25, 102, 28, 8] | INCONCLUSIVE at the cap, 2000 games, +789 -757 =454, +5.6 +/- 10.3, pairs [63, 170, 525, 156, 86] |
+| 8x8 | not played | **PASSED** at 656 games, +377 -267 =12, +58.8 +/- 26.2, pairs [52, 3, 160, 9, 104] |
+
+No game ended on time. The 6x6 test on the clock stopped early and reads high; the count of
+nodes is the nearer figure. Bench 653037, the same for `make release`, `make TUNE=on` and
+`ARCH=generic`, and `make check` passes. The recipe is in docs/DATA.md. Of what it gains on 6x6,
+most is the games: the control's 29 over E89, and 5 for the last 100M positions.
+
+`--join` and E97's `--decay` are the options of the night that went into `src/nntrain.c`. The
+others (`--average`, `--share` by generation, `--freeze`, `--weigh`, `--tilt`) stay in
+`external/build/e92/head`, whose trainer writes the committed one's network byte for byte when
+none of them is given, on the small list and on the full one. One fix went in beside it. The
+loader kept 3.7 MB for each listing's held-out positions, 97 GB over 26,352 listings, which
+Windows charges in full whether or not it is touched; the full list had only just fitted under
+the machine's limit, and beside a match the first five fits of the night failed before reading a
+game. A listing now starts at 90 KB, and no network changes by a byte.
+
+## E93: a longer window for the mean of the weights
+
+The network written is the mean of the weights over the last tenth of the steps, E37. `--average`
+takes the window, and up to three of them in one fit, each a network of its own, so they differ in
+nothing else. The first window of `--average 0.1,0.2,0.3` is the control byte for byte.
+
+| Held out, against results | Last 10%, the control | 20% | 30% |
+|---|---|---|---|
+| All | 0.450722 | **0.450562** | 0.450673 |
+| 6x6 gen 15 / 16 | 0.446332 / 0.443365 | **0.446199 / 0.443182** | 0.446308 / 0.443294 |
+
+| Match, 6x6, 100,000 nodes a move, [0, 10] | Result |
+|---|---|
+| 20% vs the control | INCONCLUSIVE at the cap, 2000 games, +671 -654 =675, +3.0 +/- 11.5, pairs [81, 224, 389, 209, 97] |
+
+Not kept. 0.0002 is a tenth of what a change that shows in play has moved the loss by, and the
+games agree.
+
+## E94: the older 6x6 generations at half weight, gen 16 at double
+
+The user's mix: E91's list, with 6x6 gens 10, 11, 13 and 14 back in (the 167 listings E90 cut) at
+half weight, and gen 16's 6x6 at double. `--share` now takes a size and a generation,
+`--share 6.11=0.5`, for the half; a file listed twice is weighed twice, for the double
+(`external/build/e94/mklist.py`, 39,911 listings, 1,007,605,206 positions). An epoch is then 1.6
+times as long, so the fit ran 5 epochs for the control's 8, and 7x7 and 8x8 took 0.528 and 0.32
+of their positions an epoch for the control's 0.33 and 0.2: the same steps, and the same share of
+them for the other sizes.
+
+| Held out, against results | The control | E94 |
+|---|---|---|
+| 6x6 gen 15 / 16 | **0.4463 / 0.4434** | 0.4474 / 0.4443 |
+| 6x6 gen 14 / 13 / 11 / 10, which the control never saw | | 0.4350 / 0.3986 / 0.3744 / 0.3851 |
+| 5x5 gen 11 / 16 | **0.3741 / 0.3762** | 0.3765 / 0.3799 |
+| 7x7 gen 11 / 16 | **0.4591** / 0.4677 | 0.4601 / **0.4674** |
+
+| Match, 6x6, 100,000 nodes a move, [0, 10] | Result |
+|---|---|
+| E94 vs the control | **FAILED** at 1912 games, +651 -688 =573, -6.7 +/- 12.3, pairs [101, 221, 339, 204, 91] |
+
+Not kept. The two newest generations are foretold 0.001 worse though gen 16 was seen ten times
+for the control's eight, and it lost a little in play. With E90 this is the second time the older
+6x6 games have cost the newest: gens 15 and 16 alone stay the 6x6 list.
+
+## E95: the end of the game weighted up, and then the opening
+
+E61 found the network trailing the search most in the last bucket, so the loss counted a position
+for more the nearer the end of the game: `--weigh 2,1.857,...,1`, a weight a bucket, 2 in the last
+and 1 in the opening. Each size and bucket has a head of its own, which an optimiser that scales
+its steps does not notice a weight on, so what a weight moves is the filters, toward the buckets
+it favours.
+
+| Held out against results, 6x6, by bucket, the end first | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+|---|---|---|---|---|---|---|---|---|
+| Share of the positions | 10.6% | 12.4% | 11.4% | 9.0% | 12.8% | 13.2% | 15.4% | 15.1% |
+| The control | **0.4080** | **0.3791** | **0.3974** | **0.4160** | **0.4357** | 0.4621 | 0.4903 | 0.5236 |
+| The end weighted up | 0.4087 | 0.3798 | 0.3978 | 0.4166 | 0.4364 | 0.4632 | 0.4917 | 0.5247 |
+| The opening weighted up | 0.4100 | 0.3803 | 0.3986 | 0.4165 | 0.4358 | **0.4620** | **0.4895** | **0.5230** |
+
+| Match, 6x6, 100,000 nodes a move, [0, 10] | Result |
+|---|---|
+| The end weighted up vs the control | **FAILED** at 604 games, +183 -246 =175, **-36.4 +/- 22.7**, pairs [43, 79, 106, 46, 28] |
+| The opening weighted up vs the control | INCONCLUSIVE at the cap, 2000 games, +720 -665 =615, +9.6 +/- 12.6, pairs [109, 200, 344, 221, 126] |
+
+Not kept, and the clearest loss of the night: 6x6 held out 0.4472 / 0.4442 to the control's
+0.4463 / 0.4434, worse in every bucket, the ones it favoured among them, and 36 in play, which is
+more than a seed. The network does trail the search most at the end, but that is where the search
+needs it least.
+
+Its mirror, 1 in the last bucket and 2 in the opening, moved the loss the other way round, held
+out 0.4467 / 0.4436 in all, and led the control by 10, which is what the control at seed 1 led it
+by: a lean and no more. Both stay in `external/build/e92/head` as `--weigh`.
+
+## E96: lambda by phase
+
+The target blends the search's score, weighted `lambda` 0.7, with the game's result. Early in a
+game the score carries the bias of the network that made it, which no number of games averages
+away, while the result's noise does average away over 600M positions; near the end the search
+sees the result and the two agree. So `--tilt` moves `lambda` by bucket: +0.108 in the last
+bucket, falling by 0.2 over the eight to -0.092 in the opening, which leaves its mean over 6x6's
+positions at 0.7. The result is then 0.39 of the target in the opening and 0.19 at the end.
+
+Held out against results it reads nearer them where the result weighs more, 0.5207 to the
+control's 0.5236 in the opening bucket and 0.4098 to 0.4080 in the last, which says nothing: a
+target nearer the results always scores nearer them, E39.
+
+| Match, 100,000 nodes a move, [0, 10] | Result |
+|---|---|
+| Tilted vs the control, 6x6 | **PASSED** at 1548 games, +572 -486 =490, **+19.3 +/- 13.6**, pairs [63, 158, 275, 186, 92] |
+| Tilted vs the control fitted at seed 1, 6x6 | INCONCLUSIVE at the cap, 2000 games, +716 -704 =580, +2.1 +/- 12.2, pairs [105, 204, 379, 198, 114] |
+| Tilted vs the control, 7x7 | **FAILED** at 580 games, +222 -313 =45, **-55.0 +/- 27.7**, pairs [87, 22, 117, 23, 41] |
+| E92's recipe tilted vs E92, the last list, 6x6 | INCONCLUSIVE at the cap, 2000 games, +704 -663 =633, +7.1 +/- 11.8, pairs [96, 196, 377, 233, 98] |
+| E92's recipe tilted vs E92, the last list, 7x7 | INCONCLUSIVE at the cap, 2000 games, +942 -908 =150, +5.9 +/- 14.3, pairs [197, 63, 456, 77, 207] |
+
+Not kept. The pass was against the control at seed 0, which the same control at seed 1 beat by
+10: against that one the tilt is level, and fitted again with E92's recipe on the last list it
+leads E92 by 7, a seed's lead. Three readings on 6x6, +19, +2 and +7. On 7x7 the first fit lost
+55 to the control and the second, with the late join, was level with E92, so that is a fit's
+swing too, on a size where fits swing most. It leans the right way and no more; asked again it
+wants two fits a side. `--tilt` stays in `external/build/e92/head`.
+
+## E97: decay on the filters
+
+A row of the filters that few positions reach is fitted on few examples, and nothing pulls it back
+toward zero. `--decay d` shrinks every filter weight by the rate times `d` at each step, apart
+from the step the loss asks for, so a weight the loss does not hold up fades: over a fit, one no
+gradient reached would lose a quarter at 0.001 and nineteen parts in twenty at 0.01. The heads
+are left alone. E91's list, 8 epochs, the last fits of the eighteen hours and the first after.
+
+| Held out, against results | The control | Decay 0.001 | Decay 0.01 | Decay 0.03 |
+|---|---|---|---|---|
+| All | 0.450722 | 0.450490 | 0.449264 | **0.448707** |
+| 6x6 gen 15 / 16 | 0.4463 / 0.4434 | 0.4461 / 0.4431 | 0.4450 / 0.4421 | **0.4446 / 0.4416** |
+| 5x5 gen 11 / 16 | 0.3741 / 0.3762 | 0.3747 / 0.3768 | **0.3734 / 0.3754** | 0.3743 / 0.3764 |
+| 7x7 gen 11 / 16 | 0.4591 / 0.4677 | 0.4594 / 0.4678 | 0.4561 / 0.4652 | **0.4545 / 0.4632** |
+| 8x8 gen 11 / 16 | 0.5031 / 0.4974 | 0.5040 / 0.4958 | 0.5011 / 0.4937 | **0.4972 / 0.4921** |
+
+| Held out against results, 6x6, by bucket, the end first | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+|---|---|---|---|---|---|---|---|---|
+| The control | 0.4080 | 0.3791 | 0.3974 | 0.4160 | 0.4357 | 0.4621 | 0.4903 | 0.5236 |
+| Decay 0.01 | 0.4060 | 0.3769 | 0.3955 | 0.4144 | 0.4346 | 0.4612 | 0.4896 | 0.5229 |
+| Decay 0.03 | **0.4048** | **0.3767** | **0.3953** | **0.4140** | **0.4338** | **0.4609** | **0.4894** | **0.5227** |
+
+At 0.01 every size and every bucket holds out better, by 0.0013 on 6x6, four times what two seeds
+differ by and twice what 16 epochs bought, and by 0.003 on 7x7. The most is at the end of the
+game, where the stacks are tall and their tokens rare. It is the one change to the recipe that
+moved the loss by more than a seed in the right direction, and unlike E96's the target is the
+control's, so the numbers compare.
+
+Then the second pair of fits that E92 taught to ask for: E92's recipe with `--decay 0.01` on the
+last list, against E92 itself.
+
+| Held out, against results, the last list | E92 | E92's recipe with decay 0.01 |
+|---|---|---|
+| 6x6 gen 15 / 16 | 0.4453 / 0.4408 | **0.4440 / 0.4394** |
+| 5x5 gen 11 / 16 | **0.3744** / 0.3764 | 0.3749 / **0.3763** |
+| 7x7 gen 11 / 16 | 0.4582 / 0.4662 | **0.4560 / 0.4635** |
+| 8x8 gen 11 / 16 | 0.5021 / 0.4951 | **0.4980 / 0.4931** |
+
+| Match, 6x6 | Result |
+|---|---|
+| Decay 0.001 vs the control, 100,000 nodes | stopped at 538 games to play 0.01, +181 -176 =181, +3.2 +/- 23.4 |
+| Decay 0.01 vs the control, 100,000 nodes, [0, 10] | **PASSED** at 1924 games, +721 -632 =571, **+16.1 +/- 12.0**, pairs [85, 172, 375, 229, 101] |
+| Decay 0.01 vs the control fitted at seed 1, 100,000 nodes | INCONCLUSIVE at the cap, 2000 games, +713 -673 =614, +6.9 +/- 12.1, pairs [92, 219, 366, 203, 120] |
+| E92's recipe with decay vs E92, the last list, 100,000 nodes, [0, 10] | **PASSED** at 960 games, +375 -294 =291, **+29.4 +/- 17.7**, pairs [45, 73, 181, 118, 63] |
+| E92's recipe with decay vs E89, 8+0.08, alone on the machine, [0, 10] | **PASSED** at 298 games, +129 -62 =107, **+79.5 +/- 30.6**, pairs [3, 26, 48, 45, 27] |
+| Decay 0.03 on E91's list, 8 epochs, vs the network kept, 100,000 nodes, [0, 10] | **FAILED** at 666 games, +201 -261 =204, -31.4 +/- 21.5, pairs [47, 82, 117, 58, 29] |
+
+The same 0.0013 on 6x6 from both pairs, and three matches on the same side of level, two of them
+passes. Kept: the network of the second pair is the one in `src/net.h`, bench 631025, the same
+for `make release`, `make TUNE=on` and `ARCH=generic`, with `make check` passing, and `--decay`
+went into `src/nntrain.c`, where it writes the draft trainer's network byte for byte. No game
+ended on time, and the match on the clock stopped early and reads high, as E92's +66.5 did; the
+count of nodes puts decay at 29 over E92 and E92 at 37 over E89. The pair also played 7x7 before
+the user set the other sizes aside until syntaks is beaten: +139.0 +/- 41.0 for decay at 300
+games, pairs [11, 6, 56, 12, 65].
+
+Decay 0.03 holds out 0.0004 better again on 6x6 than 0.01, which is a seed's worth, and more on
+the big boards. Its network, eight epochs on the shorter list, lost 31 to the one kept, which says
+the kept network is the best there is, not which decay is: 0.03 in the kept recipe is the next
+fit to ask, with a second pair before it is believed.
+
+## E98: the head's first layer, 16 units to 32
+
+The user asked whether the head wants more layers. It has two between the pools and the output,
+16 units then 32, since E48, and nothing had widened either since; the narrowest point is the
+first, where 128 pools feed 16 units. `NN_L2` 32 is one line of `nn.h`: the engine's sums stay
+inside 32 bits, and the trainer's kernel already gave a thread every eighth unit. A fit repeats to
+the byte, the engine reads within 0.50 of it, and selftest passes 984,155,823 checks.
+
+| Held out, against results | 16 units, the control | 32 |
+|---|---|---|
+| All | 0.450722 | **0.450413** |
+| 6x6 gen 15 / 16 | 0.4463 / 0.4434 | **0.4460 / 0.4430** |
+| 5x5 gen 11 / 16 | **0.3741 / 0.3762** | 0.3752 / 0.3770 |
+| 7x7 gen 11 / 16 | **0.4591 / 0.4677** | 0.4594 / 0.4678 |
+| 8x8 gen 11 / 16 | **0.5031** / 0.4974 | 0.5040 / **0.4946** |
+
+| Match, 6x6, 100,000 nodes a move, [0, 10] | Result |
+|---|---|
+| 32 vs the control | INCONCLUSIVE at the cap, 2000 games, +733 -686 =581, +8.2 +/- 12.2, pairs [103, 197, 358, 234, 108] |
+
+Bench 935109, at 0.86 to 0.87 of the control's speed on this machine alone (1.89M nps to 2.20M,
+the best of ten runs each). Not kept: 0.0004 on 6x6 is what two seeds of one recipe differ by,
+the match at equal nodes leans by 8, which is a seed's lead too, and a clock would take an eighth
+of the speed off that. A third layer was to follow only if the second paid.
+
 ## Mistakes worth not repeating
 
 - **A measured mean is not what a table will learn, and a table every node reads feeds on itself.**

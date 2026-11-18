@@ -147,6 +147,9 @@ typedef struct NTLoader {
     Board *check;
     int check_count, check_sizes[NT_SLOTS];
     double share[NT_SLOTS]; /* of a size's positions in each epoch, for a size with few games */
+    /* The first epoch a size's positions are in. A size with few games for its squares learns
+     * best late and briefly, on filters the other sizes have already shaped: E92. */
+    int join[NT_SLOTS];
     double lambda[NT_SLOTS];
     double rate; /* at the first step, falling on a cosine from there */
     NTFile *files;
@@ -181,13 +184,16 @@ typedef struct NTJob {
     u64 group_count[NT_GROUPS];
 } NTJob;
 
+/* A set starts small: every listing keeps one for its held-out positions until the listings are
+ * put together, and Windows charges a block of this size in full whether or not it is used, so
+ * tens of thousands of files at a megabyte each once asked for more than the machine has. */
 static void set_add(NTSet *set, const NTSample *sample, const u16 *features) {
     if (set->count == set->capacity) {
-        set->capacity = set->capacity ? set->capacity * 2 : 1 << 16;
+        set->capacity = set->capacity ? set->capacity * 2 : 1 << 10;
         set->samples  = realloc(set->samples, set->capacity * sizeof(NTSample));
     }
     if (set->feature_count + SQUARE_COUNT > set->feature_capacity) {
-        set->feature_capacity = set->feature_capacity ? set->feature_capacity * 2 : 1 << 20;
+        set->feature_capacity = set->feature_capacity ? set->feature_capacity * 2 : 1 << 15;
         set->features         = realloc(set->features, set->feature_capacity * sizeof(u16));
     }
     if (!set->samples || !set->features) {
@@ -255,6 +261,11 @@ static float LossScale[NT_SLOTS], LossRatio[NT_SLOTS];
  * moves by about half a flat from one move of a side to its next, and a later search sees
  * further, so the mean is the steadier target. */
 static int Smooth = 0;
+
+/* Each step shrinks every filter weight by the rate times this, apart from the step the loss
+ * asks for. A row few positions reach is fitted on few examples, and without it nothing pulls
+ * such a row back toward zero: E97. The heads are left alone. */
+static double Decay;
 
 static int smoothed_score(const DataGame *game, int ply, int size) {
     double sum = 0.0;
@@ -1463,7 +1474,7 @@ static u64 block_order(const NTLoader *loader, u64 from, u64 to, u64 seed, int e
     u64 count = 0, base = 0;
     for (u64 j = from; j < to; j++) {
         const NTGame *g    = &loader->games[loader->perm[j]];
-        const double share = loader->share[g->size];
+        const double share = epoch < loader->join[g->size] ? 0.0 : loader->share[g->size];
         for (u64 k = 0; k < g->count; k++) {
             if (in_epoch(g->key * DATA_MAX_PLIES + k, epoch, seed, share)) {
                 if (order) {
@@ -1732,7 +1743,7 @@ static const char KernelBody[] =
     "extern \"C\" __global__ void adam(float *p, float *m, float *v, float *q, float *a,\n"
     "        int *grad_filters, unsigned long long *grad, int count, int bias_at, int output_at,\n"
     "        int skip_at, int l2_at, int l2_bias_at, int l3_at, int l3_bias_at, int l4_at,\n"
-    "        double rate, double kept, double seen, double average) {\n"
+    "        double rate, double kept, double seen, double decay, double average) {\n"
     "    const int i = blockIdx.x * blockDim.x + threadIdx.x;\n"
     "    if (i >= count) return;\n"
     "    float g;\n"
@@ -1745,7 +1756,8 @@ static const char KernelBody[] =
     "    }\n"
     "    m[i] = (float)(BETA1 * m[i] + (1.0 - BETA1) * g);\n"
     "    v[i] = (float)(BETA2 * v[i] + (1.0 - BETA2) * g * g);\n"
-    "    const float w = p[i] - (float)(rate * (m[i] / kept) / (sqrt(v[i] / seen) + 1e-8));\n"
+    "    float w = p[i] - (float)(rate * (m[i] / kept) / (sqrt(v[i] / seen) + 1e-8));\n"
+    "    if (decay > 0.0 && i < bias_at) w -= (float)(rate * decay * p[i]);\n"
     "    const float limit = i < bias_at ? FILTER_LIMIT : i < output_at ? BIAS_LIMIT\n"
     "                      : i < skip_at ? OUTPUT_LIMIT : i < l2_at ? 1e9f\n"
     "                      : i < l2_bias_at ? L2_LIMIT : i < l3_at ? HEAD_BIAS_LIMIT\n"
@@ -1941,15 +1953,17 @@ static bool train_gpu(NTModel *model, NTLoader *loader, const double *lambda, in
                     double rate            = rate_at(loader->rate, step, steps);
                     double kept            = 1.0 - pow(NT_BETA1, (double)(step + 1));
                     double seen            = 1.0 - pow(NT_BETA2, (double)(step + 1));
+                    double decay           = Decay;
                     double average         = average_at(step, steps);
                     void *step_arguments[] = {
                         &batch_packed, &batch_stacks, &q,       &image,      &grad_filters, &grad,
                         &loss,         &squares,      &bias_at, &output_at,  &skip_at,      &l2_at,
                         &l2_skip_at,   &l2_bias_at,   &l3_at,   &l3_bias_at, &l4_at,        &scale};
                     void *adam_arguments[] = {
-                        &p,          &m,       &v,         &q,       &a,     &grad_filters, &grad,
-                        &count,      &bias_at, &output_at, &skip_at, &l2_at, &l2_bias_at,   &l3_at,
-                        &l3_bias_at, &l4_at,   &rate,      &kept,    &seen,  &average};
+                        &p,          &m,     &v,          &q,         &a,       &grad_filters,
+                        &grad,       &count, &bias_at,    &output_at, &skip_at, &l2_at,
+                        &l2_bias_at, &l3_at, &l3_bias_at, &l4_at,     &rate,    &kept,
+                        &seen,       &decay, &average};
                     if (!gpu_launch(step_kernel, n, NN_HIDDEN, step_arguments) ||
                         !gpu_launch(adam_kernel, (unsigned)(count + 255) / 256, 256,
                                     adam_arguments)) {
@@ -2002,16 +2016,20 @@ static void report_groups(const NTModel *model, const NTLoader *loader, const do
 
 static int fit_network(const char *out, int keep, const double *lambda, int epochs, int threads,
                        unsigned long long seed, double rate, bool warm, const char *from,
-                       const double *share, const double *scale, int smooth, double block,
-                       char **paths, int path_count) {
+                       const double *share, const int *join, double decay, const double *scale,
+                       int smooth, double block, char **paths, int path_count) {
     if (keep < 1 || epochs < 1 || threads < 1 || threads > NT_MAX_THREADS || rate < 0.0 ||
-        block < 1.0 || block > 4000.0) {
+        block < 1.0 || block > 4000.0 || decay < 0.0 || decay > 1.0) {
         printf("bad arguments\n");
         return 2;
     }
     if (smooth > 1) {
         Smooth = smooth;
         printf("the search's score is smoothed over %d scored plies\n", smooth);
+    }
+    Decay = decay;
+    if (Decay > 0.0) {
+        printf("each step shrinks a filter weight by the rate times %g\n", Decay);
     }
     for (int n = 0; n < NT_SLOTS; n++) {
         LossScale[n] = scale && scale[n] > 0.0 ? (float)scale[n] : (float)NN_SCALE;
@@ -2041,6 +2059,10 @@ static int fit_network(const char *out, int keep, const double *lambda, int epoc
     }
     for (int n = 0; n < NT_SLOTS; n++) {
         loader.share[n] = share ? share[n] : 1.0;
+        loader.join[n]  = join ? join[n] : 0;
+        if (loader.join[n] > 1 && n >= MIN_SIZE) {
+            printf("the %dx%d positions join at epoch %d\n", n, n, loader.join[n]);
+        }
     }
     if (!nt_load(&loader, paths, path_count, threads)) {
         return 1;
@@ -2174,8 +2196,8 @@ static char **expand_paths(char **paths, int count, int *expanded) {
 
 int nntrain_run(const char *out, int keep, const double *lambda, int epochs, int threads,
                 unsigned long long seed, double rate, bool warm, const char *from,
-                const double *share, const double *scale, int smooth, double block,
-                const char *status, char **paths, int path_count) {
+                const double *share, const int *join, double decay, const double *scale, int smooth,
+                double block, const char *status, char **paths, int path_count) {
     int count    = 0;
     char **games = expand_paths(paths, path_count, &count);
     if (!games) {
@@ -2183,7 +2205,7 @@ int nntrain_run(const char *out, int keep, const double *lambda, int epochs, int
     }
     status_open(status, out, epochs, count);
     const int code = fit_network(out, keep, lambda, epochs, threads, seed, rate, warm, from, share,
-                                 scale, smooth, block, games, count);
+                                 join, decay, scale, smooth, block, games, count);
     Status.phase   = code == 0 ? "done" : "failed";
     status_write(true, code);
     return code;

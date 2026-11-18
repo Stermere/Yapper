@@ -101,17 +101,18 @@ int main(int argc, char **argv) {
         bool warm               = false;
         int smooth              = 0;
         unsigned long long seed = 0;
-        double rate = 0.0, block = NT_BLOCK_DEFAULT;
+        double rate = 0.0, block = NT_BLOCK_DEFAULT, decay = 0.0;
         const char *status = NULL, *from = NULL;
         double scale[MAX_SIZE + 1] = {0};
         double share[MAX_SIZE + 1] = {1, 1, 1, 1, 1, 1, 1, 1, 1};
+        int join[MAX_SIZE + 1]     = {0};
         double lambda[MAX_SIZE + 1];
         for (int size = 0; size <= MAX_SIZE; size++) {
             lambda[size] = atof(argv[4]);
         }
         int first = 7;
         for (; first < argc; first++) {
-            int size;
+            int size, epoch;
             double part;
             if (strcmp(argv[first], "--cpu") == 0) {
                 printf("nntrain fits on the GPU only: a CPU is a hundred times too slow\n");
@@ -149,6 +150,14 @@ int main(int argc, char **argv) {
                        size <= MAX_SIZE && part > 0.0) {
                 share[size] = part;
                 first++;
+            } else if (strcmp(argv[first], "--join") == 0 && first + 1 < argc &&
+                       sscanf(argv[first + 1], "%d=%d", &size, &epoch) == 2 && size >= MIN_SIZE &&
+                       size <= MAX_SIZE && epoch >= 1) {
+                join[size] = epoch;
+                first++;
+            } else if (strcmp(argv[first], "--decay") == 0 && first + 1 < argc &&
+                       atof(argv[first + 1]) >= 0.0) {
+                decay = atof(argv[++first]);
             } else if (strcmp(argv[first], "--lambda") == 0 && first + 1 < argc &&
                        sscanf(argv[first + 1], "%d=%lf", &size, &part) == 2 && size >= MIN_SIZE &&
                        size <= MAX_SIZE && part >= 0.0 && part <= 1.0) {
@@ -159,8 +168,8 @@ int main(int argc, char **argv) {
             }
         }
         return nntrain_run(argv[2], atoi(argv[3]), lambda, atoi(argv[5]), atoi(argv[6]), seed, rate,
-                           warm, from, share, scale, smooth, block, status, argv + first,
-                           argc - first);
+                           warm, from, share, join, decay, scale, smooth, block, status,
+                           argv + first, argc - first);
     }
     if (strcmp(command, "policyfit") == 0 && argc >= 7) {
         unsigned long long seed = 0;
@@ -185,7 +194,8 @@ int main(int argc, char **argv) {
         "               datagen <out> <games> <seed> <nodes> [size] [generation] [openings] |\n"
         "               nntrain <net.h> <keep one in> <lambda> <epochs> <threads>\n"
         "                       [--seed n] [--rate r] [--warm | --from net.h] [--block millions]\n"
-        "                       [--share size=part]... [--lambda size=lambda]...\n"
+        "                       [--share size=part]... [--join size=epoch]...\n"
+        "                       [--lambda size=lambda]... [--decay d]\n"
         "                       [--scale [size=]s]... [--status file] [--smooth n]\n"
         "                       <games or @list>...] |\n"
         "               policyfit <policy_net.h> <keep one in> <epochs> <threads>\n"

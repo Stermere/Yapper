@@ -165,6 +165,27 @@ files of gen 15 it never read, gen 16's 6x6 files home at 07:53 on 2026-11-16 an
 other sizes, each listed once after the rest: `external/build/e89/full.list`, 20,775 listings,
 613M positions.
 
+E97's, which plays now, drops 6x6's generations before 15, which E90 found a weight, takes every
+gen 16 6x6 file home at 05:27 on 2026-11-17, fits twice as long with the two big boards sitting
+out the first half, E92, and decays the filters, E97 (`external/build/e99/full.list`, 31,232
+listings, 711M positions):
+
+```sh
+yapper nntrain src/net.h 1 0.7 16 15 --share 7=0.33 --share 8=0.2 --join 7=9 --join 8=9 \
+    --decay 0.01 --lambda 3=0.5 --lambda 4=0.5 --smooth 4 @external/build/e99/full.list
+```
+
+`--join 7=9` keeps 7x7's positions out of every epoch before the ninth. The filters are shared by
+every size, and a size with few games for its squares is fitted best late and briefly: the big
+boards then take their usual share of each step on filters 6x6 has already shaped, and are seen
+no more often than in a fit of eight epochs. Without it, as gen 16 grows, 6x6 takes more of every
+step and 7x7 pays for it: E92.
+
+`--decay 0.01` shrinks every filter weight by a hundredth of the rate at each step, apart from
+the step the loss asks for. A row few positions reach then fades toward zero rather than keeping
+what a few examples left in it, and every size held out better for it: E97. The heads are left
+alone.
+
 Gen 11 is listed four times, which weighs it four times as heavily: listed once, as a twentieth of
 the positions, it hardly moved the network. A file listed again is read once and weighed again.
 Windows starts no command longer than 32,767 characters, so a long list goes in a file, a path a
