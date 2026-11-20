@@ -683,6 +683,8 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, bool cut_n
                 reduction = LmrTable[depth < 63 ? depth : 63][searched < 63 ? searched : 63];
                 reduction += cut_node * LmrCutNode - pv_node * LmrPvNode;
                 reduction = reduction < 0 ? 0 : reduction > depth - 2 ? depth - 2 : reduction;
+            } else if (threats && !root && depth >= LmrDepth && searched >= AnswerFrom) {
+                reduction = AnswerReduce < depth - 2 ? AnswerReduce : depth - 2;
             }
 
             if (searched == 1) {

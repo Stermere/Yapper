@@ -5194,7 +5194,7 @@ and more time while the best move is new and after a fall in score.
 
 Bench 1009458 from `make`, `make TUNE=on` and `make release`, and from the tune build that played
 the SPRT given the candidate's options; given none, that build benches 631025. `make check`
-passes. Not yet done: a confirmation at another time control, which TESTING.md asks for. The
+passes. Confirmed at 30+0.3 in E107, +34.2 +/- 18.6 against the same start values. The
 gains in self-play since E87 now come to some 120 on the clock: E89's 18, E97's 79.5 and this 22.
 
 **Against syntaks at full strength**, as E82 and E87 were measured: 910ab1d, 8+0.08, 2 komi,
@@ -5212,6 +5212,32 @@ Paired opening by opening with E87's games, Yapper scores 0.110 +/- 0.030 more, 
 come since E87, E89's and E97's networks, E103's speed and this tune, some 120 in self-play,
 shows there at about two thirds of its size, where E87's networks showed at half and E72's tune at
 two fifths.
+
+**At 60+1**, the same binary against syntaks, Hash 256 MB each for 64, on seed 1's 250 openings,
+7 at once, nothing else running (`external/build/e102/ltc.sh`), 3 h 44 m:
+
+| | Games | Result |
+|---|---|---|
+| E102 at 60+1, seed 1 | 500 | +36 -319 =145, **-222.9 +/- 27.0**, pairs [99, 94, 49, 7, 1] |
+| E102 at 8+0.08 on the same openings | 500 | +151 -223 =126, -50.4 +/- 26.0 |
+
+Paired opening by opening, **-173 [-223, -129]** at the long control. No game was lost on time.
+The flats decide it: 230 of the 319 losses are on the count, to 142 at 8+0.08, and the wins on the
+count fall from 122 to 31; roads are lost as often at both.
+
+The games turn early and not for want of clock. syntaks's own score, read from Yapper's side, has
+it a flat or more ahead in 21% of games at move 15, 39% at 25 and 60% at 35 (at 8+0.08: 14%, 30%,
+41%). At moves 15 and 25 Yapper has the more time left, 48 s to 42 and 35 s to 33, and at 35 a
+little less, 21 s to 26. Yapper's clock does run short later, as at 8+0.08: it is under 6 s in 284
+games of 500 to syntaks's 61, and plays on the increment from about move 42 with syntaks 20 s to
+the good, but by then two games in three are lost on syntaks's reading.
+
+What the time buys differs. In the middlegame Yapper reaches depth 16.8 in 2.0 s a move and
+syntaks 19.3 in 1.9 s; at 8+0.08 it was 12.6 in 0.24 s to syntaks's 14.1 in 0.25 s. Eight times
+the time is 4.2 plies to Yapper and 5.2 to syntaks, a ply costing 1.65 times the last to its 1.48,
+so the gap in depth grows from 1.5 plies to 2.5 with the clock (each engine's depth by its own
+count). The tune, fitted to 8+0.08, is not the cause: in E107 the values it started from did no
+better at 60+1, -245.2 +/- 28.0, and E102 led them by +22 [-14, +55] pair by pair.
 
 ## E103: the prior's moves cheaper to score
 
@@ -5434,6 +5460,127 @@ answered: about policy.c's cost in all. Without the gate it needs no pools and r
 than policy.c. The floor is a move's 1.5 rows from a table too big to stay in cache and working
 out what the move leaves, not the width. 16 x 8 from the mover's view is 0.14 better than policy.c
 at about its cost, which is E104's case again. No match was played.
+
+## E107: E102's tune at a long control
+
+Against syntaks E102 did 173 worse at 60+1 than at 8+0.08 on the same openings. Did a tune fitted
+to 8+0.08 cost some of that? Two matches, one after the other, nothing else running
+(`external/build/e107/run.sh`), from 23:38 on 2026-11-18:
+
+1. E102 (910ab1d, bench 1009458) against the values it started from: the same source with
+   fac59be's `src/tune.h`, bench 631025 (`external/baselines/e102-old.exe`), so everything but
+   the 42 values the tune moved is equal. 30+0.3, four times 8+0.08, Hash 128 MB each, 6s_4ply
+   on seed 1, 2 komi as E102's SPRT, 7 at once.
+2. Those old values against syntaks at 60+1, as E102 was there: 2 komi, seed 1's 250 openings,
+   Hash 256 MB each, 7 at once. Windows Update restarted the machine 44 games in, at 01:29 on
+   2026-11-19; the match was played again from the start from 07:48 (`ltc.sh`), the 44 games set
+   aside.
+
+| Match | Games | Result |
+|---|---|---|
+| E102 against its start values, 30+0.3 | 500 | +146 -97 =257, **+34.2 +/- 18.6**, pairs [2, 51, 108, 74, 15] |
+| The same at 8+0.08, E102's SPRT | 1640 | +22.3 +/- 11.2 |
+| The start values against syntaks, 60+1 | 500 | +25 -329 =146, **-245.2 +/- 28.0**, pairs [105, 105, 29, 11, 0] |
+| E102 against syntaks, 60+1 | 500 | +36 -319 =145, -222.9 +/- 27.0, pairs [99, 94, 49, 7, 1] |
+| E102 less the start values against syntaks, pair by pair on the 250 openings | | **+22 [-14, +55]** |
+
+The tune holds at four times the clock, and if anything gains more, though the two are inside
+each other's error. Against syntaks at 60+1 the start values do no better than E102, and lean
+worse by about what self-play says. They lose as E102 does, 227 of their 329 losses on the flat
+count to E102's 230 of 319. So the tune did not cost E102 its long games: the 173 lost from
+8+0.08 to 60+1 is the search's, a ply costing Yapper more than it costs syntaks (E102, above).
+Neither match lost a game on time, and each had one threefold repetition. 1 h 29 m and 3 h 36 m.
+
+## E108: the rest of gen 16, not kept, and where a deep search's nodes go
+
+Two things the user asked for on 2026-11-19, on the way to gen 17, which waits on the first: if it
+gains 10 or more, gen 17 starts.
+
+**All of gen 16.** E97's list holds 465.7M of gen 16's 655.9M scored positions: the 7,408 files
+written after 05:27 on 2026-11-17 were never fitted, 2,834,608 games and 190,188,180 scored
+positions (`external/build/e108/mklist.py`). E97's recipe on the whole list, 38,640 listings, by
+HEAD's trainer (`external/build/e108/run.sh`): 16 epochs, 7x7 and 8x8 joining at the ninth, decay
+0.01 on the filters, seed 1. 865,885,221 positions to fit where E97 had 711,393,066, in 1 h 41 m on
+the RTX 3070. Averaged over the last epochs: 0.4895 held out, 0.4438 against results; 6x6 gen 16
+alone 0.4375 against results on 35.8M held-out positions. The new files bring their own held-out
+games, so these do not compare with E97's 0.4925 to 0.4938. The engine reads within 3 hundredths of
+the fit on 6x6 at worst, 0.54 on average. Bench 870926. Then an SPRT [0, 10] against E102
+(`external/baselines/e102.exe`, bench 1009458), 8+0.08, 6s_4ply, seed 108, 2 komi, 7 at once,
+nothing else running, from 14:10:
+
+| Match | Games | Result |
+|---|---|---|
+| E108 against E102, 8+0.08, SPRT [0, 10] | 2000 | +590 -550 =860, **+6.9 +/- 10.6**, pairs [58, 227, 392, 263, 60], LLR 0.67 |
+
+Inconclusive at the cap, in 1 h 40 m, with five threefold repetitions and no game lost on time.
+A fifth more data to fit is worth under 10 here. At E85's rate, +27 for a doubling, it would be
+worth about 8, so this reads as that rate holding rather than the data running out. One fit is one
+seed, and fits of one recipe differ by 10 to 20 (E92), so this bounds the gain rather than measuring
+it. Not kept: E102's network stays. Gen 17 was to start on 10 or more, and does not.
+
+**Where a deep search's nodes go.** At 60+1 Yapper reaches 16.8 plies a move to syntaks's 19.3,
+and E80's counts stop at depth 12. HEAD's search with counters added and nothing else
+(`external/build/e108/diag`, `patch.py`; bench 1009458 as HEAD), on 109 positions of E107's
+self-play at 30+0.3, moves 15, 20, 25, 30 and 35 of 24 games, each searched afresh to depth 20 with
+256 MB of table (`deep.py`, `analyze.py`): 1.45G nodes in the 20th iterations, 19.6 s a search at
+the median. Each row is one iteration's own tree, summed over the positions. A node "under" a kind
+of move is anywhere in a subtree such a move began, counted once however many lie above it.
+
+| Depth | x the last | Leaf search | Under a 3rd or later reply to a road | Under a reduced move searched again | Cutoffs on the first move | Expected cut nodes that do not cut |
+|---|---|---|---|---|---|---|
+| 10 | 1.70 | 29.3% | 24.0% | 14.4% | 68.6% | 27.7% |
+| 12 | 1.49 | 27.3% | 27.3% | 18.3% | 68.2% | 27.8% |
+| 14 | 1.77 | 26.1% | 32.5% | 24.3% | 67.2% | 28.3% |
+| 16 | 1.85 | 25.7% | 41.0% | 28.1% | 66.2% | 28.8% |
+| 18 | 1.78 | 24.4% | 44.3% | 29.0% | 67.1% | 28.3% |
+| 20 | 1.96 | 23.7% | 45.7% | 30.0% | 66.8% | 28.6% |
+
+A ply costs 1.78 times the last from depth 12 to 20, with a fresh table and no clock, and holds
+there: no part of the tree comes apart deeper down. Nodes with a road to answer are 3.4% of nodes at
+every depth and 15% to 17% of the nodes that search moves, and search 9 to 11 replies each, none of
+them reduced. The subtrees under their third and later replies are the one share of the tree that
+climbs with depth, from a quarter at 10 to nearly half at 20, where E80 found such a reply beats
+alpha 0.9% of the time or less from depth 6 and judged them, at depth 12, too few to reduce first.
+Reduced moves searched again in full climb too, from 14% to 30%; the rest holds still. Reverse
+futility returns at 63% to 65% of nodes, the null move works 0.2% of its tries at depth 10 and 7.9%
+at 20, and a singular test extends half the time at 10 and a third at 20. Two cutoffs in three come
+on the first move and one in eight on the third or fourth, at every depth.
+
+E109 tries reducing them.
+
+## E109: late replies to a road a ply shallower
+
+E108's counts found the subtrees under the third and later replies to a road growing from 24% of
+the tree at depth 10 to 46% at 20, none of them reduced. Two tunables in `src/tune.h`: from the
+`AnswerFrom`th reply on (3), a node with a road to answer searches its replies `AnswerReduce` plies
+shallower (1). None are reduced at the root, and a reply that beats alpha is searched again in full,
+as any reduced move is (`external/build/e109/patch.py`). At 0 the engine is HEAD node for node,
+bench 1009458 under `make TUNE=on` too; at 1, bench 1025277.
+
+Nodes to each depth on E108's positions, each searched afresh by both builds (`ttd.py`, `cmp.py`;
+110 positions, 109 from depth 17):
+
+| Depth | Nodes, with / without | Same move |
+|---|---|---|
+| 10 | 0.961 | 88 of 110 |
+| 12 | 0.929 | 86 |
+| 14 | 0.934 | 86 |
+| 16 | 0.909 | 89 |
+| 18 | 0.869 | 87 of 109 |
+| 19 | 0.848 | 85 |
+
+Time follows nodes. The saving grows with depth, about 7% at the depth 8+0.08 reaches and 11% to
+15% at 60+1's. So the match was played at 30+0.3, as E107 was: Hash 128 MB each, 6s_4ply on seed
+109, 2 komi, 7 at once, nothing else running (`run.sh`), from 15:51:
+
+| Match | Games | Result |
+|---|---|---|
+| E109 against E102, 30+0.3, SPRT [0, 10] | 1446 | +379 -316 =751, **+15.1 +/- 11.4**, pairs [24, 158, 306, 201, 34], **PASSED** |
+
+Passed in 4 h 20 m, with three threefold repetitions and no game lost on time. Kept, with
+AnswerFrom 3 and AnswerReduce 1 as the defaults: `make`, `make release` and `make TUNE=on` all
+bench 1025277, and `make check` passes. Neither value was tuned, and the change was not played at
+8+0.08, where it saves half as much.
 
 ## Mistakes worth not repeating
 

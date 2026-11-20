@@ -47,6 +47,10 @@
     X(LmrMoves,            4,     1,    12)                                                 \
     X(LmrCutNode,          1,     0,    3)                                                  \
     X(LmrPvNode,           1,     0,    3)                                                  \
+    /* Replies to a road, from this one on, are this many plies shallower; 0 reduces none. \
+     * None at the root, which plays every move. */                                       \
+    X(AnswerFrom,          3,     2,    12)                                                 \
+    X(AnswerReduce,        1,     0,    3)                                                  \
     /* History: a cutoff earns min(depth^2 * mul, max), entries level off at the limit,    \
      * and a search starts with this many sixteenths of what the last one left. */          \
     X(HistoryBonusMul,     20,    1,    64)                                                 \
