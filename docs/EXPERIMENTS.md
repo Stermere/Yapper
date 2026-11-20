@@ -5582,6 +5582,170 @@ AnswerFrom 3 and AnswerReduce 1 as the defaults: `make`, `make release` and `mak
 bench 1025277, and `make check` passes. Neither value was tuned, and the change was not played at
 8+0.08, where it saves half as much.
 
+## E110: late road replies two plies shallower, stopped
+
+AnswerReduce 2 against E109's 1, one `make TUNE=on` build of E109 on both sides, at 30+0.3 as E109
+was (`external/build/e110`): stopped by hand at 600 games, +143 -150 =307, **-4.1 +/- 17.6**, pairs
+[13, 71, 140, 62, 14], LLR -1.11. It was not heading for a pass, and the slot went to the search
+changes below. Not kept.
+
+## E111: where a node's time goes
+
+A timing copy of E109 (`external/build/e111/prof`: rdtsc around each function, so not node for node
+with `make`) on E108's 110 deep positions to depth 15, 220M nodes at 2,507 cycles a node with the
+counting on:
+
+| Part | Share | Calls a node |
+|---|---|---|
+| The network, `node_eval` | 35.1% | 0.83 |
+| of which `nn_derive`, the accumulator brought up to date | 20.3% | 0.68 |
+| of which `evaluate_frame`, the head | 10.4% | 0.68 |
+| The leaf search, `quiesce_from_search` (overlaps the rest) | 14.6% | 0.21 |
+| The prior, `score_moves` | 16.1% | 0.09 |
+| Both sides' road ends, `board_road_ends` | 11.1% | 1.64 |
+| `pick_next` | 6.3% | 1.34 |
+| `movegen_road_spread` | 5.4% | 0.23 |
+| make, unmake and the outcome together | 5.9% | 1.02 each |
+
+Road ends are worked out from scratch 1.6 times a node and could be carried move by move, a pure
+speedup of up to a tenth. Not built: the search's shape came first.
+
+## E112: ProbCut again, from depth 7, on the clock that pays for depth
+
+E75 and E78 built ProbCut: off the PV, with no road to answer and the evaluation at or above beta,
+from `ProbcutDepth` the node is first searched `ProbcutReduction` 4 plies shallower at beta +
+`ProbcutMargin` 100, and returns that less the margin if it holds. From depth 5 it read -0.6 +/- 15.1
+at 8+0.08, and from depth 7, on E77, +5.7 +/- 11.2 at the cap; neither was kept. Both were played at
+8+0.08, where a search reaches depth 10 or 11 and the cut has little to cut. E108 and E109 showed the
+tree past depth 12 is where the nodes go, and E107 that the engine's trouble is the long clock. So
+E78's patch, from depth 7, on E109 (`external/build/e75/patch_probcut.py`, tree `external/build/e112`,
+bench 1156007), played at 30+0.3.
+
+Nodes to each depth on E108's positions, each searched afresh by both builds (`external/build/e114`,
+`ttd_idle.py`, `../e109/cmp.py`):
+
+| Depth | Nodes, with / without | Same move |
+|---|---|---|
+| 10 | 0.979 | 89 of 110 |
+| 12 | 0.907 | 89 |
+| 13 | 0.827 | 89 |
+| 14 | 0.763 | 89 |
+| 15 | 0.691 | 89 |
+
+The saving grows by about 7% a ply past depth 11, more than any change measured this way.
+
+| Match | Games | Result |
+|---|---|---|
+| E112 against E109, 30+0.3, SPRT [0, 10] | 486 | +139 -91 =256, **+34.4 +/- 19.1**, pairs [6, 42, 105, 78, 12], **PASSED** |
+
+Hash 128 MB each, 6s_4ply on seed 112, 2 komi, 7 at once, nothing else running, in 1 h 27 m; none
+lost on time. Kept with E78's values, none of them tuned: `make`, `make release` and `make TUNE=on`
+all bench 1156007, and `make check` passes. What was dead at 8+0.08 passed at 30+0.3, so a cut whose
+saving grows with depth has to be played where the depth is.
+
+## E113: what the prior's probability says about a late move
+
+The idea: cut by probability, dropping moves the prior all but rules out. A counting copy of E109
+(`external/build/e113/diag`) recorded every move after the first at nodes with a prior, on E108's
+positions to depth 13 (183M nodes): its depth, node kind, place in the list, the prior's
+probability, the probability mass searched before it, how it was searched, and whether it beat
+alpha in full.
+
+| Prior's probability | Reduced moves | Beat alpha in full | Lift over depth, kind and place |
+|---|---|---|---|
+| 30%+ | 0.1% | 13.96% | 4.13 |
+| 10-30% | 4.5% | 4.38% | 1.69 |
+| 3-10% | 21.8% | 1.74% | 0.99 |
+| 1-3% | 31.3% | 0.78% | 0.82 |
+| 0.3-1% | 24.8% | 0.40% | 0.81 |
+| 0.1-0.3% | 7.0% | 0.19% | 0.67 |
+| under 0.1% | 10.4% | 0.03% | 0.41 |
+
+Between 0.3% and 10% the probability barely beats the move's place in the list. Of the moves
+move-count pruning drops, those under 0.1% are 79% and their misses 5.6%, while those at 1% and
+over are 4% of the drops and 45% of the misses. So there is a signal at both ends, but no nodes
+behind it at the bottom: a move under 0.1% costs about a node, since the search under it ends at
+once, and dropping them all would save 2% to 3% of the tree. The cut was written
+(`external/build/e113/patch.py`, `PriorDrop`) and not played.
+
+Re-searches, counted on the same positions to depth 15 (`run_re.py`, `restat-d15.txt`): a reduced
+move that beats alpha and is searched again in full is 30% of the tree, and the full search holds
+68% of the time. By how far the reduced search beat alpha:
+
+| Beat alpha by | Re-searches | Full search holds | Share of the tree |
+|---|---|---|---|
+| 10 or less | 94,141 | 46% | 11.5% |
+| 11 to 40 | 183,268 | 51% | 7.9% |
+| 41 to 120 | 285,594 | 67% | 7.8% |
+| more than 120 | 239,400 | 91% | 3.1% |
+
+The narrow wins are a fifth of the tree and a coin toss, which is E114.
+
+The prior's mass searched before a move says even less about cost. Reduced moves after 95% of
+it cost 1.2 to 1.7 nodes each, so pruning by mass would save about 2% of the tree. The nodes are
+in the first moves: those searched in full cost 46 nodes each, against 11 for reduced moves under
+half the mass. A cut that drops whole nodes, as ProbCut does, is where depth is.
+
+## E114: a re-search after a narrow win a ply shorter, not kept
+
+A reduced move that beat alpha by `ReShallowMargin` 25 or less was searched again a ply short of
+full, and with a reduction of one the reduced result stood (`external/build/e114/patch.py`). On
+E112, bench 1153657. Nodes to depth 15 on E108's positions: 0.902 of E109's without ProbCut, 0.911
+of E112's with it, growing with depth like E109's.
+
+| Match | Games | Result |
+|---|---|---|
+| E114 against E112, 30+0.3, SPRT [0, 10] | 1046 | +226 -249 =571, **-7.6 +/- 12.8**, pairs [20, 127, 249, 110, 17], **FAILED** |
+
+**Not kept.** Fewer nodes to a depth is not the measure: ProbCut saved 31% and gained 34, this
+saved 9% and lost 8. A narrow win that holds in full is a move about to become best, and searching
+it short was the wrong place to save.
+
+## E115: how well the shallow search foretells the node, by depth and margin
+
+A counting copy of E112 (`external/build/e115/diag`: patch.py, run.py, analyze.py,
+pcstat-d13.txt). At one node in eight, by key, of those ProbCut could try from depth 5, the node
+is first searched 4 plies shallower at beta + m, for m from 0 to 300 until one fails, then searched
+as it plays. 110 deep positions to depth 13, 54.6M nodes. With the evaluation at beta or above, as
+ProbCut runs:
+
+| Depth | Holds at +100 | Real search agrees | Wrong cuts per 1000 tries | Nodes under its cuts, share of tree |
+|---|---|---|---|---|
+| 5 | 74% | 97.7% | 16.9 | 12.3% |
+| 6 | 67% | 99.1% | 6.1 | 8.9% |
+| 7 | 73% | 98.9% | 8.2 | 10.1% |
+| 8 | 76% | 99.5% | 3.8 | 8.1% |
+| 9 | 70% | 99.9% | 0.5 | 5.7% |
+| 10 | 65% | 99.3% | 4.5 | 3.4% |
+
+The shares overlap, since a node at depth 6 lies under one at 8. What it says:
+
+- **From depth 6 the cut is as right as from 7**, and saves about as much again. Depth 5 errs
+  twice as often. So E116.
+- **No narrower margin deeper.** At 75 the cut saves 1.6% to 1.7% more of the tree at depths 8 and
+  9, but its errors at 9 go from 0.5 to 4.6 per 1000, and at 10 from 4.5 to 9.0. The shallow
+  search does not foretell the deep one better with depth, not at these depths.
+- **Nodes expected to fail low are where it errs.** There it holds 3.8% of the time at depth 7 and
+  is wrong 27% of those times: 2% of the nodes its cuts save, a sixth of its wrong cuts. At cut
+  nodes it is right 99.1%.
+- **Below beta it errs more.** With the evaluation under beta by up to 100, at cut nodes, it holds
+  29% to 39% at +100 and is right 92.7% to 97% up to depth 8, for 1% to 2% of the tree a depth.
+
+## E116: ProbCut from depth 6, not kept
+
+`ProbcutDepth` 6 on E112, bench 952302 (`external/build/e116`). Nodes to each depth on E108's
+positions, against E112: 0.932 at depth 10, 0.887 at 11, 0.877 at 13, **0.853 at 15**, with the
+same move in 85 of 110.
+
+| Match | Games | Result |
+|---|---|---|
+| E116 against E112, 30+0.3, SPRT [0, 10] | 1656 | +368 -381 =907, **-2.7 +/- 10.0**, pairs [30, 189, 398, 186, 25], **FAILED** |
+
+**Not kept.** As right per try as depth 7 by E115's count, and 15% fewer nodes to depth 15, yet
+level. Below depth 7 the shallow search is 2 plies, nearly the evaluation, and agreeing with the
+deep search 99% of the time did not make up for what the other 1% decide. Depth 7, where E112 put
+it, stays.
+
 ## Mistakes worth not repeating
 
 - **A gain at equal nodes is not a gain until its cost has been on the clock.** The prior from

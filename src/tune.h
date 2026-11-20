@@ -27,6 +27,11 @@
     X(NmpDepth,            4,     1,    8)                                                  \
     X(NmpBase,             5,     1,    8)                                                  \
     X(NmpDivisor,          4,     1,    12)                                                 \
+    /* The shallow search: from this depth, a node the evaluation puts above beta is       \
+     * searched this much shallower against beta plus the margin, and cut if that holds. */ \
+    X(ProbcutDepth,        7,     3,    12)                                                 \
+    X(ProbcutReduction,    4,     2,    8)                                                  \
+    X(ProbcutMargin,       100,   0,    400)                                                \
     /* Singular extension: from this depth, on a table entry at most this much shallower,  \
      * by a margin in sixteenths a ply. */                                                  \
     X(SingularDepth,       5,     3,    12)                                                 \

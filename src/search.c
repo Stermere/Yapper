@@ -559,6 +559,27 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, bool cut_n
         return SCORE_WIN - ply - 1;
     }
 
+    /* A node the evaluation puts above beta is searched a few plies shallower first, against a
+     * bound a margin above beta, and cut if even that holds: the shallow search of a node foretells
+     * the deep one, which is how Othello programs prune. A null move does this job elsewhere, and
+     * cannot here, because a pass costs a flat: its search holds at a tenth of the nodes it is
+     * tried at, nine tenths of which fail high anyway, E75. An even reduction, so both searches end
+     * with the same side to move. This node's list does not exist yet, so the shallow search can
+     * have its space, as the singular one does. */
+    if (!pv_node && !threats && !root && !excluded && depth >= ProbcutDepth && eval >= beta &&
+        b->ply >= 4 && abs(beta) < SCORE_WIN_BOUND) {
+        const int bound = beta + ProbcutMargin;
+        const int value =
+            search(w, bound - 1, bound, depth - ProbcutReduction, ply, cut_node, moves, scores);
+        if (atomic_load_explicit(&StopFlag, memory_order_relaxed)) {
+            return 0;
+        }
+        if (value >= bound) {
+            /* A win it found is a win at any depth. */
+            return value >= SCORE_WIN_BOUND ? value : value - ProbcutMargin;
+        }
+    }
+
     if (!pv_node && !threats && !root && !excluded) {
         if (depth >= NmpDepth && eval >= beta && b->ply >= 4 && abs(beta) < SCORE_WIN_BOUND) {
             const int reduction = NmpBase + depth / NmpDivisor;
