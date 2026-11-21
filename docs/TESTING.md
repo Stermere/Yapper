@@ -188,6 +188,8 @@ run at the default 0.002 barely moves and looks like a confirmation of the defau
 
 A run at `--nodes` never sees the `Time` tunables, and one at a clock tunes for that clock: keep
 them out of a run whose conditions cannot reach them, with `--params` or `--exclude`.
+`--softnodes n` plays datagen's budget, which `--nodes` does not: no iteration begun past `n`
+nodes, so every move comes from a finished one, and a cut-off at 4n.
 
 ## Viewing games
 

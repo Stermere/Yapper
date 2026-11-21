@@ -14,6 +14,11 @@
  * moves. */
 #define MAX_GAME_PLIES 4096
 
+/* A soft budget stops between iterations, so a score comes from a whole search. The next iteration
+ * can be far larger, and this many times the budget is where it is cut off. Datagen plays by it,
+ * and so does `go softnodes`, which lets a match play datagen's search. */
+#define SOFT_NODES_HARD 4
+
 typedef struct SearchLimits {
     int depth;      /* 0 for none */
     u64 nodes;      /* 0 for none */

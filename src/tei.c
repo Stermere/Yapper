@@ -151,6 +151,8 @@ static void handle_go(char *args) {
                 limits.depth = (int)number;
             } else if (strcmp(token, "nodes") == 0) {
                 limits.nodes = (u64)number;
+            } else if (strcmp(token, "softnodes") == 0) {
+                limits.soft_nodes = (u64)number;
             } else if (strcmp(token, "movetime") == 0) {
                 limits.movetime = number;
             } else if (strcmp(token, "wtime") == 0) {
@@ -166,6 +168,9 @@ static void handle_go(char *args) {
             }
         }
         token = strtok(NULL, " \t\r\n");
+    }
+    if (limits.soft_nodes && !limits.nodes) {
+        limits.nodes = limits.soft_nodes * SOFT_NODES_HARD;
     }
     search_start(&Root, RootHistory, RootHistoryCount, &limits);
 }

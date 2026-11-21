@@ -179,8 +179,11 @@ class Limits:
     inc: float = 0.0
     nodes: int = 0
     depth: int = 0
+    soft_nodes: int = 0  # datagen's budget: the engine cuts off at 4 times it
 
     def go(self, clocks: list[float]) -> str:
+        if self.soft_nodes:
+            return f"go softnodes {self.soft_nodes}" + (f" nodes {self.nodes}" if self.nodes else "")
         if self.nodes:
             return f"go nodes {self.nodes}"
         if self.depth:
@@ -242,7 +245,7 @@ def play_game(white: Engine, black: Engine, opening: list[str], size: int, halfk
         forfeit = "0-1" if color == takref.WHITE else "1-0"
         side = "white" if color == takref.WHITE else "black"
         mine = limits[color]
-        timed = not (mine.nodes or mine.depth)
+        timed = not (mine.nodes or mine.depth or mine.soft_nodes)
 
         position = "position startpos" + (" moves " + " ".join(played) if played else "")
         started = time.monotonic()
@@ -351,7 +354,9 @@ class Tally:
                 f"Elo {elo:+7.1f} +/- {error:5.1f}  pairs {self.pairs}")
 
 
-def limit_text(tc: str, nodes: int, depth: int) -> str:
+def limit_text(tc: str, nodes: int, depth: int, soft_nodes: int = 0) -> str:
+    if soft_nodes:
+        return f"{soft_nodes} soft nodes a move"
     if nodes:
         return f"{nodes} nodes a move"
     if depth:
@@ -366,8 +371,8 @@ def summary(args: argparse.Namespace, names: tuple[str, str], tally: Tally, llr:
     elo, error = pair_elo(tally.pairs)
     elo += 0.0  # an even score is -0.0
     score = (tally.wins + tally.draws / 2) / tally.games if tally.games else 0.0
-    dev_limit = limit_text(args.tc, args.dev_nodes, args.dev_depth)
-    base_limit = limit_text(args.tc, args.base_nodes, args.base_depth)
+    dev_limit = limit_text(args.tc, args.dev_nodes, args.dev_depth, args.dev_softnodes)
+    base_limit = limit_text(args.tc, args.base_nodes, args.base_depth, args.base_softnodes)
     limits = dev_limit if dev_limit == base_limit else f"{dev_limit} against {base_limit}"
     book = f"{Path(args.book).name}, seed {args.seed}" if args.book else f"no book, seed {args.seed}"
     lines = [
@@ -480,6 +485,9 @@ def main() -> int:
     parser.add_argument("--base-nodes", type=int, default=0)
     parser.add_argument("--dev-depth", type=int, default=0, help="a fixed depth limit, per move")
     parser.add_argument("--base-depth", type=int, default=0)
+    parser.add_argument("--dev-softnodes", type=int, default=0,
+                        help="datagen's budget, per move: no iteration begun past it, cut at 4x")
+    parser.add_argument("--base-softnodes", type=int, default=0)
     parser.add_argument("--book", help="one opening per line, as PTN moves")
     parser.add_argument("--games", type=int, default=0, help="stop here; 0 means 2000 under SPRT")
     parser.add_argument("--concurrency", type=int, default=max(1, (os.cpu_count() or 2) // 2))
@@ -507,8 +515,8 @@ def main() -> int:
         base_command=[base_path] + ([args.base_arg] if args.base_arg else []),
         dev_options={**split_options(args.dev_options), "HalfKomi": str(args.halfkomi)},
         base_options={**split_options(args.base_options), "HalfKomi": str(args.halfkomi)},
-        dev_limits=Limits(base_time, inc, args.dev_nodes, args.dev_depth),
-        base_limits=Limits(base_time, inc, args.base_nodes, args.base_depth),
+        dev_limits=Limits(base_time, inc, args.dev_nodes, args.dev_depth, args.dev_softnodes),
+        base_limits=Limits(base_time, inc, args.base_nodes, args.base_depth, args.base_softnodes),
         book=book, size=args.size, halfkomi=args.halfkomi)
 
     # A bad path or option must fail here: an initializer that raises makes a pool respawn

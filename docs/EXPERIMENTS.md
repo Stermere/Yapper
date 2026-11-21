@@ -5873,6 +5873,94 @@ it, where a search of 20,000 nodes ends at depth 7: on 99 of 159 positions from 
 10 to 40, and at 6 to 9 on the rest. So the networks carry most of these 47, and the clock readings
 say less about the data a new generation would hold.
 
+## E123: a search tuned for datagen's budget
+
+The user's idea, 2026-11-20: tune the search at the budget datagen plays and use that build for gen
+17's games alone, keeping today's tune for the engine that ships, which plays longer clocks. A plan
+names its engine and checks its bench, so a separate player for datagen changes neither the data's
+format nor what ships.
+
+**Datagen's budget is not `go nodes`.** A datagen search begins no iteration past its budget and
+is cut off at 4 times it (`SOFT_NODES_HARD`, now in `search.h`); `go nodes` stops where it is. On
+400 positions of gen 16's own games, scored plies 8 to 80, each from a fresh table at Hash 16
+(`external/build/e123/budget.py`), E121 reads:
+
+| Budget | Nodes a move, mean / median | Depth reached | ms a move |
+|---|---|---|---|
+| `go softnodes 20000`, datagen's | 29,714 / 27,466 | 7.88 | 12.3 |
+| `go nodes 20000` | 14,649 / 14,920 in its last finished iteration | 6.91 | 8.0 |
+
+So E122, played by `go nodes 20000`, measured a search a ply shallower than the one gen 17 would be
+played with. `go softnodes <n>` now gives datagen's budget over TEI, and match.py's
+`--dev-softnodes` and `--base-softnodes` and tune.py's `--softnodes` play it. Bench 1040418 from
+`make`, `make release` and `make TUNE=on`, `make check` passes, and 20 games of `yapper datagen`
+are byte for byte E121's. The tune build at its defaults reads the same nodes and depths at the
+same speed.
+
+Datagen today: 100 games on one core in 105.5 s, 96.5 plies a game and 111 openings rejected,
+about 3,400 games an hour a core.
+
+**The tune.** It stopped once, at pair 1520, when Windows refused to swap in the state file for a
+moment, held by something else on the machine; tune.py now retries that swap, and skips a save
+that keeps failing mid-run, since the next pair saves again. Resumed from 1520. 47 tunables: every
+one but the clock's 12, which a node budget never reaches, and `PriorDepth`, since equal nodes
+cannot see what a move costs to score (E100: the prior from depth 1 read +47 at equal nodes and -15
+on the clock). 20,000 pairs at 20,000 soft nodes, Hash 16, 6s_4ply, `r_end` 0.003, 8 at once
+(`external/build/e123/tune.sh`), about two and a half hours of play. Plus against minus over its
+40,000 games: +1.6 +/- 2.8.
+
+42 of the 47 would change. The largest moves, start to candidate: `QuiesceDepth` 1 to 2,
+`NmpDepth` 4 to 6, `ProbcutDepth` 7 to 9, `SingularDepth` 5 to 7, `SingularTtDepth` 3 to 1,
+`SingularMargin` 41 to 26, `LmrBase` 19 to 26, `LmrDepth` 3 to 1, `LmrCutNode`, `LmrPvNode` and
+`AnswerReduce` 1 to 0, `AspirationWindow` 21 to 46, `CorrRate` 5 to 18, `CorrRateMax` 86 to 148,
+`ThreatOne` 42 to 16, `OrderFlat` 91 to 180, `OrderRoadTheirs` 3918 to 2889, `HistoryLimit` 6300
+to 4311. Every value is in `python tools/tune.py --name e123-dg --report`.
+
+What it costs a move, on budget.py's 400 positions, one binary, start values run before and after:
+
+| Values | Nodes a move, mean / median | Depth reached | ms a move, mean / median |
+|---|---|---|---|
+| start | 29,714 / 27,466 | 7.88 | 12.58 / 11.27 |
+| candidate | 30,517 / 28,276 | 8.64 | 13.89 / 12.47 |
+
+Three quarters of a ply deeper for 10% more time a move, 2.7% of it in nodes and the rest a
+dearer node.
+
+| Match | Games | Result |
+|---|---|---|
+| Candidate against start values, one binary, 20,000 soft nodes, Hash 16, 6s_4ply, [0, 10] | 714 | **PASSED**, +290 -213 =211, **+37.6 +/- 20.4**, pairs [28, 60, 125, 95, 49] |
+
+**The datagen build.** Today's tree copied to `external/build/e123/dgsrc`, with the candidate's 42
+lines put in its `tune.h` by `external/build/e123/apply.py` (the values in `candidate.txt`), built
+as `yapper-dg.exe`: bench 792113. On budget.py's positions it reads 30,517 nodes and depth 8.64,
+the tune binary's numbers with the candidate's options to the node, so it plays what passed.
+
+**Datagen itself costs more than a move does.** 200 games, seed 7, 20,000 nodes, one core, the
+machine otherwise idle:
+
+| Build | Seconds | Positions |
+|---|---|---|
+| today's values | 237.5, again 234.4 with the same games | 19,645 |
+| candidate | 281.4 | 19,528 |
+| E87, which played gen 16 | 253.3 | 18,869 |
+
+So 19% more time a game than today's values, about 16% fewer games an hour, where budget.py read
+10% a move. Datagen keeps its table through a game, which budget.py does not; that is the likely
+difference, not measured. Against gen 16's own cost it is 11% more a game.
+
+**The gen 17 case, E122 again at datagen's budget.** E87 has no `go softnodes`, so its commit
+(6f79d12) was built again in `external/build/e123/e87src` with only that token added, cut off at 4
+times as its datagen.c was: bench 852343, as the binary that played. At this budget it reaches
+depth 8.25 on budget.py's positions, 13.39 ms a move; today's values reach 7.88.
+
+| Match | Games | Result |
+|---|---|---|
+| The datagen build against E87, 20,000 soft nodes, Hash 16 both, 6s_4ply, seed 1, 7 at once | 1000 | +510 -242 =248, **+95.4 +/- 19.1**, pairs [30, 59, 150, 135, 126] |
+
+E122 read +47.2 at `go nodes 20000`. The two moved together: datagen's budget against `go nodes`,
+and the tune; the SPRT above puts about 38 of the difference on the tune. So gen 17 played by this
+build would come from a player about 95 above gen 16's, at 11% more time a game.
+
 ## Mistakes worth not repeating
 
 - **A gain at equal nodes is not a gain until its cost has been on the clock.** The prior from

@@ -17,6 +17,7 @@ read from racetrack's `src/game.rs` and `src/engine.rs`, and PTN Ninja's `src/bo
 | `position tps <tps> [moves ...]` | |
 | `go wtime <ms> btime <ms> winc <ms> binc <ms>` | racetrack sends all four |
 | `go movetime <ms>`, `go depth <n>`, `go nodes <n>` | |
+| `go softnodes <n>` | Not TEI: datagen's budget, no iteration begun past `n` nodes and none past 4n unless `nodes` says otherwise, for matches that play datagen's search |
 | `go infinite` | `bestmove` waits for `stop`, as in UCI |
 | `stop`, `quit` | Answered at once |
 

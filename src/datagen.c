@@ -35,10 +35,6 @@
 #define DEVIATION_ONE_IN 10
 #define DEVIATION_MARGIN 40
 
-/* A budget stops between iterations, so a score comes from a whole search. The next iteration
- * can be far larger, and this is how much of one is allowed before it is cut off. */
-#define HARD_NODES_FACTOR 4
-
 /* Often enough for tools/datagen.py to show a run's progress: a job may play only a few hundred. */
 #define REPORT_EVERY 20
 
@@ -237,7 +233,7 @@ static bool play_game(DataGame *game, const DataConfig *config) {
     SearchLimits limits;
     memset(&limits, 0, sizeof(limits));
     limits.soft_nodes = config->nodes;
-    limits.nodes      = config->nodes * HARD_NODES_FACTOR;
+    limits.nodes      = config->nodes * SOFT_NODES_HARD;
     Outcome outcome   = ONGOING;
     int ending        = ENDING_RULES;
     while (outcome == ONGOING) {

@@ -213,6 +213,7 @@ class Run:
         self.batch = 1
         self.tc = "2+0.02"
         self.nodes = 0
+        self.soft_nodes = 0
         self.size = 6
         self.halfkomi = 4
         self.book: str | None = None
@@ -227,12 +228,13 @@ class Run:
 
     # -- persistence
 
-    def save(self) -> None:
+    def save(self, final: bool = False) -> None:
         RUNS.mkdir(parents=True, exist_ok=True)
         state = {
             "engine": self.engine, "params": [p.to_dict() for p in self.params],
             "total": self.total, "done": self.done, "batch": self.batch, "tc": self.tc,
-            "nodes": self.nodes, "size": self.size, "halfkomi": self.halfkomi, "book": self.book,
+            "nodes": self.nodes, "soft_nodes": self.soft_nodes, "size": self.size,
+            "halfkomi": self.halfkomi, "book": self.book,
             "hash": self.hash_mb, "concurrency": self.concurrency, "seed": self.seed,
             "cursor": self.cursor, "elapsed": self.elapsed, "rng": self.rng.getstate(),
             "tally": {"w": self.tally.wins, "l": self.tally.losses, "d": self.tally.draws,
@@ -240,15 +242,29 @@ class Run:
                       "endings": self.tally.endings},
         }
         temp = self.state_path.with_suffix(".tmp")
-        temp.write_text(json.dumps(state, indent=1), encoding="utf-8")
-        os.replace(temp, self.state_path)
+        text = json.dumps(state, indent=1)
+        # Windows refuses the swap while anything, a virus scan or an indexer, holds the file for
+        # a moment, which once ended a run at pair 1520 (E123). A state a pair old is what
+        # --resume expects anyway, so mid-run a save that keeps failing waits for the next pair.
+        tries = 50 if final else 10
+        for attempt in range(tries):
+            try:
+                temp.write_text(text, encoding="utf-8")
+                os.replace(temp, self.state_path)
+                return
+            except PermissionError:
+                if attempt + 1 == tries:
+                    if final:
+                        raise
+                    return
+                time.sleep(0.1)
 
     def load(self) -> None:
         d = json.loads(self.state_path.read_text(encoding="utf-8"))
         self.engine = d["engine"]
         self.params = [Param.from_dict(p) for p in d["params"]]
         self.total, self.done, self.batch = d["total"], d["done"], d["batch"]
-        self.tc, self.nodes = d["tc"], d["nodes"]
+        self.tc, self.nodes, self.soft_nodes = d["tc"], d["nodes"], d.get("soft_nodes", 0)
         self.size, self.halfkomi = d["size"], d["halfkomi"]
         self.book, self.hash_mb, self.concurrency = d["book"], d["hash"], d["concurrency"]
         self.seed, self.cursor, self.elapsed = d["seed"], d["cursor"], d["elapsed"]
@@ -271,12 +287,20 @@ class Run:
                     csv.writer(out).writerows(kept)
 
     def log_row(self, result: float) -> None:
+        """The history is for reading afterwards, so a row a held file keeps out is let go
+        rather than allowed to stop the run."""
         new = not self.csv_path.exists()
-        with self.csv_path.open("a", newline="", encoding="utf-8") as out:
-            writer = csv.writer(out)
-            if new:
-                writer.writerow(["pairs", "result"] + [p.name for p in self.params])
-            writer.writerow([self.done, f"{result:+g}"] + [f"{p.value:.3f}" for p in self.params])
+        for _ in range(10):
+            try:
+                with self.csv_path.open("a", newline="", encoding="utf-8") as out:
+                    writer = csv.writer(out)
+                    if new:
+                        writer.writerow(["pairs", "result"] + [p.name for p in self.params])
+                    writer.writerow([self.done, f"{result:+g}"] +
+                                    [f"{p.value:.3f}" for p in self.params])
+                return
+            except PermissionError:
+                time.sleep(0.1)
 
     # -- the algorithm
 
@@ -323,6 +347,8 @@ class Run:
     # -- display
 
     def condition(self) -> str:
+        if self.soft_nodes:
+            return f"{self.soft_nodes} soft nodes"
         return f"{self.nodes} nodes" if self.nodes else self.tc
 
     def movers(self, count: int) -> list[Param]:
@@ -356,13 +382,20 @@ class Run:
             print("\nNo parameter has moved far enough to round to a new value yet.")
             return
         options = ",".join(f"{p.name}={rounded(p.value)}" for p in changed)
-        clock = f"--dev-nodes {self.nodes} --base-nodes {self.nodes}" if self.nodes \
-            else f"--tc {self.tc}"
+        if self.soft_nodes:
+            clock = f"--dev-softnodes {self.soft_nodes} --base-softnodes {self.soft_nodes}"
+        elif self.nodes:
+            clock = f"--dev-nodes {self.nodes} --base-nodes {self.nodes}"
+        else:
+            clock = f"--tc {self.tc}"
+        # The table size the run played at, or the SPRT plays another engine.
+        hashes = (f",Hash={self.hash_mb} --base-options Hash={self.hash_mb}" if self.hash_mb
+                  else "")
         book = f" --book {self.book}" if self.book else ""
         print("\nThe candidate, against the values it started from, by the same binary:")
         print(f"  python tools/match.py --dev {self.engine} --base {self.engine} "
-              f"--dev-options {options} --sprt --size {self.size} --halfkomi {self.halfkomi} "
-              f"{clock}{book} --ptn external/games/tune/{self.name}.ptn")
+              f"--dev-options {options}{hashes} --sprt --size {self.size} "
+              f"--halfkomi {self.halfkomi} {clock}{book} --ptn external/games/tune/{self.name}.ptn")
         print("\nIf it passes, these are its lines in src/tune.h:")
         for p in changed:
             print(f"  X({p.name}, {rounded(p.value)}, {p.lo}, {p.hi})")
@@ -387,7 +420,8 @@ def play(run: Run, started_at: float) -> str:
     if run.hash_mb:
         options["Hash"] = str(run.hash_mb)
     base, inc = match.parse_tc(run.tc)
-    config = Config(command, options, match.Limits(base, inc, run.nodes, 0), run.size, run.halfkomi)
+    config = Config(command, options, match.Limits(base, inc, run.nodes, 0, run.soft_nodes),
+                    run.size, run.halfkomi)
 
     # A bad path or option must fail here, before a pool of workers each fails on it.
     try:
@@ -437,11 +471,11 @@ def play(run: Run, started_at: float) -> str:
         print(f"\n{reason}. The state is saved, and --resume carries on from pair {run.done}.",
               flush=True)
         pool.shutdown(wait=False, cancel_futures=True)
-        run.save()
+        run.save(final=True)
         run.write_status(started_at)
         return "stopped"
     pool.shutdown()
-    run.save()
+    run.save(final=True)
     run.write_status(started_at)
     run.pause_path.unlink(missing_ok=True)
     if run.done < run.total:
@@ -463,6 +497,9 @@ def main() -> int:
     parser.add_argument("--nodes", type=int, default=0,
                         help="a fixed nodes limit a move instead of the clock, which the Time "
                              "tunables never see")
+    parser.add_argument("--softnodes", type=int, default=0,
+                        help="datagen's budget a move instead: no iteration begun past it, cut at "
+                             "4x; the Time tunables never see it either")
     parser.add_argument("--size", type=int, default=6)
     parser.add_argument("--halfkomi", type=int, default=4)
     parser.add_argument("--book", help="one opening per line, as PTN moves")
@@ -543,7 +580,7 @@ def main() -> int:
         run.engine = engine
         run.total = args.pairs
         run.batch = max(1, args.batch)
-        run.tc, run.nodes = args.tc, args.nodes
+        run.tc, run.nodes, run.soft_nodes = args.tc, args.nodes, args.softnodes
         run.size, run.halfkomi = args.size, args.halfkomi
         run.book = args.book
         run.hash_mb = args.hash
@@ -575,7 +612,7 @@ def main() -> int:
         return 0
 
     if not args.resume:
-        run.save()
+        run.save(final=True)
     outcome = play(run, time.time() - run.elapsed)
     run.report()
     return 1 if outcome == "stopped" else 0

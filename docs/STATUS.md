@@ -271,9 +271,11 @@ road to finish reduced a ply less was built and not played, E118. E111 timed a n
 takes 35% of it, the prior 16%, and both sides' road ends 11%, worked out afresh 1.6 times a node,
 which could be carried move by move for up to a tenth, not yet built. E115 found ProbCut's shallow
 search as right from depth 6 as from 7, no better deeper at a narrower margin, and wrong most often
-at nodes expected to fail low. At the 20,000 nodes a move datagen plays, E121 beats E87, which
-played gen 16, by **+47.2 +/- 19.1** over 1000 games, E122: most of that is the networks, since the
-search's gains since came on clocks that reach depth 10 and more.
+at nodes expected to fail low. At `go nodes 20000`, E121 beats E87, which played gen 16, by
+**+47.2 +/- 19.1** over 1000 games, E122; but datagen's budget is soft, a ply deeper. A search tuned
+at that budget for datagen alone, `src/tune.h` unchanged, passed +37.6 +/- 20.4 against today's
+values, and as a build beats E87 at datagen's budget by **+95.4 +/- 19.1**, at 11% more time a game,
+E123.
 
 ## Done and verified
 

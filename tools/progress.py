@@ -192,6 +192,7 @@ def read_status(path: Path) -> dict | None:
         run.update(llr=s["llr"], lower=s["lower"], upper=s["upper"])
     if s.get("spsa"):
         run["moved"] = moved(s["spsa"])
+        run["spsa"] = s["spsa"]
         run["resumable"] = True
     run["dir"] = folder(Path(run["ptn"]).parent) if run["ptn"] else ""
     _statuses[path] = (key, run)
@@ -586,6 +587,18 @@ td.r { text-align:right; white-space:nowrap; }
 h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:22px 0 8px; }
 .warn { color:var(--warn); font-weight:600; }
 #stale { color:var(--warn); }
+.params { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:6px 16px;
+  margin-top:10px; font-size:13px; }
+/* One line whatever the lengths, so every cell is the same height and the rows stay aligned. */
+.p .pt { display:flex; justify-content:space-between; gap:8px; white-space:nowrap; }
+.p .pn { color:var(--mute); min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.p .pt .num { flex-shrink:0; }
+.p.ch .pn { color:var(--ink); font-weight:600; }
+.rng { position:relative; height:4px; background:var(--track); border-radius:99px; margin-top:3px; }
+.rng u { position:absolute; top:-2px; bottom:-2px; width:1px; background:var(--mute); }
+.rng i { position:absolute; top:-2px; width:8px; height:8px; margin-left:-4px; border-radius:99px;
+  background:var(--run); }
+.p.ch .rng i { background:var(--warn); }
 @media (max-width:560px) { .hide { display:none; } }
 </style></head>
 <body><main>
@@ -615,6 +628,20 @@ function jobScore(r) {
   if (r.kind === 'fit') return r.averaged ? `held out <b>${r.averaged[0].toFixed(4)}</b>, results <b>${r.averaged[1].toFixed(4)}</b>` : '';
   if (r.kind === 'datagen') return `${r.positions.toLocaleString()} positions`;
   return score(r, true);
+}
+// Half up, as tools/tune.py rounds what it would ship.
+const shipped = x => Math.floor(x + 0.5);
+// In src/tune.h's order, which never changes, so a parameter stays where the eye left it.
+function params(spsa) {
+  const at = (x, p) => 100 * (x - p[3]) / Math.max(1, p[4] - p[3]);
+  const changed = spsa.filter(p => shipped(p[2]) !== shipped(p[1])).length;
+  const cells = spsa.map(p => {
+    const ch = shipped(p[2]) !== shipped(p[1]);
+    return `<div class="p${ch ? ' ch' : ''}" title="range ${p[3]} to ${p[4]}; would ship as ${shipped(p[2])}">
+      <div class="pt"><span class="pn">${esc(p[0])}</span><span class="num">${p[1]} → <b>${p[2].toFixed(1)}</b></span></div>
+      <div class="rng"><u style="left:${at(p[1], p)}%"></u><i style="left:${at(p[2], p)}%"></i></div></div>`;
+  }).join('');
+  return line(`${spsa.length} parameters, <b>${changed}</b> would ship changed`) + `<div class="params">${cells}</div>`;
 }
 function live(r, now) {
   let bar = '', facts = [], lines = '';
@@ -650,7 +677,7 @@ function live(r, now) {
     <span class="tag ${r.status}">${r.status.toUpperCase()}</span></div>${bar}
     <div class="facts" style="margin-top:${bar ? 0 : 8}px">${facts.join('')}</div>
     <div class="facts num" style="margin-top:4px">${score(r)}${r.pairs ? ' &nbsp; pairs [' + r.pairs.join(', ') + ']' : ''}</div>${lines}${llr}
-    ${r.moved ? '<div class="facts num" style="margin-top:4px">moved ' + esc(r.moved) + '</div>' : ''}</div>`;
+    ${r.spsa ? params(r.spsa) : r.moved ? line('moved ' + esc(r.moved)) : ''}</div>`;
 }
 function render(m) {
   const now = m.now, runs = m.runs;
