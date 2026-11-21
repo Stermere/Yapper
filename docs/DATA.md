@@ -124,7 +124,11 @@ What a position gives a trainer, with nothing regenerated:
 
 ## Training a network
 
-One network plays every size, so one fit reads every size's games at once:
+Each size has a network of its own, `src/net<size>.h`, and a fit writes one for each size its
+games have, into the folder given first. Sizes listed together share the filters where their boards
+overlap, which is how every network up to E97 was fitted, all sizes in one list. A list of one
+size fits that size alone and leaves the other headers as they are, E119. The recipes below are
+as they were run, when the first argument was the one file `src/net.h`:
 
 ```sh
 E=external/data/early
@@ -165,15 +169,20 @@ files of gen 15 it never read, gen 16's 6x6 files home at 07:53 on 2026-11-16 an
 other sizes, each listed once after the rest: `external/build/e89/full.list`, 20,775 listings,
 613M positions.
 
-E97's, which plays now, drops 6x6's generations before 15, which E90 found a weight, takes every
-gen 16 6x6 file home at 05:27 on 2026-11-17, fits twice as long with the two big boards sitting
-out the first half, E92, and decays the filters, E97 (`external/build/e99/full.list`, 31,232
-listings, 711M positions):
+E97's, which plays now on every size but 6x6, drops 6x6's generations before 15, which E90 found
+a weight, takes every gen 16 6x6 file home at 05:27 on 2026-11-17, fits twice as long with the two
+big boards sitting out the first half, E92, and decays the filters, E97
+(`external/build/e99/full.list`, 31,232 listings, 711M positions):
 
 ```sh
 yapper nntrain src/net.h 1 0.7 16 15 --share 7=0.33 --share 8=0.2 --join 7=9 --join 8=9 \
     --decay 0.01 --lambda 3=0.5 --lambda 4=0.5 --smooth 4 @external/build/e99/full.list
 ```
+
+6x6 plays E108's: the same command on E97's list with the 7,408 gen 16 files it never read, every
+file of gen 16 (`external/build/e108/full.list`, 38,640 listings, 866M positions), of whose headers
+only `net6.h` was kept, E121. Fitted again on 6x6's games alone, the same options played level with
+E97's network, about 6 below this one: E120.
 
 `--join 7=9` keeps 7x7's positions out of every epoch before the ninth. The filters are shared by
 every size, and a size with few games for its squares is fitted best late and briefly: the big
@@ -191,15 +200,15 @@ the positions, it hardly moved the network. A file listed again is read once and
 Windows starts no command longer than 32,767 characters, so a long list goes in a file, a path a
 line, `#` for a comment, and is given as `@file`: `ls ... > games.list`, then `@games.list` among
 the games. The arguments are the
-output, the one-in-N positions to keep, `lambda`, the epochs and the threads, then the options,
-then the games. A size is in the network when the games have some of it, and a size they do not
-have counts flats. The engine picks up `net.h` the next time it is built. After swapping one in by
-hand, check that bench changed: a copied file can keep an older date, and `make` will then quietly
-do nothing.
+folder the headers go in, the one-in-N positions to keep, `lambda`, the epochs and the threads,
+then the options, then the games. A fit writes a header for each size the games have and no other,
+and a size with no header counts flats. The engine picks up a header the next time it is built.
+After swapping one in by hand, check that bench changed: a copied file can keep an older date, and
+`make` will then quietly do nothing. Bench plays 4x4 to 7x7, so a new 3x3 or 8x8 does not move it.
 
 The width is `NN_FILTERS` in `src/nn.h`, a multiple of 32, in each of the `NN_SIDES` views, and
-the head is `NN_L2` and `NN_L3`. A `net.h` of another shape stops the build, so to fit a new one, move `net.h` aside, build, which
-then counts flats, and fit.
+the head is `NN_L2` and `NN_L3`. A header of another shape stops the build, so to fit a new one,
+move the headers aside, build, which then counts flats, and fit.
 
 `--seed n`, before the game files, picks other first weights and another order of the
 positions, which is how to see how far two fits of the same games play apart. `--share 8=0.2`
@@ -221,12 +230,17 @@ half a flat from one of its moves to its next in level middle games, and the lat
 further, so the mean is the steadier target. The data does not change: the trainer reads ahead in
 the game it already holds. It gained 16 on E49's games and 28 more on gen 13's: E68, E70.
 
-`--warm` starts the fit from the network the binary was built with instead of random weights, and
-`--from net.h` from that file, so any build can carry on any network of its shape; either prints
-the held-out loss before the first step, so the report says what the fit added. `--rate r`
-sets the first step's rate, which then falls on the usual cosine; a fit from a network that has
-already learned wants a smaller one than the 0.002 a fit from nothing starts at. A warm fit at a
-rate near zero writes back the `net.h` it started from, byte for byte.
+`--warm` starts each size in the games from the network the binary was built with instead of
+random weights, and `--from net6.h`, given once a size, from that file, so any build can carry on
+any network of its shape; either prints the held-out loss before the first step, so the report says
+what the fit added. Sizes started together must agree where their boards share the grid, as sizes
+fitted together always have; once one has been fitted alone, start it alone. Under `--from`, a
+size in the games with no file of its own starts its head, and any cells no file reaches, from
+random weights, which is how a size can start from another's filters: `--from src/net6.h` with
+7x7's games takes 6x6's filters for all of 7x7's lines but the middle one. `--rate r` sets the first
+step's rate, which then falls on the usual cosine; a fit from a network that has already learned
+wants a smaller one than the 0.002 a fit from nothing starts at. A warm fit at a rate near zero
+writes back the header it started from, byte for byte.
 
 Only positions the evaluation is really asked about are used. A side able to win on the spot, a
 road being answered, a forced result and the random plies all go to the search rather than to a

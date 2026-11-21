@@ -1,6 +1,6 @@
 /* nn.h - the network: a position's stacks summed into hidden units, and those units scored.
- * docs/ARCHITECTURE.md says why it has this shape. One network plays every size: the filters are
- * shared, and each size has a bias, output and skip of its own. */
+ * docs/ARCHITECTURE.md says why it has this shape. Every size has a network of its own in this
+ * shape, compiled in from src/net<size>.h, and only the size in play is spread into a table. */
 #ifndef NN_H
 #define NN_H
 
@@ -64,16 +64,11 @@
 #define NN_RESERVE_UNIT 16
 #define NN_KOMI_UNIT    4
 
-/* A filter is laid on a grid of NN_GRID by NN_GRID. A board sits on it with its edges on the
- * grid's edges, so a corner, an edge and the line beside it are the same weights on every size,
- * and only the middle differs. */
-#define NN_GRID MAX_SIZE
-
 /* Weights as a trainer writes them for one size: each filter once, before the symmetries are
- * applied, and that size's own bias, output, skip and head. A pool is [view][filter], the side to
- * move's view first. */
+ * applied, with a cell for each square of that size, and its bias, output, skip and head. A pool
+ * is [view][filter], the side to move's view first. */
 typedef struct NNWeights {
-    const i16 *filters; /* [cell][input][filter], cells rank by rank on the grid */
+    const i16 *filters; /* [cell][input][filter], a cell a square, rank by rank */
     const i16 *bias;    /* [filter], the same in both views */
     const i16 *output;  /* [bucket][pool] */
     const i32 *skip;    /* [bucket][4]: lead, reserve, komi and a constant, in 64ths */
@@ -101,8 +96,10 @@ typedef struct NNInputs {
     int komi;    /* in half flats */
 } NNInputs;
 
-/* Builds the networks compiled into the binary. Must run once, after board_init(). */
-void nn_init(void);
+/* Readies the network compiled in for `size`, unless one is already installed there, and frees
+ * every other size's table: a table is tens of megabytes, and a game plays one size. Not while a
+ * search runs. False if out of memory; true for a size with no network, which counts flats. */
+bool nn_select(int size);
 
 /* Replaces the network for a size, or removes it with NULL. False if out of memory. */
 bool nn_install(int size, const NNWeights *weights);
@@ -112,8 +109,8 @@ const NNWeights *nn_builtin(int size);
 
 bool nn_ready(int size);
 
-/* The cell of the grid whose weights square `sq` of a board of `size` reads under symmetry `g`,
- * the square counted rank by rank on that board. The trainer uses it too. */
+/* The cell whose weights square `sq` of a board of `size` reads under symmetry `g`, both counted
+ * rank by rank on that board. The trainer uses it too. */
 int nn_cell(int size, int g, int sq);
 
 /* A square's token as stored in a frame. */

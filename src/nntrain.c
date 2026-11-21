@@ -1,4 +1,5 @@
-/* nntrain.c - fits the network to self-play games, every size in them at once. It lives in the
+/* nntrain.c - fits the networks of the sizes in self-play games and writes src/net<size>.h for
+ * each, so a list of one size's games fits that size alone. It lives in the
  * binary because it reads millions of positions through the board, which would take Python
  * hours, and it reads a position the way play does, through nn_feature() and eval_net_inputs(),
  * so the two cannot drift apart. It trains in floating point with each filter stored once, as
@@ -18,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #include "bitboard.h"
@@ -29,10 +31,6 @@
 #include "nn.h"
 #include "search.h"
 #include "thread.h"
-
-#if __has_include("net.h")
-#include "net.h"
-#endif
 
 #define NT_MAX_THREADS 64
 #define NT_BATCH       16384
@@ -77,6 +75,21 @@
 
 /* Bias, output and skip come a set per size, indexed by the size. */
 #define NT_SLOTS (MAX_SIZE + 1)
+
+/* The fit lays the filters on one grid of NT_GRID by NT_GRID cells, each board with its edges on
+ * the grid's edges, so sizes fitted together share a corner, an edge and the lines beside it, and
+ * only the middle differs. The engine keeps each size's own cells, which is the grid's part that
+ * size reaches, so a size fitted alone is the same fit either way. */
+#define NT_GRID MAX_SIZE
+
+/* Line `x` of a board of `n` on the grid: the near half counted from one edge and the rest from
+ * the other. */
+static int nt_on_grid(int x, int n) { return x < (n + 1) / 2 ? x : NT_GRID - n + x; }
+
+/* The grid cell of a size's cell, as nn_cell() counts them. */
+static int nt_grid_cell(int size, int cell) {
+    return nt_on_grid(cell / size, size) * NT_GRID + nt_on_grid(cell % size, size);
+}
 
 /* A position's stacks, as the kernels are given them, have a slot this long. */
 #define NT_SLOT_SQUARES (MAX_SIZE * MAX_SIZE)
@@ -1120,7 +1133,7 @@ static float model_random(float width) {
 }
 
 static bool model_init(NTModel *model, u64 seed) {
-    model->bias_at    = (u64)NN_GRID * NN_GRID * NN_INPUTS * NN_FILTERS;
+    model->bias_at    = (u64)NT_GRID * NT_GRID * NN_INPUTS * NN_FILTERS;
     model->output_at  = model->bias_at + NT_SLOTS * NN_FILTERS;
     model->skip_at    = model->output_at + NT_SLOTS * NN_BUCKETS * NN_POOLS;
     model->l2_at      = model->skip_at + NT_SLOTS * NN_BUCKETS * 4;
@@ -1141,7 +1154,7 @@ static bool model_init(NTModel *model, u64 seed) {
     for (int n = MIN_SIZE; n <= MAX_SIZE; n++) {
         for (int g = 0; g < NN_ORIENTATIONS; g++) {
             for (int sq = 0; sq < n * n; sq++) {
-                model->image[n][g][sq] = nn_cell(n, g, sq);
+                model->image[n][g][sq] = nt_grid_cell(n, nn_cell(n, g, sq));
             }
         }
     }
@@ -1177,74 +1190,118 @@ static bool model_init(NTModel *model, u64 seed) {
     return true;
 }
 
-/* The network this build plays, as the fit's weights. net.h holds them in the fit's own order, so
- * weight `i` is the i-th of its arrays laid end to end, and snapping gives back the same integers.
- */
-static bool model_warm(NTModel *model) {
-#ifdef NET_H
-    for (u64 i = 0; i < model->count; i++) {
-        const long stored = i < model->bias_at      ? NetFilters[i]
-                            : i < model->output_at  ? NetBias[i - model->bias_at]
-                            : i < model->skip_at    ? NetOutput[i - model->output_at]
-                            : i < model->l2_at      ? NetSkip[i - model->skip_at]
-                            : i < model->l2_skip_at ? NetL2[i - model->l2_at]
-                            : i < model->l2_bias_at ? NetL2Skip[i - model->l2_skip_at]
-                            : i < model->l3_at      ? NetL2Bias[i - model->l2_bias_at]
-                            : i < model->l3_bias_at ? NetL3[i - model->l3_at]
-                            : i < model->l4_at      ? NetL3Bias[i - model->l3_bias_at]
-                                                    : NetL4[i - model->l4_at];
-        model->p[i]       = (float)((double)stored / unit_of(model, i));
-        snap(model, i);
+/* One size's network, as the engine is given it, as the fit's weights: its cells onto the grid and
+ * its head into its slot. Snapping gives back the same integers. `taken` marks the grid cells an
+ * earlier size gave, which must agree, since sizes fitted together share them. */
+static bool model_take(NTModel *model, int size, const NNWeights *w, bool *taken) {
+    const u64 row = (u64)NN_INPUTS * NN_FILTERS;
+    for (int cell = 0; cell < size * size; cell++) {
+        const int at = nt_grid_cell(size, cell);
+        for (u64 k = 0; k < row; k++) {
+            const u64 i  = (u64)at * row + k;
+            const long v = w->filters[(u64)cell * row + k];
+            if (taken[at] && grid(model, i, model->p[i]) != v) {
+                printf("the %dx%d filters differ from another size's where both sit on the grid, "
+                       "so the two cannot start one fit\n",
+                       size, size);
+                return false;
+            }
+            model->p[i] = (float)((double)v / unit_of(model, i));
+            snap(model, i);
+        }
+        taken[at] = true;
+    }
+    const struct {
+        u64 at, count;
+        const void *values;
+        bool wide;
+    } parts[] = {
+        {model->bias_at, NN_FILTERS, w->bias, false},
+        {model->output_at, NN_BUCKETS * NN_POOLS, w->output, false},
+        {model->skip_at, NN_BUCKETS * 4, w->skip, true},
+        {model->l2_at, NN_BUCKETS * NN_L2 * NN_POOLS, w->l2, false},
+        {model->l2_skip_at, NN_BUCKETS * NN_L2 * 3, w->l2_skip, false},
+        {model->l2_bias_at, NN_BUCKETS * NN_L2, w->l2_bias, true},
+        {model->l3_at, NN_BUCKETS * NN_L3 * NN_L2, w->l3, false},
+        {model->l3_bias_at, NN_BUCKETS * NN_L3, w->l3_bias, true},
+        {model->l4_at, NN_BUCKETS * NN_L3, w->l4, false},
+    };
+    for (size_t p = 0; p < sizeof(parts) / sizeof(parts[0]); p++) {
+        for (u64 j = 0; j < parts[p].count; j++) {
+            const u64 i  = parts[p].at + (u64)size * parts[p].count + j;
+            const long v = parts[p].wide ? (long)((const i32 *)parts[p].values)[j]
+                                         : (long)((const i16 *)parts[p].values)[j];
+            model->p[i]  = (float)((double)v / unit_of(model, i));
+            snap(model, i);
+        }
     }
     return true;
-#else
-    (void)model;
-    return false;
-#endif
 }
 
-/* A net.h this trainer wrote, as the weights to start from: what model_warm() reads from the
- * network built in, read from a file instead, so any build can carry on any network. */
-static bool model_warm_file(NTModel *model, const char *path) {
+/* The networks this build plays for the sizes in `sizes`, as the fit's weights. */
+static bool model_warm(NTModel *model, int sizes, bool *taken) {
+    for (int size = MIN_SIZE; size <= MAX_SIZE; size++) {
+        if (!(sizes >> size & 1)) {
+            continue;
+        }
+        if (!nn_builtin(size)) {
+            printf("this build has no %dx%d network to start from\n", size, size);
+            return false;
+        }
+        if (!model_take(model, size, nn_builtin(size), taken)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* A net<size>.h this trainer wrote, as the weights to start from: what model_warm() takes from a
+ * network built in, read from a file instead, so any build can carry on any network. A file of
+ * another shape holds other counts than this build's. */
+static bool model_warm_file(NTModel *model, const char *path, bool *taken) {
     NTFile f = {.path = path};
     if (!nt_read_file(&f)) {
         return false;
     }
-    char *text   = (char *)f.bytes;
-    text[f.size] = 0;
+    char *text      = (char *)f.bytes;
+    text[f.size]    = 0;
+    const char *tag = "static const i16 Net";
+    const char *at0 = strstr(text, tag);
+    int size        = 0;
+    if (!at0 || sscanf(at0 + strlen(tag), "%d", &size) != 1 || size < MIN_SIZE || size > MAX_SIZE) {
+        printf("%s is not a network this trainer wrote\n", path);
+        free(text);
+        return false;
+    }
+    static i16 filters[SQUARE_COUNT * NN_INPUTS * NN_FILTERS];
+    static i16 bias[NN_FILTERS], output[NN_BUCKETS * NN_POOLS];
+    static i32 skip[NN_BUCKETS * 4];
+    static i16 l2[NN_BUCKETS * NN_L2 * NN_POOLS], l2_skip[NN_BUCKETS * NN_L2 * 3];
+    static i16 l3[NN_BUCKETS * NN_L3 * NN_L2], l4[NN_BUCKETS * NN_L3];
+    static i32 l2_bias[NN_BUCKETS * NN_L2], l3_bias[NN_BUCKETS * NN_L3];
     const struct {
         const char *name;
-        int value;
-    } shape[] = {{"#define NET_FILTERS ", NN_FILTERS},
-                 {"#define NET_SIDES ", NN_SIDES},
-                 {"#define NET_L2 ", NN_L2},
-                 {"#define NET_L3 ", NN_L3}};
-    for (size_t i = 0; i < sizeof(shape) / sizeof(shape[0]); i++) {
-        const char *at = strstr(text, shape[i].name);
-        if (!at || atoi(at + strlen(shape[i].name)) != shape[i].value) {
-            printf("%s is a network of another shape than this build's\n", path);
-            free(text);
-            return false;
-        }
-    }
-    static const char *const names[] = {"NetFilters[", "NetBias[",   "NetOutput[", "NetSkip[",
-                                        "NetL2[",      "NetL2Skip[", "NetL2Bias[", "NetL3[",
-                                        "NetL3Bias[",  "NetL4["};
-    const u64 starts[]               = {0,
-                                        model->bias_at,
-                                        model->output_at,
-                                        model->skip_at,
-                                        model->l2_at,
-                                        model->l2_skip_at,
-                                        model->l2_bias_at,
-                                        model->l3_at,
-                                        model->l3_bias_at,
-                                        model->l4_at,
-                                        model->count};
-    for (int a = 0; a < 10; a++) {
-        char *at = strstr(text, names[a]);
+        void *values;
+        u64 count;
+        bool wide;
+    } arrays[] = {
+        {"Filters", filters, (u64)size * size * NN_INPUTS * NN_FILTERS, false},
+        {"Bias", bias, NN_FILTERS, false},
+        {"Output", output, NN_BUCKETS * NN_POOLS, false},
+        {"Skip", skip, NN_BUCKETS * 4, true},
+        {"L2", l2, NN_BUCKETS * NN_L2 * NN_POOLS, false},
+        {"L2Skip", l2_skip, NN_BUCKETS * NN_L2 * 3, false},
+        {"L2Bias", l2_bias, NN_BUCKETS * NN_L2, true},
+        {"L3", l3, NN_BUCKETS * NN_L3 * NN_L2, false},
+        {"L3Bias", l3_bias, NN_BUCKETS * NN_L3, true},
+        {"L4", l4, NN_BUCKETS * NN_L3, false},
+    };
+    for (size_t a = 0; a < sizeof(arrays) / sizeof(arrays[0]); a++) {
+        char name[32];
+        snprintf(name, sizeof(name), "Net%d%s[", size, arrays[a].name);
+        char *at = strstr(text, name);
         at       = at ? strchr(at, '{') : NULL;
-        u64 i    = starts[a];
+        u64 j    = 0;
         while (at) {
             at += strspn(at + 1, " ,\t\r\n") + 1;
             if (*at == '}') {
@@ -1252,22 +1309,30 @@ static bool model_warm_file(NTModel *model, const char *path) {
             }
             char *end    = NULL;
             const long v = strtol(at, &end, 10);
-            if (end == at || i == starts[a + 1]) {
+            if (end == at || j == arrays[a].count) {
                 at = NULL;
                 break;
             }
-            model->p[i] = (float)((double)v / unit_of(model, i));
-            snap(model, i++);
+            if (arrays[a].wide) {
+                ((i32 *)arrays[a].values)[j++] = (i32)v;
+            } else {
+                ((i16 *)arrays[a].values)[j++] = (i16)v;
+            }
             at = end - 1;
         }
-        if (!at || i != starts[a + 1]) {
-            printf("%s: %.*s holds other than %llu weights\n", path, (int)strlen(names[a]) - 1,
-                   names[a], (unsigned long long)(starts[a + 1] - starts[a]));
+        if (!at || j != arrays[a].count) {
+            printf("%s: %.*s holds other than %llu weights\n", path, (int)strlen(name) - 1, name,
+                   (unsigned long long)arrays[a].count);
             free(text);
             return false;
         }
     }
     free(text);
+    const NNWeights w = {filters, bias, output, skip, l2, l2_skip, l2_bias, l3, l3_bias, l4};
+    if (!model_take(model, size, &w, taken)) {
+        return false;
+    }
+    printf("starting %dx%d from %s\n", size, size, path);
     return true;
 }
 
@@ -1318,9 +1383,18 @@ static void quantise_model(const NTModel *model, NTQuantised *q) {
     }
 }
 
-/* What the engine is given for one size. */
-static NNWeights weights_for(const NTQuantised *q, int size) {
-    return (NNWeights){q->filters,
+/* A size's cells of the grid, as the engine keeps them. */
+static void local_filters(const NTQuantised *q, int size, i16 *out) {
+    const u64 row = (u64)NN_INPUTS * NN_FILTERS;
+    for (int cell = 0; cell < size * size; cell++) {
+        memcpy(out + (u64)cell * row, q->filters + (u64)nt_grid_cell(size, cell) * row,
+               row * sizeof(i16));
+    }
+}
+
+/* What the engine is given for one size, with `filters` from local_filters(). */
+static NNWeights weights_for(const NTQuantised *q, int size, const i16 *filters) {
+    return (NNWeights){filters,
                        q->bias + size * NN_FILTERS,
                        q->output + size * NN_BUCKETS * NN_POOLS,
                        q->skip + size * NN_BUCKETS * 4,
@@ -1332,9 +1406,10 @@ static NNWeights weights_for(const NTQuantised *q, int size) {
                        q->l4 + size * NN_BUCKETS * NN_L3};
 }
 
-static bool write_array(FILE *out, const char *type, const char *name, const char *length,
-                        const void *values, u64 count, bool wide) {
-    fprintf(out, "static const %s %s[%s] = {\n", type, name, length);
+/* No length is written: the engine checks the one the values give. */
+static bool write_array(FILE *out, const char *type, const char *name, const void *values,
+                        u64 count, bool wide) {
+    fprintf(out, "static const %s %s[] = {\n", type, name);
     for (u64 i = 0; i < count; i++) {
         const long x = wide ? (long)((const i32 *)values)[i] : (long)((const i16 *)values)[i];
         fprintf(out, "%s%ld,%s", i % 24 == 0 ? "    " : "", x,
@@ -1344,54 +1419,75 @@ static bool write_array(FILE *out, const char *type, const char *name, const cha
     return !ferror(out);
 }
 
-/* net.h: the filters, every size's bias, output and skip, and a mask of the sizes it was fitted
- * on, since a size it never saw has only the weights it started with. */
-static bool write_header(const char *path, const NTModel *model, const NTQuantised *q, int sizes) {
-    FILE *out = fopen(path, "wb");
-    if (!out) {
-        printf("cannot write %s\n", path);
-        return false;
+/* `dir`/net<size>.h for each size fitted: its cells of the filters and its own head. A size the
+ * games did not have keeps whatever network it has, since it has only the weights it started
+ * with. */
+static bool write_headers(const char *dir, const NTQuantised *q, int sizes) {
+    static i16 filters[SQUARE_COUNT * NN_INPUTS * NN_FILTERS];
+    for (int size = MIN_SIZE; size <= MAX_SIZE; size++) {
+        if (!(sizes >> size & 1)) {
+            continue;
+        }
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/net%d.h", dir, size);
+        FILE *out = fopen(path, "wb");
+        if (!out) {
+            printf("cannot write %s\n", path);
+            return false;
+        }
+        local_filters(q, size, filters);
+        const NNWeights w = weights_for(q, size, filters);
+        fprintf(out,
+                "/* net%d.h - the %dx%d network. Written by `yapper nntrain`: docs/DATA.md says "
+                "how. */\n",
+                size, size, size);
+        fprintf(out,
+                "// clang-format off\n#ifndef NET%d_H\n#define NET%d_H\n\n#include \"nn.h\"\n\n",
+                size, size);
+        const struct {
+            const char *type, *name;
+            const void *values;
+            u64 count;
+            bool wide;
+        } arrays[] = {
+            {"i16", "Filters", w.filters, (u64)size * size * NN_INPUTS * NN_FILTERS, false},
+            {"i16", "Bias", w.bias, NN_FILTERS, false},
+            {"i16", "Output", w.output, NN_BUCKETS * NN_POOLS, false},
+            {"i32", "Skip", w.skip, NN_BUCKETS * 4, true},
+            {"i16", "L2", w.l2, NN_BUCKETS * NN_L2 * NN_POOLS, false},
+            {"i16", "L2Skip", w.l2_skip, NN_BUCKETS * NN_L2 * 3, false},
+            {"i32", "L2Bias", w.l2_bias, NN_BUCKETS * NN_L2, true},
+            {"i16", "L3", w.l3, NN_BUCKETS * NN_L3 * NN_L2, false},
+            {"i32", "L3Bias", w.l3_bias, NN_BUCKETS * NN_L3, true},
+            {"i16", "L4", w.l4, NN_BUCKETS * NN_L3, false},
+        };
+        bool ok = true;
+        for (size_t a = 0; a < sizeof(arrays) / sizeof(arrays[0]); a++) {
+            char name[32];
+            snprintf(name, sizeof(name), "Net%d%s", size, arrays[a].name);
+            ok = ok && write_array(out, arrays[a].type, name, arrays[a].values, arrays[a].count,
+                                   arrays[a].wide);
+        }
+        fprintf(out, "#endif\n");
+        if (fclose(out) != 0 || !ok) {
+            printf("cannot write %s\n", path);
+            return false;
+        }
+        printf("wrote %s\n", path);
     }
-    fprintf(out,
-            "/* net.h - the network every size shares. Written by `yapper nntrain`: docs/DATA.md "
-            "says how. */\n");
-    fprintf(out, "// clang-format off\n#ifndef NET_H\n#define NET_H\n\n#include \"nn.h\"\n\n");
-    fprintf(
-        out,
-        "#define NET_FILTERS %d\n#define NET_SIDES %d\n#define NET_L2 %d\n#define NET_L3 %d\n\n",
-        NN_FILTERS, NN_SIDES, NN_L2, NN_L3);
-    bool ok = write_array(out, "i16", "NetFilters", "NN_GRID * NN_GRID * NN_INPUTS * NN_FILTERS",
-                          q->filters, model->bias_at, false);
-    ok      = ok && write_array(out, "i16", "NetBias", "(MAX_SIZE + 1) * NN_FILTERS", q->bias,
-                                NT_SLOTS * NN_FILTERS, false);
-    ok      = ok && write_array(out, "i16", "NetOutput", "(MAX_SIZE + 1) * NN_BUCKETS * NN_POOLS",
-                                q->output, NT_SLOTS * NN_BUCKETS * NN_POOLS, false);
-    ok      = ok && write_array(out, "i32", "NetSkip", "(MAX_SIZE + 1) * NN_BUCKETS * 4", q->skip,
-                                NT_SLOTS * NN_BUCKETS * 4, true);
-    ok = ok && write_array(out, "i16", "NetL2", "(MAX_SIZE + 1) * NN_BUCKETS * NN_L2 * NN_POOLS",
-                           q->l2, NT_SLOTS * NN_BUCKETS * NN_L2 * NN_POOLS, false);
-    ok = ok && write_array(out, "i16", "NetL2Skip", "(MAX_SIZE + 1) * NN_BUCKETS * NN_L2 * 3",
-                           q->l2_skip, NT_SLOTS * NN_BUCKETS * NN_L2 * 3, false);
-    ok = ok && write_array(out, "i32", "NetL2Bias", "(MAX_SIZE + 1) * NN_BUCKETS * NN_L2",
-                           q->l2_bias, NT_SLOTS * NN_BUCKETS * NN_L2, true);
-    ok = ok && write_array(out, "i16", "NetL3", "(MAX_SIZE + 1) * NN_BUCKETS * NN_L3 * NN_L2",
-                           q->l3, NT_SLOTS * NN_BUCKETS * NN_L3 * NN_L2, false);
-    ok = ok && write_array(out, "i32", "NetL3Bias", "(MAX_SIZE + 1) * NN_BUCKETS * NN_L3",
-                           q->l3_bias, NT_SLOTS * NN_BUCKETS * NN_L3, true);
-    ok = ok && write_array(out, "i16", "NetL4", "(MAX_SIZE + 1) * NN_BUCKETS * NN_L3", q->l4,
-                           NT_SLOTS * NN_BUCKETS * NN_L3, false);
-    fprintf(out, "static const int NetSizes = 0x%x;\n\n#endif\n", sizes);
-    return fclose(out) == 0 && ok;
+    return true;
 }
 
 /* The fixed point the engine runs, through evaluate() itself, against the fit it came from. */
 static bool check_engine(const NTModel *model, const NTLoader *loader, const NTQuantised *q,
                          int sizes) {
+    static i16 filters[SQUARE_COUNT * NN_INPUTS * NN_FILTERS];
     for (int size = MIN_SIZE; size <= MAX_SIZE; size++) {
         if (!(sizes >> size & 1)) {
             continue;
         }
-        const NNWeights weights = weights_for(q, size);
+        local_filters(q, size, filters);
+        const NNWeights weights = weights_for(q, size, filters);
         if (!nn_install(size, &weights)) {
             printf("out of memory\n");
             return false;
@@ -2015,12 +2111,19 @@ static void report_groups(const NTModel *model, const NTLoader *loader, const do
 }
 
 static int fit_network(const char *out, int keep, const double *lambda, int epochs, int threads,
-                       unsigned long long seed, double rate, bool warm, const char *from,
-                       const double *share, const int *join, double decay, const double *scale,
-                       int smooth, double block, char **paths, int path_count) {
+                       unsigned long long seed, double rate, bool warm, const char *const *from,
+                       int from_count, const double *share, const int *join, double decay,
+                       const double *scale, int smooth, double block, char **paths,
+                       int path_count) {
     if (keep < 1 || epochs < 1 || threads < 1 || threads > NT_MAX_THREADS || rate < 0.0 ||
         block < 1.0 || block > 4000.0 || decay < 0.0 || decay > 1.0) {
         printf("bad arguments\n");
+        return 2;
+    }
+    /* Before the hours of fitting, not after them. */
+    struct stat folder;
+    if (stat(out, &folder) != 0 || !S_ISDIR(folder.st_mode)) {
+        printf("%s is not a folder: the networks are written there as net<size>.h\n", out);
         return 2;
     }
     if (smooth > 1) {
@@ -2095,15 +2198,15 @@ static int fit_network(const char *out, int keep, const double *lambda, int epoc
         printf("out of memory\n");
         return 1;
     }
-    if (from || warm) {
-        if (from ? !model_warm_file(&model, from) : !model_warm(&model)) {
-            if (!from) {
-                printf("this build has no network to start from\n");
+    if (from_count || warm) {
+        bool taken[NT_GRID * NT_GRID] = {false};
+        for (int k = 0; k < from_count; k++) {
+            if (!model_warm_file(&model, from[k], taken)) {
+                return 1;
             }
-            return 1;
         }
-        if (from) {
-            printf("starting from %s\n", from);
+        if (!from_count && !model_warm(&model, sizes, taken)) {
+            return 1;
         }
         status_phase("scoring the start");
         report_groups(&model, &loader, loader.lambda, threads, "start", NULL);
@@ -2141,10 +2244,9 @@ static int fit_network(const char *out, int keep, const double *lambda, int epoc
     Status.scored = true;
     status_phase("checking the engine");
     quantise_model(&model, &q);
-    if (!write_header(out, &model, &q, sizes) || !check_engine(&model, &loader, &q, sizes)) {
+    if (!write_headers(out, &q, sizes) || !check_engine(&model, &loader, &q, sizes)) {
         return 1;
     }
-    printf("wrote %s\n", out);
     return 0;
 }
 
@@ -2195,18 +2297,20 @@ static char **expand_paths(char **paths, int count, int *expanded) {
 }
 
 int nntrain_run(const char *out, int keep, const double *lambda, int epochs, int threads,
-                unsigned long long seed, double rate, bool warm, const char *from,
-                const double *share, const int *join, double decay, const double *scale, int smooth,
-                double block, const char *status, char **paths, int path_count) {
+                unsigned long long seed, double rate, bool warm, const char *const *from,
+                int from_count, const double *share, const int *join, double decay,
+                const double *scale, int smooth, double block, const char *status, char **paths,
+                int path_count) {
     int count    = 0;
     char **games = expand_paths(paths, path_count, &count);
     if (!games) {
         return 1;
     }
     status_open(status, out, epochs, count);
-    const int code = fit_network(out, keep, lambda, epochs, threads, seed, rate, warm, from, share,
-                                 join, decay, scale, smooth, block, games, count);
-    Status.phase   = code == 0 ? "done" : "failed";
+    const int code =
+        fit_network(out, keep, lambda, epochs, threads, seed, rate, warm, from, from_count, share,
+                    join, decay, scale, smooth, block, games, count);
+    Status.phase = code == 0 ? "done" : "failed";
     status_write(true, code);
     return code;
 }

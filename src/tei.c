@@ -90,6 +90,10 @@ static void handle_newgame(char *args) {
         return;
     }
     BoardSize = size;
+    /* The size's table is built here rather than on the first move's clock. */
+    if (!nn_select(size)) {
+        printf("info string out of memory for the %dx%d network\n", size, size);
+    }
     search_clear();
     reset_root();
 }

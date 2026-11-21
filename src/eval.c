@@ -50,6 +50,8 @@ int evaluate_frame(const Board *b, u64 threats, const NNFrame *frame) {
 }
 
 int evaluate(const Board *b, u64 threats) {
+    /* A search readies its size before it starts, so in one this only looks. */
+    nn_select(b->size);
     if (nn_ready(b->size)) {
         NNFrame frame;
         nn_refresh(b, &frame);

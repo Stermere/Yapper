@@ -981,8 +981,17 @@ static void search_thread_main(void *unused) {
     fflush(stdout);
 }
 
+/* Before a search, never during one: the tables of other sizes go. */
+static void select_network(int size) {
+    if (!nn_select(size)) {
+        fprintf(stderr, "out of memory\n");
+        exit(1);
+    }
+}
+
 SearchReport search_run(const Board *root, const u64 *history, int history_count,
                         const SearchLimits *limits, bool verbose) {
+    select_network(root->size);
     atomic_store_explicit(&StopFlag, false, memory_order_relaxed);
     return run_search(root, history, history_count, limits, verbose);
 }
@@ -999,6 +1008,7 @@ void search_stop(void) { atomic_store_explicit(&StopFlag, true, memory_order_rel
 void search_start(const Board *root, const u64 *history, int history_count,
                   const SearchLimits *limits) {
     search_wait();
+    select_network(root->size);
     atomic_store_explicit(&StopFlag, false, memory_order_relaxed);
     StartBoard        = *root;
     StartHistoryCount = history_count < MAX_GAME_PLIES ? history_count : MAX_GAME_PLIES;

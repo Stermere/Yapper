@@ -157,8 +157,9 @@ per-search state lives in `Worker`, so Lazy SMP is a matter of having more of th
 
 ## The evaluation
 
-Every size is played by one network, below, and `evaluate()` adds the one thing a fit cannot read:
-what a road threat is worth, set by hand, since no position a fit reads has a road hanging.
+Every size is played by a network of its own, below, and `evaluate()` adds the one thing a fit
+cannot read: what a road threat is worth, set by hand, since no position a fit reads has a road
+hanging.
 Scores are in hundredths of a flat, because the search's margins are written in them.
 
 A size the network was not fitted on counts flats. Nothing ships like that. It is there so that a
@@ -168,7 +169,8 @@ trainer that fits new ones from the games on disk.
 A linear evaluation of 40 hand-picked terms came first, fitted to its own games, and it taught
 the first networks: EXPERIMENTS.md E15 to E32. Every size's network beat it, and it was deleted,
 E38. Those were a network per size, and one network shared by every size then beat them on every
-size it could be measured on, E39.
+size it could be measured on, E39. Each size has its own weights again since E119, in the shared
+network's shape, so that a size can be fitted for itself without moving the others.
 
 ## The network
 
@@ -220,9 +222,10 @@ fifth of the search's speed and played +54 in self-play, +86 at equal nodes: EXP
 **It is integer.** Activations are clipped to [0, 1], where 1 is 255, and squared; each square is
 cut to 16 bits before it is pooled, so the pools are summed in 16 bits. Every layer of the head
 is 16-bit inputs times 16-bit weights summed in 32 bits, and each layer's units are cut back to 16
-bits before the next reads them. A `net.h` carries the width, the number of views and the size of
-the head it was fitted with, and a build of another shape will not compile with it, since C
-would fill the missing weights with zeros and the engine would play on them. Every build scores
+bits before the next reads them. A size's header gives its arrays no length, and the engine checks
+the lengths their values give against its own shape, so a build of another shape will not compile
+with it: given a length, C would fill the missing weights with zeros and the engine would play on
+them. Every build scores
 alike, so bench is the same from clang, gcc and a build with no CPU assumptions. `nntrain` fits
 on the same rounded weights the engine runs, so the fit is what plays.
 
@@ -244,14 +247,19 @@ bits. A quarter of all evaluations are found there, from other orders of the sam
 the iteration before. Every bit of the key is compared, so the tree is the same node for node, and
 `search_clear()` empties it with the table: E74.
 
-**One network plays every size.** A filter is laid on an 8x8 grid, and a board sits on it with
-its edges on the grid's edges, the near half of each line counted from one edge and the rest from
-the other. A corner, an edge and the line beside it are then the same weights on every size, and
-only the middle differs. Each size keeps its own bias, output and skip, which are a few hundred
-weights. 6x6 has most of the games, and sharing lets the other sizes learn from them what stacks
-and captives are worth: 7x7 and 8x8, with the fewest games for their squares, gained most, E39.
-The engine spreads the weights into a table per size as it loads them, so sharing costs nothing
-in play. The weights are `src/net.h`.
+**Every size has its own network, of one shape.** The weights of size n are `src/net<n>.h`: its
+filters with a cell for each of its squares, and its own head. A size without a header counts
+flats. Only the size in play is spread into the table a search reads, tens of megabytes, built
+when a game of that size starts and freed when another size does: `nn_select()`. The weights of
+the other sizes stay in the binary, never read, so the engine holds one table at a time, 55 MB in
+all on 6x6 where the six tables at once came to 150, E119.
+
+The trainer lays the filters on an 8x8 grid, each board with its edges on the grid's edges, the
+near half of each line counted from one edge and the rest from the other, so sizes fitted together
+share a corner, an edge and the lines beside it, and only the middle differs. Sharing let the sizes
+with few games learn from 6x6's what stacks and captives are worth: 7x7 and 8x8 gained most, E39.
+Fitted from one list of games, sizes share in that way; fitted from a list of one size, that size
+is fitted alone, and its header is the only one written.
 
 ## Training data
 

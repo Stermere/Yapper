@@ -20,12 +20,12 @@ What it reads, all under external/games/:
       # Review of E52, 2026-11-06
       games   600    external/games/tak/e52-k4.log   E52 vs syntaks at 1/4
       sprt    2000   external/games/pol2/r1.log      r1 flat win on the spot, vs E52
-      fit     2      external/build/e69/net-all.h    gen 13 refit
+      fit     16     external/build/e120/s0          6x6 alone, seed 0
       datagen 27000  external/data/gen13/6s/gen13    gen 13 self-play
 
   `sprt` may stop before its cap and `games` plays them all. The path names the run: the match.py
   run whose PTN has that directory and name, or else a log, racetrack's or match.py's printout; a
-  fit's network, with the epochs; datagen's --out, with the games. A fit not yet started is
+  fit's folder, with the epochs; datagen's --out, with the games. A fit not yet started is
   expected to take as long as the fits before it. The first comment is the title.
 - Any other log written in the last ten minutes, such as racetrack's, which keeps no status of
   its own. How long such a run will be is unknown.

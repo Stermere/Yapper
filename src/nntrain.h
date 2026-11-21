@@ -1,4 +1,4 @@
-/* nntrain.h - fits the network every size shares to self-play games. */
+/* nntrain.h - fits each size's network to self-play games. */
 #ifndef NNTRAIN_H
 #define NNTRAIN_H
 
@@ -8,7 +8,9 @@
 #define NT_BLOCK_DEFAULT 64.0
 
 /* Trains on one position in `keep` of the games in `paths`, aiming at a blend of the search's
- * score, weighted `lambda` by size, and the game's result, then writes the header `out`. An NVIDIA
+ * score, weighted `lambda` by size, and the game's result, then writes net<size>.h into the folder
+ * `out` for each size the games have. Sizes in one list share the filters where their boards
+ * overlap, so a list of one size fits that size alone. An NVIDIA
  * GPU does the fitting, and without one it fails; `threads` read the games, make their positions,
  * lay out the card's batches and score the held-out positions. A path `@file` stands for the paths
  * in that file, one a line. `seed` picks the first weights and the order of the positions. `share`,
@@ -16,7 +18,8 @@
  * by size, is the first epoch a size's positions are in, or NULL or 0 for the first. `decay`
  * shrinks every filter weight by the rate times it at each step, or 0 for none. `rate`
  * is the first step's learning rate, or 0 for the usual one. With `warm`, the fit starts from the
- * network this build plays rather than from random weights, and with `from`, from that net.h.
+ * networks this build plays for its sizes rather than from random weights, and with `from`, from
+ * those `from_count` net<size>.h files.
  * `scale`, by size, is what the loss reads a score through, 0 or NULL for NN_SCALE; the engine's
  * units do not change with it. With `smooth` above 1, the search's score in the target is the mean
  * of that many scored plies' from the position on. The games stay in memory and their positions
@@ -24,8 +27,9 @@
  * tools/progress.py, or with NULL to one named after `out` in external/games/live. Non-zero on
  * failure. */
 int nntrain_run(const char *out, int keep, const double *lambda, int epochs, int threads,
-                unsigned long long seed, double rate, bool warm, const char *from,
-                const double *share, const int *join, double decay, const double *scale, int smooth,
-                double block, const char *status, char **paths, int path_count);
+                unsigned long long seed, double rate, bool warm, const char *const *from,
+                int from_count, const double *share, const int *join, double decay,
+                const double *scale, int smooth, double block, const char *status, char **paths,
+                int path_count);
 
 #endif

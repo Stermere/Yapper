@@ -393,13 +393,13 @@ static void check_frame(const Board *b, NNFrame *frames, const Move *made, int p
 /* Random weights on every size, whatever is compiled in, so the network is held to its gates
  * before one has been trained. Symmetry holds for any weights, by construction. */
 static void network_games(int size, int games, int halfkomi) {
-    static i16 filters[NN_GRID * NN_GRID * NN_INPUTS * NN_FILTERS];
+    static i16 filters[SQUARE_COUNT * NN_INPUTS * NN_FILTERS];
     static i16 bias[NN_FILTERS], output[NN_BUCKETS * NN_POOLS];
     static i32 skip[NN_BUCKETS * 4];
     static i16 l2[NN_BUCKETS * NN_L2 * NN_POOLS], l2_skip[NN_BUCKETS * NN_L2 * 3];
     static i16 l3[NN_BUCKETS * NN_L3 * NN_L2], l4[NN_BUCKETS * NN_L3];
     static i32 l2_bias[NN_BUCKETS * NN_L2], l3_bias[NN_BUCKETS * NN_L3];
-    for (int i = 0; i < NN_GRID * NN_GRID * NN_INPUTS * NN_FILTERS; i++) {
+    for (int i = 0; i < size * size * NN_INPUTS * NN_FILTERS; i++) {
         filters[i] = (i16)(rng() % 129) - 64;
     }
     for (int i = 0; i < NN_FILTERS; i++) {
@@ -451,7 +451,8 @@ static void network_games(int size, int games, int halfkomi) {
             }
         }
     }
-    CHECK(nn_install(size, nn_builtin(size)), "restoring the network on %d", size);
+    /* The one compiled in comes back the next time the size is evaluated. */
+    nn_install(size, NULL);
 }
 
 static void expect_outcome(const char *position, int size, int halfkomi, Outcome expected,

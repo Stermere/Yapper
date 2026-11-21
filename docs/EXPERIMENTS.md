@@ -5516,7 +5516,8 @@ Inconclusive at the cap, in 1 h 40 m, with five threefold repetitions and no gam
 A fifth more data to fit is worth under 10 here. At E85's rate, +27 for a doubling, it would be
 worth about 8, so this reads as that rate holding rather than the data running out. One fit is one
 seed, and fits of one recipe differ by 10 to 20 (E92), so this bounds the gain rather than measuring
-it. Not kept: E102's network stays. Gen 17 was to start on 10 or more, and does not.
+it. Not kept: E102's network stays. Gen 17 was to start on 10 or more, and does not. Its 6x6
+network went in the next day on two more readings, E121.
 
 **Where a deep search's nodes go.** At 60+1 Yapper reaches 16.8 plies a move to syntaks's 19.3,
 and E80's counts stop at depth 12. HEAD's search with counters added and nothing else
@@ -5745,6 +5746,132 @@ same move in 85 of 110.
 level. Below depth 7 the shallow search is 2 plies, nearly the evaluation, and agreeing with the
 deep search 99% of the time did not make up for what the other 1% decide. Depth 7, where E112 put
 it, stays.
+
+## E117: ProbCut only at nodes expected to cut, stopped
+
+E115 found the cut wrong 27% of the time at nodes expected to fail low, a sixth of its wrong cuts
+for 2% of what it saves, so E117 tried it only at cut nodes (`external/build/e117/patch.py`, bench
+1120391). Nodes to depth 15 on E108's positions: 0.954 of E112's, since the shallow searches at
+those nodes rarely held.
+
+| Match | Games | Result |
+|---|---|---|
+| E117 against E112, 30+0.3, SPRT [0, 10] | 434 | **+5.6 +/- 20.4**, LLR about +0.1, stopped |
+
+Stopped by hand when the day turned to the networks, undecided: it read -6.7 at 258 games and
++6.8 at 410. Not kept; it can be played again as it is.
+
+E118, a late move that leaves a road to finish reduced a ply less (E80's `threat`, +6.8 +/- 11.4 at
+8+0.08), was built on E112 (`external/build/e118`, bench 973916, 1.09 times the nodes to depth 15)
+and not played.
+
+## E119: a network for each size, of one shape, and only the size in play loaded
+
+The user's call, 2026-11-20: the other sizes pull on the filters 6x6 plays by, so each size gets
+weights of its own in the shared network's shape, and only the size in play is loaded. E39's
+measure of sharing on 6x6, -6.4 +/- 13.6 for 6x6's own network, came from an engine some 600 Elo
+further behind syntaks, fitted on a fifth of today's 6x6 positions, and the user did not take it
+as the answer now.
+
+**What changed.** `src/net.h` is now `src/net3.h` to `src/net8.h`, one a size: its filters with
+a cell for each of its squares, which is the part of the old 8x8 grid that size reached, and its own
+bias, output, skip and head. The arrays carry no length, and `nn.c` checks every one against the
+build's shape. The engine builds a size's table, 21 MB on 6x6 and 38 MB on 8x8, when a game of that
+size starts or a search of it begins, and frees the others (`nn_select()`, from `teinewgame`,
+`search_run()`, `search_start()` and `evaluate()`). `nntrain`'s first argument is a folder, and it
+writes a header for each size its games have and no other, so a list of one size fits that size
+alone. It still fits several sizes on the grid when they are listed together. `--warm` takes the
+built-in networks of the sizes in the games, and `--from` takes one header a size; sizes started
+together must agree where they share the grid. The split was made by
+`external/build/e119/split.py` from E97's `net.h`, kept there as `net-shared.h`.
+
+**Nothing plays differently.**
+
+| Check | Result |
+|---|---|
+| bench, `make`, `make release`, `make TUNE=on`, `ARCH=generic` | 1156007 each, as before |
+| `make check` | perft passes; selftest 984,120,205 checks, 0 failures |
+| Old and new scoring 6027 random positions, 3x3 to 8x8 (`sameeval.py`) | 0 scored apart |
+| A 6x6 fit of 3 files, 1 epoch: engine against fit | mean 0.50, worst 1 hundredth; only `net6.h` written |
+| The same from that file by `--from`, and 6x6 with 7x7 by `--warm` | read back; 7x7 worst 2 |
+| `--from` a 6x6 fit and the built-in 7x7 together | refused: they differ where both sit on the grid |
+
+Memory after `teinewgame` and a search to depth 8 with Hash 16: **54.5 MB on 6x6 and 72.7 MB on
+8x8, where the old build took 150.9 MB on either**, since it built all six tables at start. The
+binary is 15.7 MB, and the build takes 22 seconds.
+
+## E120: 6x6 fitted alone, level with the shared network
+
+E119's premise put to a match: 6x6's network fitted on 6x6's games and no other size's. The list is
+every 6x6 file of gens 15 and 16 in E108's list, all of gen 16 as the user asked: 37,440 files,
+14,347,865 games, 771,027,275 positions to fit, where E108's shared fit of the same games had
+865,885,221 with the other sizes' 930 files. E97's options that reach 6x6, by E119's trainer:
+`lambda` 0.7, 16 epochs, decay 0.01 on the filters, the search's score smoothed over 4 plies
+(`external/build/e120/plan.sh`). Two fits, seeds 0 and 1, 1 h 37 m each on the RTX 3070. The
+engine reads within 2 and 3 hundredths of them, 0.55 and 0.56 on average.
+
+| Held out, 6x6, against results | gen 15 | gen 16 |
+|---|---|---|
+| E108, shared, the same 6x6 games | **0.443226** | **0.437460** |
+| E120, seed 0 | 0.443411 | 0.437816 |
+| E120, seed 1 | 0.443396 | 0.437609 |
+
+Each was built into E119's tree with only `net6.h` swapped and played at 100,000 nodes a move,
+SPRT [0, 10], 6s_4ply, seed 1, 7 at once: against E119, which is E97's network split, and the first
+seed against E108's network split the same way into the same tree
+(`external/baselines/e108split.exe`, which scores 2408 positions exactly as `e108.exe` does).
+
+| Match, 100,000 nodes a move | Games | Result |
+|---|---|---|
+| E120 seed 0 against E119 | 2000 | +679 -674 =647, **+0.9 +/- 11.8**, pairs [93, 226, 361, 223, 97], inconclusive |
+| E120 seed 1 against E119 | 2000 | +682 -689 =629, **-1.2 +/- 11.8**, pairs [100, 208, 382, 219, 91], inconclusive |
+| E120 seed 0 against E108's network | 890 | +273 -329 =288, **-21.9 +/- 18.6**, pairs [63, 104, 136, 110, 32], **FAILED** |
+| E108's network against E119 | 2000 | +699 -662 =639, **+6.4 +/- 12.1**, pairs [103, 194, 373, 223, 107], inconclusive |
+
+The last was played to read the third. Two seeds level with E119 and a loss of 22 to E108 would put
+E108 some 22 over E119, where it had read +6.9 on the clock. It reads +6.4 at equal nodes, so most
+of the 22 is an SPRT that stopped on a low run, and the four agree: fitted alone, 6x6 plays as
+today's network does, about 6 below the shared fit of the same games. That is E39's -6.4 for 6x6's
+own network again, on five times the positions. The other sizes cost 6x6 nothing a match can find.
+If they help, it is as more positions on the filters or as the 11% more steps an epoch they bring,
+which this does not tell apart. Not kept: E119's network stays. Separate weights keep what E119
+measured, 55 MB on 6x6 where 151 were, and the freedom to fit a big board for itself, where E92
+found 6x6 taking the filters from 7x7.
+
+## E121: E108's 6x6 network, kept on three readings
+
+The best 6x6 network to hand after E120 is E108's, so its `net6.h` alone went into E119's tree, every
+other size E97's (`external/baselines/e121.exe`, bench 1040418), and played E119 on the clock with
+nothing else running: 8+0.08, SPRT [0, 10], 6s_4ply, seed 121, 7 at once.
+
+| Match | Games | Result |
+|---|---|---|
+| E121 against E119, 8+0.08 | 2000 | +585 -539 =876, **+8.0 +/- 10.8**, pairs [62, 228, 380, 262, 68], LLR 0.98, inconclusive |
+
+In 1 h 37 m, with three threefold repetitions and no game lost on time. That is three readings of
+one network, each inconclusive at the cap: +6.9 against E102 on the clock (E108), +6.4 at 100,000
+nodes (E120) and +8.0 here. Taken together, 6000 games, they read about +7 +/- 6. No one SPRT
+passed, so the rule that one which does not pass changes nothing would leave it out; the user kept
+it on the three together, as marginally better. Kept: `src/net6.h` is E108's, every other size
+E97's. Bench 1040418, the same for `make release`, `make TUNE=on` and `ARCH=generic`, and
+`make check` passes.
+
+## E122: today's build against gen 16's player, at the nodes datagen plays
+
+The user asked, as a case for gen 17, how far the engine has come at the count datagen plays: E121
+(`external/baselines/e121.exe`, bench 1040418) against E87, which played all of gen 16
+(`external/baselines/e87-scratch.exe`, bench 852343), at 20,000 nodes a move, 1000 games on
+6s_4ply, 2 komi, seed 1, 7 at once.
+
+| Match | Games | Result |
+|---|---|---|
+| E121 against E87, 20,000 nodes a move | 1000 | +459 -324 =217, **+47.2 +/- 19.1**, pairs [55, 64, 173, 107, 101] |
+
+In 139 seconds. Gen 16 started on E87 being about 170 above E82, which played gen 15. Most of what
+the search has gained since passed on clocks that reach depth 10 or more, ProbCut from depth 7 among
+it, where a search of 20,000 nodes ends at depth 7: on 99 of 159 positions from these games, plies
+10 to 40, and at 6 to 9 on the rest. So the networks carry most of these 47, and the clock readings
+say less about the data a new generation would hold.
 
 ## Mistakes worth not repeating
 

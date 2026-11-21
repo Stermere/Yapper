@@ -65,7 +65,6 @@ static int cmd_perft(int argc, char **argv) {
 int main(int argc, char **argv) {
     board_init();
     movegen_init();
-    nn_init();
     search_init();
 
     const char *command = argc >= 2 ? argv[1] : "tei";
@@ -102,7 +101,9 @@ int main(int argc, char **argv) {
         int smooth              = 0;
         unsigned long long seed = 0;
         double rate = 0.0, block = NT_BLOCK_DEFAULT, decay = 0.0;
-        const char *status = NULL, *from = NULL;
+        const char *status = NULL;
+        const char *from[MAX_SIZE + 1];
+        int from_count             = 0;
         double scale[MAX_SIZE + 1] = {0};
         double share[MAX_SIZE + 1] = {1, 1, 1, 1, 1, 1, 1, 1, 1};
         int join[MAX_SIZE + 1]     = {0};
@@ -119,8 +120,9 @@ int main(int argc, char **argv) {
                 return 2;
             } else if (strcmp(argv[first], "--warm") == 0) {
                 warm = true;
-            } else if (strcmp(argv[first], "--from") == 0 && first + 1 < argc) {
-                from = argv[++first];
+            } else if (strcmp(argv[first], "--from") == 0 && first + 1 < argc &&
+                       from_count <= MAX_SIZE) {
+                from[from_count++] = argv[++first];
             } else if (strcmp(argv[first], "--block") == 0 && first + 1 < argc &&
                        atof(argv[first + 1]) >= 1.0) {
                 block = atof(argv[++first]);
@@ -168,7 +170,7 @@ int main(int argc, char **argv) {
             }
         }
         return nntrain_run(argv[2], atoi(argv[3]), lambda, atoi(argv[5]), atoi(argv[6]), seed, rate,
-                           warm, from, share, join, decay, scale, smooth, block, status,
+                           warm, from, from_count, share, join, decay, scale, smooth, block, status,
                            argv + first, argc - first);
     }
     if (strcmp(command, "policyfit") == 0 && argc >= 7) {
@@ -188,18 +190,18 @@ int main(int argc, char **argv) {
         return policyfit_run(argv[2], atoi(argv[3]), atoi(argv[4]), atoi(argv[5]), rate, seed,
                              argv + first, argc - first);
     }
-    printf(
-        "usage: yapper [tei | bench [depth] | selftest | perfttest <suite> [max depth] |\n"
-        "               perft <size> <depth> [position] |\n"
-        "               datagen <out> <games> <seed> <nodes> [size] [generation] [openings] |\n"
-        "               nntrain <net.h> <keep one in> <lambda> <epochs> <threads>\n"
-        "                       [--seed n] [--rate r] [--warm | --from net.h] [--block millions]\n"
-        "                       [--share size=part]... [--join size=epoch]...\n"
-        "                       [--lambda size=lambda]... [--decay d]\n"
-        "                       [--scale [size=]s]... [--status file] [--smooth n]\n"
-        "                       <games or @list>...] |\n"
-        "               policyfit <policy_net.h> <keep one in> <epochs> <threads>\n"
-        "                         [--seed n] [--rate r] <games>...]\n");
+    printf("usage: yapper [tei | bench [depth] | selftest | perfttest <suite> [max depth] |\n"
+           "               perft <size> <depth> [position] |\n"
+           "               datagen <out> <games> <seed> <nodes> [size] [generation] [openings] |\n"
+           "               nntrain <folder> <keep one in> <lambda> <epochs> <threads>\n"
+           "                       [--seed n] [--rate r] [--warm | --from net<size>.h...]\n"
+           "                       [--block millions]\n"
+           "                       [--share size=part]... [--join size=epoch]...\n"
+           "                       [--lambda size=lambda]... [--decay d]\n"
+           "                       [--scale [size=]s]... [--status file] [--smooth n]\n"
+           "                       <games or @list>...] |\n"
+           "               policyfit <policy_net.h> <keep one in> <epochs> <threads>\n"
+           "                         [--seed n] [--rate r] <games>...]\n");
 #else
     printf("usage: yapper [tei | bench [depth] | perft <size> <depth> [position]]\n");
 #endif

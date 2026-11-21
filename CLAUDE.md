@@ -11,9 +11,9 @@ world uses, so racetrack and PTN Ninja work with it unchanged.
 
 **The current goal is to beat Tiltak.** The board, move generation and harness are finished and
 verified, and Yapper leads the baselines on speed. Strength work goes in order: a stronger
-evaluation base, then the search, then long overnight runs on the evaluation. One network,
-shared by every size, has replaced the hand-written evaluation, and training data is kept in a
-form that does not depend on any evaluation, so it outlives each network. See
+evaluation base, then the search, then long overnight runs on the evaluation. Networks of one
+shape, a set of weights for each size, have replaced the hand-written evaluation, and training data
+is kept in a form that does not depend on any evaluation, so it outlives each network. See
 [docs/STATUS.md](docs/STATUS.md).
 
 **Never read the source of a rival Tak engine**, not to explain a result and not to see how
@@ -152,7 +152,7 @@ pass.
 | Path | Contents |
 |---|---|
 | `src/` | the engine, flat |
-| `src/net.h` | the network every size shares, written by `yapper nntrain`; a size it was not fitted on only counts flats |
+| `src/net3.h` to `src/net8.h` | each size's network, written by `yapper nntrain`; a size without one only counts flats, and only the size in play is loaded into a table |
 | `src/policy_net.h` | the move prior's network, written by `yapper policyfit`; a table of another shape is ignored and the prior is flat |
 | `src/tune.h` | every tunable, with its default and range: constants, or TEI options under `make TUNE=on` |
 | `src/test/` | selftest, in the binary on purpose |

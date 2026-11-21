@@ -9,19 +9,65 @@
 
 #include "bitboard.h"
 
-/* A size has a network when net.h was fitted on its games. `yapper nntrain` writes it. */
-#if __has_include("net.h")
-#include "net.h"
-/* C fills a short initialiser with zeros, so weights of another width would build and play. */
-#if NET_FILTERS != NN_FILTERS
-#error "net.h was fitted for another NN_FILTERS"
+/* A size has a network when src/net<size>.h exists, which `yapper nntrain` writes for each size it
+ * fits. Its arrays take their lengths from what was written, so one of another shape stops the
+ * build here rather than playing a part of its weights. */
+#define NN_BUILTIN(N)                                                                         \
+    _Static_assert(sizeof(Net##N##Filters) == sizeof(i16) * N * N * NN_INPUTS * NN_FILTERS && \
+                       sizeof(Net##N##Bias) == sizeof(i16) * NN_FILTERS &&                    \
+                       sizeof(Net##N##Output) == sizeof(i16) * NN_BUCKETS * NN_POOLS &&       \
+                       sizeof(Net##N##Skip) == sizeof(i32) * NN_BUCKETS * 4 &&                \
+                       sizeof(Net##N##L2) == sizeof(i16) * NN_BUCKETS * NN_L2 * NN_POOLS &&   \
+                       sizeof(Net##N##L2Skip) == sizeof(i16) * NN_BUCKETS * NN_L2 * 3 &&      \
+                       sizeof(Net##N##L2Bias) == sizeof(i32) * NN_BUCKETS * NN_L2 &&          \
+                       sizeof(Net##N##L3) == sizeof(i16) * NN_BUCKETS * NN_L3 * NN_L2 &&      \
+                       sizeof(Net##N##L3Bias) == sizeof(i32) * NN_BUCKETS * NN_L3 &&          \
+                       sizeof(Net##N##L4) == sizeof(i16) * NN_BUCKETS * NN_L3,                \
+                   "net" #N ".h was fitted for a network of another shape");                  \
+    static const NNWeights Builtin##N = {                                                     \
+        Net##N##Filters, Net##N##Bias,   Net##N##Output, Net##N##Skip,   Net##N##L2,          \
+        Net##N##L2Skip,  Net##N##L2Bias, Net##N##L3,     Net##N##L3Bias, Net##N##L4};
+#if __has_include("net3.h")
+#include "net3.h"
+NN_BUILTIN(3)
+#define NN_BUILTIN3 &Builtin3
+#else
+#define NN_BUILTIN3 NULL
 #endif
-#if !defined(NET_SIDES) || NET_SIDES != NN_SIDES
-#error "net.h was fitted for another number of views"
+#if __has_include("net4.h")
+#include "net4.h"
+NN_BUILTIN(4)
+#define NN_BUILTIN4 &Builtin4
+#else
+#define NN_BUILTIN4 NULL
 #endif
-#if !defined(NET_L2) || NET_L2 != NN_L2 || NET_L3 != NN_L3
-#error "net.h was fitted for another head"
+#if __has_include("net5.h")
+#include "net5.h"
+NN_BUILTIN(5)
+#define NN_BUILTIN5 &Builtin5
+#else
+#define NN_BUILTIN5 NULL
 #endif
+#if __has_include("net6.h")
+#include "net6.h"
+NN_BUILTIN(6)
+#define NN_BUILTIN6 &Builtin6
+#else
+#define NN_BUILTIN6 NULL
+#endif
+#if __has_include("net7.h")
+#include "net7.h"
+NN_BUILTIN(7)
+#define NN_BUILTIN7 &Builtin7
+#else
+#define NN_BUILTIN7 NULL
+#endif
+#if __has_include("net8.h")
+#include "net8.h"
+NN_BUILTIN(8)
+#define NN_BUILTIN8 &Builtin8
+#else
+#define NN_BUILTIN8 NULL
 #endif
 
 typedef struct Net {
@@ -44,11 +90,10 @@ typedef struct Net {
 /* Static, not allocated, so that the alignment above holds. */
 static Net Nets[MAX_SIZE + 1];
 static bool Ready[MAX_SIZE + 1];
-static const NNWeights *Builtin[MAX_SIZE + 1];
-
-/* Line `x` of a board of `n` on the grid: the near half counted from one edge and the rest from
- * the other. */
-static int on_grid(int x, int n) { return x < (n + 1) / 2 ? x : NN_GRID - n + x; }
+static const NNWeights *const Builtin[MAX_SIZE + 1] = {
+    [3] = NN_BUILTIN3, [4] = NN_BUILTIN4, [5] = NN_BUILTIN5,
+    [6] = NN_BUILTIN6, [7] = NN_BUILTIN7, [8] = NN_BUILTIN8,
+};
 
 /* Selftest's eight transforms, though any eight that make up the group would serve. */
 int nn_cell(int size, int g, int sq) {
@@ -60,7 +105,7 @@ int nn_cell(int size, int g, int sq) {
         rank        = file;
         file        = t;
     }
-    return on_grid(rank, size) * NN_GRID + on_grid(file, size);
+    return rank * size + file;
 }
 
 bool nn_install(int size, const NNWeights *weights) {
@@ -124,31 +169,16 @@ bool nn_install(int size, const NNWeights *weights) {
     return true;
 }
 
-void nn_init(void) {
-#ifdef NET_H
-    static NNWeights sizes[MAX_SIZE + 1];
-    for (int size = MIN_SIZE; size <= MAX_SIZE; size++) {
-        if (NetSizes >> size & 1) {
-            sizes[size]   = (NNWeights){NetFilters,
-                                        NetBias + size * NN_FILTERS,
-                                        NetOutput + size * NN_BUCKETS * NN_POOLS,
-                                        NetSkip + size * NN_BUCKETS * 4,
-                                        NetL2 + size * NN_BUCKETS * NN_L2 * NN_POOLS,
-                                        NetL2Skip + size * NN_BUCKETS * NN_L2 * 3,
-                                        NetL2Bias + size * NN_BUCKETS * NN_L2,
-                                        NetL3 + size * NN_BUCKETS * NN_L3 * NN_L2,
-                                        NetL3Bias + size * NN_BUCKETS * NN_L3,
-                                        NetL4 + size * NN_BUCKETS * NN_L3};
-            Builtin[size] = &sizes[size];
+bool nn_select(int size) {
+    if (Ready[size] || !Builtin[size]) {
+        return true;
+    }
+    for (int other = MIN_SIZE; other <= MAX_SIZE; other++) {
+        if (other != size) {
+            nn_install(other, NULL);
         }
     }
-#endif
-    for (int size = MIN_SIZE; size <= MAX_SIZE; size++) {
-        if (Builtin[size] && !nn_install(size, Builtin[size])) {
-            fprintf(stderr, "out of memory\n");
-            exit(1);
-        }
-    }
+    return nn_install(size, Builtin[size]);
 }
 
 const NNWeights *nn_builtin(int size) { return Builtin[size]; }
