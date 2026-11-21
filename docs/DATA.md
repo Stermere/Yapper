@@ -8,7 +8,7 @@ evaluation went on to teach every network after it.
 ## Making data
 
 ```sh
-python tools/datagen.py --out external/data/gen11/6s/gen11 --games 60000 --nodes 5000 \
+python tools/datagen.py --out external/data/gen11/6s/gen11 --games 60000 --nodes 20000 \
     --generation 11
 python tools/datacheck.py external/data/gen11/6s/gen11-*.ydg
 ```
@@ -60,7 +60,7 @@ only measure. `mkopenings.py` leaves out any game with another engine on either 
 Gen 12 came before that rule. E60 seeded it from the openings of games against syntaks and Topaz.
 It was fitted on once, in E60, and that network was not kept. No network since has read it. Every
 later fit starts from E49's network or from nothing, and names its files without gen 12. The prior
-reads gens 10 and 11 only. The network now, E87's, was fitted from nothing. Gen 12's games were
+reads gens 10 and 11 only. The networks now, E97's and E108's on 6x6, were fitted from nothing. Gen 12's games were
 deleted on 2026-11-15, so no list or pattern can reach them, and the generations skip from 11 to 13.
 
 On about one ply in ten, a random move is searched as well, and played in place of the search's
@@ -107,7 +107,8 @@ run, and readers stop at the last whole game.
 ## Reading it
 
 In C, `data_replay()` calls a function with every position of a file, its game and its ply. That
-function is the seam: `nntrain.c` is one such reader. Moves off a disk go through
+function is the seam: `policyfit.c` is one such reader. `nntrain.c` keeps the files' bytes in
+memory and replays their games itself, a block at a time. Moves off a disk go through
 `movegen_is_legal()` like any other unproven move.
 
 What a position gives a trainer, with nothing regenerated:
@@ -164,7 +165,7 @@ yapper nntrain src/net.h 1 0.7 8 15 --share 7=0.33 --share 8=0.2 --lambda 3=0.5 
 
 `full.list` is E79's games, gen 11 four times, gen 13 four times and gen 14 twice, then gen 15's.
 With 424M positions, a fit from nothing beat the one carried on from E49 by 66, E87, where on
-E49's 254M it had lost by 29. E89's, which plays now, is E87's command on E87's list plus the 960
+E49's 254M it had lost by 29. E89's, which played until E97, is E87's command on E87's list plus the 960
 files of gen 15 it never read, gen 16's 6x6 files home at 07:53 on 2026-11-16 and gen 16 of the
 other sizes, each listed once after the rest: `external/build/e89/full.list`, 20,775 listings,
 613M positions.
@@ -301,7 +302,8 @@ A fit takes every core it is given, so nothing can be timed or matched alongside
 is not a claim of strength: only an SPRT makes one.
 
 A fit run from the repository's root writes where it stands to
-`external/games/live/fit-<folder>-<file>.json`, after the network's path, every two seconds, and
+`external/games/live/fit-<parent>-<folder>.json`, after the last two parts of the output folder's
+path, every two seconds, and
 `tools/progress.py` shows it with the matches; `--status file` writes it elsewhere. `datagen.py`
 does the same for a run of self-play. Nothing in either file feeds the fit or the games.
 

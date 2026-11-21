@@ -23,7 +23,8 @@
 
 #define CHECK_EVERY 2048
 
-/* The clock runs while a move travels back through a pipe, a runner or a network. */
+/* The clock runs while a move travels back through a pipe, a runner or a network. Not tunable:
+ * a tune on local pipes would push it toward flagging. */
 #define MOVE_OVERHEAD_MS 20
 
 typedef struct Worker {
@@ -112,8 +113,7 @@ static i64 now_ms(void) {
     return (i64)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-/* Hundredths divided out in floating point, so the defaults' 0.5 and 1.6 are the same doubles as
- * the literals they replaced, and so is every reduction. */
+/* In hundredths, divided out in floating point so no reduction is lost to integer division. */
 void search_retune(void) {
     for (int depth = 1; depth < 64; depth++) {
         for (int moves = 1; moves < 64; moves++) {
@@ -381,10 +381,10 @@ static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *move
 }
 
 /* Besides the history, a prior. From PriorDepth it is policy.c's network, which also reads each
- * move against the last two, at 1536 a nat in E52. A node a ply from the leaves has too little
- * below its moves to pay for scoring them all, E51. There a placement that leaves a road to finish,
- * or takes a square where the other side would leave one, is far more likely to cut than the rest,
- * and a spread is worth the tops it wins: E50. */
+ * move against the last two, E52. A node nearer the leaves has too little below its moves to pay
+ * for scoring them all, E51 and E100. There a placement that leaves a road to finish, or takes a
+ * square where the other side would leave one, is far more likely to cut than the rest, and a
+ * spread is worth the tops it wins: E50. */
 static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Move tt_move, int ply,
                         int depth, u64 threats, const u64 ends[4], const u64 their_ends[4]) {
     const Board *b      = &w->board;
@@ -561,11 +561,11 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, bool cut_n
 
     /* A node the evaluation puts above beta is searched a few plies shallower first, against a
      * bound a margin above beta, and cut if even that holds: the shallow search of a node foretells
-     * the deep one, which is how Othello programs prune. A null move does this job elsewhere, and
-     * cannot here, because a pass costs a flat: its search holds at a tenth of the nodes it is
-     * tried at, nine tenths of which fail high anyway, E75. An even reduction, so both searches end
-     * with the same side to move. This node's list does not exist yet, so the shallow search can
-     * have its space, as the singular one does. */
+     * the deep one, which is how Othello programs prune. A null move does this job in chess, and
+     * little of it here, because a pass costs a flat: its search holds at a tenth of the nodes it
+     * is tried at, nine tenths of which fail high anyway, E75. An even reduction, so both searches
+     * end with the same side to move. This node's list does not exist yet, so the shallow search
+     * can have its space, as the singular one does. */
     if (!pv_node && !threats && !root && !excluded && depth >= ProbcutDepth && eval >= beta &&
         b->ply >= 4 && abs(beta) < SCORE_WIN_BOUND) {
         const int bound = beta + ProbcutMargin;
@@ -853,8 +853,9 @@ static SearchReport run_search(const Board *root, const u64 *history, int histor
     memcpy(w->keys, history, sizeof(u64) * (size_t)w->key_count);
     set_time_budget(w, limits);
     tt_new_search();
-    /* History from earlier moves was earned in other positions. Halved, the prior leads until this
-     * search has evidence of its own: +26 with the network prior, though -9 with E51's: E52. */
+    /* History from earlier moves was earned in other positions. Cut back, the prior leads until
+     * this search has evidence of its own: halving it gained 26 with the network prior, though it
+     * lost 9 with E51's, E52. */
     for (int c = 0; c < 2; c++) {
         for (int m = 0; m < 65536; m++) {
             w->history[c][m] = w->history[c][m] * HistoryKeep / 16;

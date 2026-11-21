@@ -140,14 +140,14 @@ def moved(spsa: list, count: int = 6) -> str:
 
 
 def short(path: str) -> str:
-    """A network or a datagen run by its folder and name, as a label."""
+    """A fit or a datagen run by the last two parts of its path, as a label."""
     parts = Path(path).parts
     return "/".join(parts[-2:])
 
 
 def read_job(s: dict) -> dict:
     """A fit's status, from `yapper nntrain`, or a datagen run's, from tools/datagen.py. Their
-    paths are the network and the --out prefix, by which queue.txt names them."""
+    paths are the fit's output folder and the --out prefix, by which queue.txt names them."""
     out = ROOT / s["out"]
     code = s.get("code")
     run = {"source": "status", "kind": s["kind"], "pid": s.get("pid"), "ptn": str(out),

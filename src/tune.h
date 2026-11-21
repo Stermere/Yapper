@@ -5,9 +5,10 @@
  * game by game instead of building a binary per candidate. A name, value and range are written
  * here and nowhere else, so the option, the variable and the tuner cannot disagree.
  *
- * The tuner perturbs each by a twentieth of its range, at least 1, so a range says how far a
- * candidate may stray as well as where it must stay. Units are chosen so the defaults give the
- * integer arithmetic they replaced exactly: `make TUNE=on` must bench the same as `make`. */
+ * The tuner perturbs each by a twentieth of its range by the end of a run, at least 1, and by more
+ * before, so a range says how far a candidate may stray as well as where it must stay. Units are
+ * chosen so the defaults give the integer arithmetic they replaced exactly: `make TUNE=on` must
+ * bench the same as `make`. */
 #ifndef TUNE_H
 #define TUNE_H
 

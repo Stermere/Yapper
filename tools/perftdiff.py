@@ -1,8 +1,8 @@
 """
 perftdiff.py - fuzz the engine against tools/takref.py, and seal what they agree on.
 
-    python tools/perftdiff.py                        # about a minute of fuzzing
-    python tools/perftdiff.py --games 400 --depth 3  # longer
+    python tools/perftdiff.py                        # 48 games a size, most of an hour
+    python tools/perftdiff.py --games 400 --depth 3  # eight times that, for a board rewrite
     python tools/perftdiff.py --seal tests/perft/sealed.perft
 
 Random games on every size are played out by takref alone, and every position they pass

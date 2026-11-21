@@ -98,13 +98,19 @@ a position already failing high can only be confirmed by finding a win.
 ## The search
 
 Iterative deepening PVS with aspiration windows, a bucketed transposition table, null move,
-reverse futility, late move reductions and pruning, and singular extensions. Reductions are a ply
-stronger at a node expected to cut, and move-count pruning comes sooner when the side to move's
-evaluation has fallen since its last move. The table move and the killers are tried
+ProbCut, reverse futility, late move reductions and pruning, and singular extensions. Reductions
+are a ply stronger at a node expected to cut, and move-count pruning comes sooner when the side to
+move's evaluation has fallen since its last move. The null move does little here: a pass gives up
+a placement, 450 on the evaluation's scale, so its search holds at a tenth of the nodes it is tried
+at, E74. So a node the
+evaluation puts above beta is first searched four plies shallower against a bound past beta, and
+cut if even that holds. It is right about 99% of the time, saves more the deeper the search, and
+from depth 7 passed only on a clock long enough to reach that depth, E112. The table move and the
+killers are tried
 before a move list exists, because most nodes cut on one of them. The rest go by history of the
 whole move, so each spread a stack can make keeps its own; a second history, of what answered the
 move before, measured neutral beside the prior and went, E65. On top of that goes a prior. From
-depth 2 it is `policy.c`'s, a small network fitted by `yapper policyfit` to the moves the search
+depth 4, `PriorDepth`, it is `policy.c`'s, a small network fitted by `yapper policyfit` to the moves the search
 chose in self-play. A move's features, all read the same under the board's symmetries and from
 either side, say what a placement touches and leaves for the roads, how many placements each
 side's best road through its square still needs, what a spread takes, covers and gives up, and how
@@ -113,9 +119,10 @@ either answers the last two moves. Each indexes a row of 16 lanes, summed onto t
 alone, square classes and lines of road stones fitted a little better and played the same, and
 went in E65. A node scores its moves at once, so what they share, a
 placement's square, a spread's source and carry and the squares it lands on, is summed once.
-History is halved at the start of every search, so the prior leads until the search has evidence
-of its own, which pays only with the network prior, E52. A node a ply from the leaves cannot pay
-for scoring every move that way, and there the prior is set by hand: a flat or capstone that leaves
+History is cut back at the start of every search, to three quarters by `HistoryKeep`, so the prior
+leads until the search has evidence of its own, which pays only with the network prior, E52. A node
+nearer the leaves cannot pay for scoring every move that way, E100, and there the prior is set by
+hand: a flat or capstone that leaves
 a road to finish next move, one on a square where the other side would leave one, and a spread by
 the tops it takes less those it gives up, read off the stack's bits, E50.
 
@@ -125,24 +132,26 @@ thing on the board wherever in the tree it is played, and the evaluation misses 
 within one search the errors of two nodes reached by the same move correlate at 0.34. So for each
 side to move the search keeps what its finished nodes found beyond the evaluation, in a slot for
 the move that led to the node and one for the mover's own move before it, fitted on top of one slot
-for the side, and reverse futility, the null move's test and the improving flag read the evaluation
-with the two move slots added. The side's own slot is fitted and never read: read at every node it
+for the side, and reverse futility, the tests of ProbCut and the null move, and the improving flag
+read the evaluation with the two move slots added. The side's own slot is fitted and never read: read at every node it
 feeds on itself, one side's up and the other's down, and lost 190. The table and the evaluation
 cache keep the network's own word, and the slots carry from move to move of a game: E82.
 
 A node answering a road plays only what can stop it, which `movegen_road_answer()` works out from
 the squares the road would be placed on: a placement on the one such square, a spread that lands on
 each of them or on a stone of a group each would join, and no placement at all when there are two.
-Anything else leaves a road to be placed, which selftest holds for every move it turns away.
+Anything else leaves a road to be placed, which selftest holds for every move it turns away. The
+third such reply and those after it are searched a ply shallower: never reduced before, their
+subtrees grew to nearly half of a deep search, E108, and the cut passed at 30+0.3, E109.
 
 The clock is shared out over the moves the game has left, worked out from the shorter reserve, so
 it runs down towards the end of the game rather than being spent early and left over. Moving time
 towards the end passed where moving it towards the opening did not: EXPERIMENTS.md E22 and E25.
 Within a move it goes by what the search has found. No iteration starts past a threshold, and the
-threshold is more than twice as late when the best move has just changed and about half once it
-has held for four iterations, with a little more after a fall in the score: another iteration
-names another move a third of the time in the first case and one time in seventeen once a move has
-held for seven, E76.
+threshold is latest when the best move has just changed and comes down a step for each iteration
+it holds, with a little more after a fall in the score: another iteration names another move a
+third of the time in the first case and one time in seventeen once a move has held for seven, E76.
+The steps are tuned with the rest, E102.
 
 The tree's shape is still the textbook one. Treating spreads as threats, sparing moves that
 threaten a road from reductions, and the improving flag in reverse futility and reductions were
@@ -162,7 +171,7 @@ cannot read: what a road threat is worth, set by hand, since no position a fit r
 hanging.
 Scores are in hundredths of a flat, because the search's margins are written in them.
 
-A size the network was not fitted on counts flats. Nothing ships like that. It is there so that a
+A size with no network counts flats. Nothing ships like that. It is there so that a
 build whose network has changed shape, and so has no weights that fit it, can still build the
 trainer that fits new ones from the games on disk.
 

@@ -5,8 +5,9 @@ desktop to an ARM board. It plays 3x3 through 8x8 under the
 [USTAK rules](https://ustak.org/play-beautiful-game-tak/), with komi as an option.
 
 The board and move generation are complete and verified. Every size is evaluated by a network of
-its own, all of one shape and fitted to self-play, and the search has had two passes, which puts it
-well ahead of Tiltak at 5+0.05: see [docs/STATUS.md](docs/STATUS.md).
+its own, all of one shape and fitted to self-play. Tiltak is long behind it, and the last build
+measured against syntaks on 6x6 read -54 at 8+0.08, though further behind at longer clocks: see
+[docs/STATUS.md](docs/STATUS.md).
 
 ## Build
 
@@ -61,6 +62,7 @@ yapper perft 6 3 tps "x6/x6/x6/x6/x6/x6 1 1"
 | [docs/STATUS.md](docs/STATUS.md) | what is done, what is not, what comes next |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | how the board works and why it is fast |
 | [docs/TESTING.md](docs/TESTING.md) | how a change gets verified |
+| [docs/DATA.md](docs/DATA.md) | training data, and fitting the networks |
 | [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) | every measurement |
 | [docs/TEI.md](docs/TEI.md) | the protocol as real programs speak it |
 

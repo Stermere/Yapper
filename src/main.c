@@ -115,10 +115,7 @@ int main(int argc, char **argv) {
         for (; first < argc; first++) {
             int size, epoch;
             double part;
-            if (strcmp(argv[first], "--cpu") == 0) {
-                printf("nntrain fits on the GPU only: a CPU is a hundred times too slow\n");
-                return 2;
-            } else if (strcmp(argv[first], "--warm") == 0) {
+            if (strcmp(argv[first], "--warm") == 0) {
                 warm = true;
             } else if (strcmp(argv[first], "--from") == 0 && first + 1 < argc &&
                        from_count <= MAX_SIZE) {

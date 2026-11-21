@@ -209,7 +209,8 @@ def main() -> int:
     parser.add_argument("--engine", default=default_engine)
     parser.add_argument("--out", help="file names start with this")
     parser.add_argument("--games", type=int, help="in total, across all jobs")
-    parser.add_argument("--nodes", type=int, default=5000, help="search budget per move")
+    # 20,000 a move taught a network far more than 5000 in the same time, E38.
+    parser.add_argument("--nodes", type=int, default=20000, help="search budget per move")
     parser.add_argument("--size", type=int, default=6)
     parser.add_argument("--generation", type=int, default=0)
     parser.add_argument("--seed", type=int, default=1, help="jobs use this and the next ones")

@@ -65,8 +65,8 @@ hits leave them in a search, must equal one built from nothing, bit for bit, and
 and the score must survive the eight symmetries and a colour swap. That last holds for any
 weights, by construction, so random ones are a fair test. Three deliberate bugs, one per check,
 confirmed each fails: one orientation left untied, a carry that forgot to take black tokens away,
-and colours not folded under a black top. A fourth, the grid's transpose dropped for every board
-smaller than it, failed it 155,380 times.
+and colours not folded under a black top. A fourth, from when every board sat on one grid, the
+grid's transpose dropped for every board smaller than it, failed it 155,380 times.
 
 ## perftdiff
 

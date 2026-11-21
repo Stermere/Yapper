@@ -169,6 +169,8 @@ pass.
 | `tools/speedcmp.py` | race move generation against the baselines |
 | `tools/gamestats.py` | how a match went, side by side, from its PTN |
 | `tools/datagen.py` | self-play for training, on every core; pauses and carries on, alone or as a plan of runs |
+| `tools/mkopenings.py` | datagen's books of starting positions, from Yapper's own games or people's, never another engine's |
+| `tools/playtak.py` | PlayTak's history of games between people, as PTN for `mkopenings.py` |
 | `tools/datacheck.py` | read training data without the engine, and check it against takref |
 | `docs/` | status, architecture, testing, TEI, data, experiments |
 | `external/` | **gitignored**: baseline binaries, match output, training data |

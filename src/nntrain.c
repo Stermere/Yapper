@@ -704,8 +704,9 @@ static void status_phase(const char *phase) {
     status_write(true, -1);
 }
 
-/* With no path given, external/games/live/fit-<folder>-<file>.json after the network's last two
- * path parts, which a fit run from anywhere but the repository's root has no folder for. */
+/* With no path given, external/games/live/fit-<parent>-<folder>.json after the last two parts of
+ * the output folder's path, which a fit run from anywhere but the repository's root has no folder
+ * for. */
 static void status_open(const char *path, const char *out, int epochs, int files) {
     const char *base = out, *parent = out;
     for (const char *c = out; *c; c++) {

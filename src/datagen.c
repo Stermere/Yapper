@@ -51,8 +51,8 @@ static u64 DataRngState;
 static u64 DeviationsTried, DeviationsPlayed;
 
 /* The book, if there is one: the file's text with each line ended, and where each line starts.
- * A game reached by another engine's play leaves structures self-play never builds, and random
- * plies can only put stones down at random. */
+ * A position from people's games or Yapper's own leaves structures self-play never builds, and
+ * random plies can only put stones down at random. No other engine's play goes in: docs/DATA.md. */
 static char *Book;
 static char **BookLines;
 static u64 BookCount;

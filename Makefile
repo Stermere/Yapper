@@ -4,10 +4,10 @@
 #  Usage:
 #    make                 optimised build for THIS machine (-march=native)
 #    make ARCH=generic    no CPU assumptions, runs anywhere the compiler targets
-#    make ARCH=popcnt     x86-64 with POPCNT, which is what CI uses
+#    make ARCH=popcnt     x86-64 with POPCNT, which CI's Windows build uses
 #    make release         the engine alone, with no datagen, fitting or selftest
 #    make TUNE=on         every tunable in src/tune.h as a TEI option, for tools/tune.py
-#    make debug          unoptimised + assertions (+ sanitizers on POSIX)
+#    make debug           -O1 with assertions (+ sanitizers on POSIX)
 #    make bench           build, then run the deterministic node-count benchmark
 #    make perft           build, then run the sealed perft suites
 #    make selftest        build, then run the board and rule invariants

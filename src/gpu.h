@@ -14,7 +14,7 @@
 typedef u64 GpuPtr;
 
 /* Loads the driver and the compiler, takes the first device, and compiles `source`. False with a
- * reason if any of it is missing; the tools then fall back to the CPU. */
+ * reason if any of it is missing, and then nntrain stops: it fits on nothing else. */
 bool gpu_open(const char *source, char *why, size_t why_size);
 
 /* The card's name, after gpu_open(). */
