@@ -346,12 +346,8 @@ static void spread_parts(const Board *b, const PolicyContext *ctx, Move m, unsig
                                                                   : 3));
         s->carry_n        = k;
     }
-    u64 landed = 0;
-    int to     = sq;
-    for (int h = 0; h < hops; h++) {
-        to += step;
-        landed |= 1ULL << to;
-    }
+    const u64 landed = MoveLine[sq][move_direction(m)][hops];
+    const int to     = sq + step * hops;
     if (need & 4) {
         int tallest = 0;
         for (u64 their_landed = landed & theirs; their_landed;) {

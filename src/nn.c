@@ -217,7 +217,9 @@ static inline const i16 *part_of(const i16 *row, int view, int feature) {
 
 void nn_refresh(const Board *b, NNFrame *frame) {
     const Net *net = &Nets[b->size];
-    memset(frame->acc, 0, sizeof(frame->acc));
+    for (int view = 0; view < NN_SIDES; view++) {
+        memcpy(frame->acc + view * NN_VIEW, net->bias, sizeof(net->bias));
+    }
     memset(frame->feature, 0, sizeof(frame->feature));
     u64 occupied = b->owned[WHITE] | b->owned[BLACK];
     while (occupied) {
@@ -340,25 +342,31 @@ _Static_assert(((i64)NN_L3) * NN_QY * NN_L4_LIMIT < 1LL << 31, "the head's outpu
 typedef u16 NNUVec __attribute__((vector_size(NN_VEC_BYTES), may_alias));
 #define NN_LANES ((int)(sizeof(NNVec) / sizeof(i16)))
 _Static_assert(NN_FILTERS % NN_LANES == 0, "a view's filters are whole vectors");
+_Static_assert(NN_POOL_SHIFT == 5 && NN_QA << NN_POOL_SHIFT <= 32767,
+               "the pool's one multiply rounds at this shift, inside 16 bits");
 
 /* One view's filters. Each square is cut before it is added, so the sums never leave 16 bits, and
  * in GCC's vectors, since clang widens the plain loop to 32: half the time, E48. Out of line:
  * inlined, clang derives the pools again for every row, E42. */
-static __attribute__((noinline)) void pool(const i16 *restrict acc, const i16 *restrict bias,
-                                           i16 *restrict pooled) {
+static __attribute__((noinline)) void pool(const i16 *restrict acc, i16 *restrict pooled) {
     NNUVec sums[NN_FILTERS / NN_LANES];
     memset(sums, 0, sizeof(sums));
     const NNVec zero = {0}, top = zero + NN_QA;
     for (int g = 0; g < NN_ORIENTATIONS; g++) {
         const NNVec *a = (const NNVec *)(acc + g * NN_FILTERS);
-        const NNVec *b = (const NNVec *)(bias + g * NN_FILTERS);
         for (int j = 0; j < NN_FILTERS / NN_LANES; j++) {
-            NNVec z          = a[j] + b[j];
-            z                = z & (NNVec)(z > zero);
+            NNVec z          = a[j] & (NNVec)(a[j] > zero);
             const NNVec over = (NNVec)(z > top);
             z                = (z & ~over) | (top & over);
-            const NNUVec x   = (NNUVec)z;
+#if defined(__AVX2__)
+            /* (a * b + 2^14) >> 15 of z << 5 by itself is (z * z + 16) >> 5, in one multiply. */
+            typedef short Shorts __attribute__((vector_size(32)));
+            const Shorts up = (Shorts)(z << NN_POOL_SHIFT);
+            sums[j] += (NNUVec)__builtin_ia32_pmulhrsw256(up, up);
+#else
+            const NNUVec x = (NNUVec)z;
             sums[j] += (x * x + (1 << (NN_POOL_SHIFT - 1))) >> NN_POOL_SHIFT;
+#endif
         }
     }
     memcpy(pooled, sums, sizeof(sums));
@@ -430,8 +438,8 @@ i64 nn_score(int size, const NNFrame *frame, const NNInputs *in) {
     const int bucket = in->bucket;
     _Alignas(64) i16 pooled[NN_POOLS];
     /* The side to move's view is the half of its own colour, and its pools come first. */
-    pool(frame->acc + in->stm * NN_VIEW, net->bias, pooled);
-    pool(frame->acc + (in->stm ^ 1) * NN_VIEW, net->bias, pooled + NN_FILTERS);
+    pool(frame->acc + in->stm * NN_VIEW, pooled);
+    pool(frame->acc + (in->stm ^ 1) * NN_VIEW, pooled + NN_FILTERS);
 
     const i32 linear    = dot(net->output[bucket], pooled);
     const i32 inputs[3] = {in->lead * (NN_QU / NN_LEAD_UNIT),

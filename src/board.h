@@ -149,6 +149,10 @@ bool board_road_through(const Board *b, u64 area, u64 seeds);
  * square is in one of a pair and its last in the other, however it was made. */
 void board_road_ends(const Board *b, int color, u64 ends[4]);
 
+/* board_road_ends() for `us` and for the other side at once. The two agree on the board, and off
+ * it neither means anything. */
+void board_road_ends_both(const Board *b, int us, u64 ours[4], u64 theirs[4]);
+
 /* The squares in both of a pair, where a single stone of `color` finishes a road. */
 static inline u64 board_road_gaps(const u64 ends[4]) {
     return (ends[0] & ends[1]) | (ends[2] & ends[3]);

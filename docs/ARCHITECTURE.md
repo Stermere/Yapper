@@ -4,7 +4,7 @@
 
 **One layout for every size.** A square is `rank * 8 + file` on all boards, so shifts are
 constants, and a size is only a mask and a carry limit. One binary plays all sizes through one
-code path with no per-size specialisation.
+code path. A build for 6x6 alone searched only about 1.5% faster, E127.
 
 **A stack is a shift register with its height built in.** `stones[sq]` holds one bit per stone
 with bit 0 on top, and a 1 above the bottom stone, so an empty square holds 1. Taking `k` stones
@@ -87,6 +87,11 @@ four floods with no move generation: flood from each edge, then a square that to
 of a crossing wins. The search uses it as a win-in-one test at every node, and as a threat
 detector the leaf search follows: a leaf with a road hanging is not quiet, so it plays out the
 replies that stop the road instead of standing pat.
+
+A node wants both sides' ends, so `board_road_ends_both()` runs the eight floods together, four to
+a register with AVX2 and two without. Only 8x8 has a square on file H, so smaller boards flood
+without masks against wrapping. The search floods before it probes the table, while the line the
+make asked for is on its way, E127.
 
 `movegen_road_spread()` answers the same question for a spread, which is how most roads are
 finished. A road's first new square has to touch the group at one edge and its last the group at
@@ -210,11 +215,12 @@ holds that exactly, for any weights. Training stores each filter once. That is a
 weights to fit, with no augmentation, and the engine spreads them over the symmetries as it
 loads them.
 
-**Nothing in make or unmake knows about it.** The search keeps a frame per ply, filled only when
-that node is evaluated. A table hit skips the evaluation, so a frame comes from the nearest
-ancestor that has one, through the squares that the moves on the path since then have changed,
-and the search already records those moves. Selftest checks a frame carried this way against a
-refresh, bit for bit.
+**Nothing in make or unmake knows about it.** The search keeps a frame per ply, filled when
+that node is evaluated or before it searches its children. A node that returns on a hit never pays
+for one, and one that searches on has it for every child to start from, E127. A frame comes from
+the nearest ancestor that has one, through the squares that the moves on the path since then have
+changed, and the search already records those moves. Selftest checks a frame carried this way
+against a refresh, bit for bit.
 
 **What is not stacks goes around it.** Output weights come in eight buckets by stones left,
 finer near the end, where what a flat is worth climbs steeply. That is the smaller of what
@@ -241,7 +247,8 @@ on the same rounded weights the engine runs, so the fit is what plays.
 **What a node's evaluation costs.** Bringing the accumulator up to date cost three times what
 scoring it did, a third of the search's time, E43; with the head, scoring costs about as much
 again. All of a carry's rows are applied in one pass, a slice of the accumulator at a time held in
-vector registers, from the ancestor's accumulator straight into the node's. The head's loops are
+vector registers, from the ancestor's accumulator straight into the node's. An accumulator begins
+at the bias, so the pools have nothing to add, E127. The head's loops are
 written for what the compiler makes of them: each part was timed alone, and the obvious forms ran
 two to four times slower, E48.
 Its two layers are kept by pairs of inputs and summed with the multiply-add of adjacent lanes, a

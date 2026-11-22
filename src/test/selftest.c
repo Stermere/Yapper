@@ -156,8 +156,18 @@ static void check_moves(Board *b) {
         CHECK(movegen_is_legal(b, m), "generated but illegal %s: %s", move_format(m, text), tps);
         CHECK(move_parse(move_format(m, text)) == m, "PTN round trip %s: %s", text, tps);
 
+        CHECK(movegen_squares(m) == move_squares(m), "squares of %s: %s", move_format(m, text),
+              tps);
+        const int us    = board_stm(b);
+        const int swing = move_is_place(m) ? 0 : movegen_spread_swing(b, m, us);
         Undo undo;
         board_make(b, m, &undo);
+        if (!move_is_place(m)) {
+            const int won =
+                __builtin_popcountll(b->owned[us]) - __builtin_popcountll(before.owned[us]) -
+                __builtin_popcountll(b->owned[!us]) + __builtin_popcountll(before.owned[!us]);
+            CHECK(swing == won, "swing %d for %d of %s: %s", swing, won, move_format(m, text), tps);
+        }
         const Outcome fast = board_outcome_after(b, &undo);
         const Outcome slow = board_outcome(b);
         CHECK(fast == slow, "outcome %d vs %d after %s: %s", fast, slow, move_format(m, text), tps);
@@ -179,6 +189,16 @@ static void check_moves(Board *b) {
     if (b->ply >= 2 && (b->flats[board_stm(b)] || b->capstones[board_stm(b)])) {
         CHECK(found == winning, "road placements %llx vs %llx: %s", (unsigned long long)winning,
               (unsigned long long)found, tps);
+    }
+    u64 both[2][4];
+    board_road_ends_both(b, board_stm(b), both[0], both[1]);
+    for (int side = 0; side < 2; side++) {
+        u64 alone[4];
+        board_road_ends(b, board_stm(b) ^ side, alone);
+        for (int e = 0; e < 4; e++) {
+            CHECK(((both[side][e] ^ alone[e]) & b->mask) == 0, "road ends at once, side %d: %s",
+                  side, tps);
+        }
     }
     if (b->ply >= 2) {
         u64 ends[4];

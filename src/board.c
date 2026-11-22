@@ -561,6 +561,82 @@ void board_road_ends(const Board *b, int color, u64 ends[4]) {
     ends[3]         = neighbours(flood(b->rank_last, area)) | b->rank_last;
 }
 
+/* A flood a lane. Four lanes to a register with AVX2 and two without: gcc builds four out of
+ * scalars where there is no register for them, which is slower than flooding one at a time. Only
+ * 8x8 has a square on file H, so every smaller board leaves out the masks against wrapping. */
+#if defined(__AVX2__)
+typedef u64 Lanes4 __attribute__((vector_size(32)));
+typedef long long Lanes4Signed __attribute__((vector_size(32)));
+
+static inline __attribute__((always_inline)) void ends_both(const Board *b, int us, u64 ours[4],
+                                                            u64 theirs[4], bool wraps) {
+    const Lanes4 edges = {FILE_A & b->mask, b->file_last, RANK_1 & b->mask, b->rank_last};
+    const Lanes4 east  = (Lanes4){0} + (wraps ? ~FILE_H : ~0ULL);
+    const Lanes4 west  = (Lanes4){0} + (wraps ? ~FILE_A : ~0ULL);
+    const Lanes4 mine  = (Lanes4){0} + board_road_stones(b, us);
+    const Lanes4 other = (Lanes4){0} + board_road_stones(b, !us);
+#define AROUND(x) ((x) << 8 | (x) >> 8 | ((x)&east) << 1 | ((x)&west) >> 1)
+    Lanes4 group = edges & mine, their_group = edges & other;
+    for (;;) {
+        const Lanes4 front       = AROUND(group) & mine & ~group;
+        const Lanes4 their_front = AROUND(their_group) & other & ~their_group;
+        const Lanes4Signed fresh = (Lanes4Signed)(front | their_front);
+        if (__builtin_ia32_ptestz256(fresh, fresh)) {
+            break;
+        }
+        group |= front;
+        their_group |= their_front;
+    }
+    const Lanes4 out = AROUND(group) | edges, their_out = AROUND(their_group) | edges;
+#undef AROUND
+    memcpy(ours, &out, sizeof(out));
+    memcpy(theirs, &their_out, sizeof(their_out));
+}
+#else
+typedef u64 Lanes2 __attribute__((vector_size(16)));
+
+static inline __attribute__((always_inline)) void ends_of(const Board *b, int color, u64 ends[4],
+                                                          bool wraps) {
+    const Lanes2 sides = {FILE_A & b->mask, b->file_last};
+    const Lanes2 heads = {RANK_1 & b->mask, b->rank_last};
+    const Lanes2 area  = (Lanes2){0} + board_road_stones(b, color);
+    const Lanes2 east  = (Lanes2){0} + (wraps ? ~FILE_H : ~0ULL);
+    const Lanes2 west  = (Lanes2){0} + (wraps ? ~FILE_A : ~0ULL);
+#define AROUND(x) ((x) << 8 | (x) >> 8 | ((x)&east) << 1 | ((x)&west) >> 1)
+    Lanes2 across = sides & area, along = heads & area;
+    for (;;) {
+        const Lanes2 front_across = AROUND(across) & area & ~across;
+        const Lanes2 front_along  = AROUND(along) & area & ~along;
+        const Lanes2 fresh        = front_across | front_along;
+        if (!(fresh[0] | fresh[1])) {
+            break;
+        }
+        across |= front_across;
+        along |= front_along;
+    }
+    const Lanes2 out_across = AROUND(across) | sides, out_along = AROUND(along) | heads;
+#undef AROUND
+    ends[0] = out_across[0];
+    ends[1] = out_across[1];
+    ends[2] = out_along[0];
+    ends[3] = out_along[1];
+}
+
+static inline __attribute__((always_inline)) void ends_both(const Board *b, int us, u64 ours[4],
+                                                            u64 theirs[4], bool wraps) {
+    ends_of(b, us, ours, wraps);
+    ends_of(b, !us, theirs, wraps);
+}
+#endif
+
+void board_road_ends_both(const Board *b, int us, u64 ours[4], u64 theirs[4]) {
+    if (b->size < 8) {
+        ends_both(b, us, ours, theirs, false);
+    } else {
+        ends_both(b, us, ours, theirs, true);
+    }
+}
+
 u64 board_road_near(const u64 ends[4], u64 empty) {
     return ((ends[0] & neighbours(ends[1] & empty)) | (ends[1] & neighbours(ends[0] & empty)) |
             (ends[2] & neighbours(ends[3] & empty)) | (ends[3] & neighbours(ends[2] & empty))) &

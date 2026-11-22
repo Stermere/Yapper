@@ -249,37 +249,45 @@ static inline void correction_update(Worker *w, int us, int ply, int depth, int 
     }
 }
 
-/* The evaluation of the node at `ply`. Make and unmake know nothing of the network: the moves on
- * the path are in `played`, and that is all a frame needs to catch up. */
+/* The frame of the node at `ply`, carried from the nearest ancestor that has one. Make and unmake
+ * know nothing of the network: the moves on the path are in `played`, and that is all it takes. */
+static void frame_update(Worker *w, int ply) {
+    const Board *b = &w->board;
+    NNFrame *frame = &w->frames[ply];
+    if (frame->computed || !nn_ready(b->size)) {
+        return;
+    }
+    u64 touched = 0;
+    int base    = ply - 1;
+    while (base >= 0) {
+        touched |= movegen_squares(w->played[base]);
+        if (w->frames[base].computed) {
+            break;
+        }
+        base--;
+    }
+    if (base >= 0) {
+        nn_derive(b, frame, &w->frames[base], touched);
+    } else {
+        nn_refresh(b, frame);
+    }
+}
+
+/* The evaluation of the node at `ply`. */
 static int node_eval(Worker *w, int ply, u64 threats) {
     const Board *b = &w->board;
     if (!nn_ready(b->size)) {
         return evaluate(b, threats);
     }
-    /* A hit leaves this node without a frame, as a table hit does, and its children carry theirs
-     * from further up. */
+    /* A hit leaves this node without a frame, as a table hit does. One that goes on to search is
+     * given its frame then. */
     const u64 key = eval_cache_key(board_key(b));
     u64 *slot     = &EvalCache[key & (EVAL_CACHE_SIZE - 1)];
     if ((*slot ^ key) >> 16 == 0) {
         return (i16)*slot;
     }
     NNFrame *frame = &w->frames[ply];
-    if (!frame->computed) {
-        u64 touched = 0;
-        int base    = ply - 1;
-        while (base >= 0) {
-            touched |= move_squares(w->played[base]);
-            if (w->frames[base].computed) {
-                break;
-            }
-            base--;
-        }
-        if (base >= 0) {
-            nn_derive(b, frame, &w->frames[base], touched);
-        } else {
-            nn_refresh(b, frame);
-        }
-    }
+    frame_update(w, ply);
     const int score = evaluate_frame(b, threats, frame);
     *slot           = (key & ~0xFFFFULL) | (u16)score;
     return score;
@@ -311,8 +319,8 @@ static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *move
     }
 
     /* A win on the spot needs no search, and most of Tak's tactics hang off this test. */
-    u64 ends[4];
-    board_road_ends(b, us, ends);
+    u64 ends[4], their_ends[4];
+    board_road_ends_both(b, us, ends, their_ends);
     if (board_road_gaps(ends) & board_empty(b)) {
         return SCORE_WIN - ply - 1;
     }
@@ -320,7 +328,7 @@ static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *move
     /* Looking for a spread is the dearest thing a node does after the evaluation, and a stand pat
      * that already fails high can only be confirmed by what it finds. A node that goes on to
      * answer a road never reads its stand pat, so it is not evaluated at all. */
-    const u64 threats  = board_road_placements(b, !us);
+    const u64 threats  = board_road_gaps(their_ends) & board_empty(b);
     const bool answers = threats && !last_stones(b, us) && qply < QuiesceDepth && ply < MAX_PLY - 1;
     int stand_pat      = 0;
     if (!answers) {
@@ -336,6 +344,7 @@ static int quiesce(Worker *w, int alpha, int beta, int ply, int qply, Move *move
         return stand_pat;
     }
 
+    frame_update(w, ply);
     const int count = movegen_all(b, moves);
     int best        = -SCORE_WIN + ply + 2; /* the road lands unless a reply stops it */
     RoadAnswer answer;
@@ -448,17 +457,61 @@ static void score_moves(Worker *w, const Move *moves, i32 *scores, int count, Mo
     }
 }
 
-/* Two passes, because a compiler can vectorise finding the highest score and not a loop that
- * keeps its index. A tie must go to the earlier move: the generator lists placements first, and
- * an order among ties that loses that costs real nodes. */
+#if defined(__AVX2__)
+#define PICK_BYTES 32
+#else
+#define PICK_BYTES 16
+#endif
+#define PICK_LANES (PICK_BYTES / (int)sizeof(i32))
+typedef i32 PickVec __attribute__((vector_size(PICK_BYTES), aligned(4), may_alias));
+
+/* A bit for each lane that is set. */
+static inline unsigned lanes_set(PickVec v) {
+#if defined(__AVX2__)
+    typedef float Floats __attribute__((vector_size(32)));
+    return (unsigned)__builtin_ia32_movmskps256((Floats)v);
+#elif defined(__SSE2__)
+    typedef float Floats __attribute__((vector_size(16)));
+    return (unsigned)__builtin_ia32_movmskps((Floats)v);
+#else
+    return (v[0] & 1u) | (v[1] & 2u) | (v[2] & 4u) | (v[3] & 8u);
+#endif
+}
+
+/* Two passes in vectors, the highest score and then where it is, neither with an early exit: where
+ * the best lies cannot be predicted. The second runs from the end back, so a tie goes to the
+ * earlier move. It must: the generator lists placements first, and an order among ties that loses
+ * that costs real nodes. The last lanes overlap those before them. */
 static inline Move pick_next(Move *moves, i32 *scores, int from, int count) {
-    i32 top = scores[from];
-    for (int i = from + 1; i < count; i++) {
-        top = scores[i] > top ? scores[i] : top;
-    }
+    i32 top  = scores[from];
     int best = from;
-    while (scores[best] != top) {
-        best++;
+    if (count - from >= PICK_LANES) {
+        const int last   = count - PICK_LANES;
+        const int blocks = (last - from + PICK_LANES - 1) / PICK_LANES;
+        PickVec high     = *(const PickVec *)(scores + last);
+        for (int k = 0; k < blocks; k++) {
+            const PickVec next = *(const PickVec *)(scores + from + k * PICK_LANES);
+            const PickVec more = (PickVec)(next > high);
+            high               = (next & more) | (high & ~more);
+        }
+        top = high[0];
+        for (int j = 1; j < PICK_LANES; j++) {
+            top = high[j] > top ? high[j] : top;
+        }
+        const PickVec want = (PickVec){0} + top;
+        const unsigned end = 1u << PICK_LANES; /* so there is always a bit to find */
+        unsigned held      = lanes_set((PickVec)(*(const PickVec *)(scores + last) == want));
+        best               = last + __builtin_ctz(held | end);
+        for (int k = blocks - 1; k >= 0; k--) {
+            const int at = from + k * PICK_LANES;
+            held         = lanes_set((PickVec)(*(const PickVec *)(scores + at) == want));
+            best         = held ? at + __builtin_ctz(held | end) : best;
+        }
+    } else {
+        for (int i = from + 1; i < count; i++) {
+            best = scores[i] > top ? i : best;
+            top  = scores[i] > top ? scores[i] : top;
+        }
     }
     const Move m = moves[best];
     const i32 s  = scores[best];
@@ -516,8 +569,17 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, bool cut_n
     const Move excluded = w->excluded[ply];
     TTEntry entry       = {0};
     const u64 key       = board_key(b);
-    const bool hit      = tt_probe(key, &entry);
-    Move tt_move        = hit && !excluded ? entry.move : MOVE_NONE;
+
+    /* Both sides' ends, which the ordering reads as well. Before the probe, though a hit may not
+     * need them: the make asked for the table's line, and this is done while it is on its way. */
+    u64 ends[4]       = {0};
+    u64 their_ends[4] = {0};
+    if (b->ply >= 2) {
+        board_road_ends_both(b, us, ends, their_ends);
+    }
+
+    const bool hit = tt_probe(key, &entry);
+    Move tt_move   = hit && !excluded ? entry.move : MOVE_NONE;
     if (hit && !pv_node && !excluded && entry.depth >= depth) {
         const int score   = score_from_tt(entry.score, ply);
         const Bound bound = tt_bound(&entry);
@@ -527,16 +589,11 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, bool cut_n
         }
     }
 
-    /* Both sides' ends, which the ordering reads as well. */
-    u64 ends[4]       = {0};
-    u64 their_ends[4] = {0};
-    u64 threats       = 0;
+    u64 threats = 0;
     if (b->ply >= 2) {
-        board_road_ends(b, us, ends);
         if (!root && (board_road_gaps(ends) & board_empty(b))) {
             return SCORE_WIN - ply - 1;
         }
-        board_road_ends(b, !us, their_ends);
         threats = board_road_gaps(their_ends) & board_empty(b);
     }
     /* The table and the cache hold the network's word; what the search has learned since is
@@ -558,6 +615,10 @@ static int search(Worker *w, int alpha, int beta, int depth, int ply, bool cut_n
     if (!root && b->ply >= 2 && movegen_road_spread(b, us, ends)) {
         return SCORE_WIN - ply - 1;
     }
+
+    /* From here the node has children. One that came from the table or the cache has no frame, and
+     * every child of it would carry its own from further up, over the same moves. */
+    frame_update(w, ply);
 
     /* A node the evaluation puts above beta is searched a few plies shallower first, against a
      * bound a margin above beta, and cut if even that holds: the shallow search of a node foretells

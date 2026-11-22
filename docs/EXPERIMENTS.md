@@ -5961,6 +5961,195 @@ E122 read +47.2 at `go nodes 20000`. The two moved together: datagen's budget ag
 and the tune; the SPRT above puts about 38 of the difference on the tune. So gen 17 played by this
 build would come from a player about 95 above gen 16's, at 11% more time a game.
 
+Gen 17 started the same night on this build, eight Hetzner CPX62 at 66 rounds of 30,500 games
+(`external/data/gen17/README.txt`).
+
+## E124: quirky starts, under way
+
+The user's idea, 2026-11-20: starts self-play would never reach, many kinds together, so that
+kinds which might each measure level could still widen what the network has seen. Today's starts
+are books from games (people's, Yapper's own, positions its search misjudged, one move off a game)
+or 4 to 16 random plies that are 70% flats, so tall stacks, walls, uneven reserves and road races
+come only where the engine's own play leads. E81 is the caution: tree positions as a sixth of a
+fit left the evaluation's spread on held-out tree positions where it was, 233 to 230, so whether
+this pays is a match's to say, not a loss's.
+
+Six kinds, each a book of legal moves from the empty board, so the data format and its checks are
+unchanged. `external/build/e124/quirky.c` writes them with the engine's own board and move
+generator, deterministic from a seed:
+
+| Kind | Plies | How |
+|---|---|---|
+| stacks | 12-40 | stones put down beside stones 8x, spreads 65% from ply 4, a pile onto one stack weighted 8 x carry x (1 + its height) |
+| reserves | 16-40 | one side mostly places, the other mostly spreads, piling onto the placer's stones; top flats within 2 at the end |
+| walls | 8-24 | walls 30% of moves |
+| caps | 8-30 | half: each side's capstone early, cap-topped stacks moved 6x; half: no capstone |
+| roads | 12-30 | a flat weighted by (1 + the longest own line it joins)^2 |
+| regions | 10-24 | placements 20x on the edge ring, or the centre, one per line |
+
+A line is drawn again when it ends the game or leaves the side to move a road in one placement.
+6,000 lines replayed through takref, every move legal and no game over (`check.py`); 960 datagen
+games from them, all replayed by takref (`tools/datacheck.py --check-every 1`).
+
+What datagen kept, 160 games a kind by the gen 17 build, beside a gen 16 file of three sets
+(`starts.py`; at the start position, plies scored a game):
+
+| Set | Start ply | Scored a game | Tallest | Buried | Walls | Reserve gap | Starts rejected a game |
+|---|---|---|---|---|---|---|---|
+| gen 16 self | 9.4 | 84.6 | 1.08 | 0.09 | 0.48 | 0.71 | |
+| gen 16 humans | 22.8 | 75.8 | 2.71 | 3.78 | 0.85 | 1.20 | |
+| gen 16 off | 39.6 | 59.4 | 3.53 | 7.91 | 2.36 | 1.58 | |
+| stacks | 25.7 | 82.6 | 3.54 | 4.47 | 1.05 | 1.15 | 2.0 |
+| reserves | 18.9 | 81.5 | 2.31 | 2.14 | 0.81 | 2.79 | 38.7 |
+| walls | 15.7 | 76.0 | 1.18 | 0.23 | 4.04 | 0.96 | 1.6 |
+| caps | 17.9 | 82.1 | 1.47 | 0.64 | 1.23 | 0.90 | 2.1 |
+| roads | 19.0 | 75.6 | 1.41 | 0.53 | 0.96 | 0.89 | 1.8 |
+| regions | 16.7 | 79.7 | 1.27 | 0.31 | 0.79 | 0.85 | 1.5 |
+
+The first reserves book, without the piling and the flat check, gave 25,727 rejected starts for
+40 games: a placer far ahead on flats is a start the search calls won. Fixed, it keeps a gap of
+2.8 of the book's 5.0, the search turning the larger ones away, and costs about a quarter more
+time a game for its rejections; the rest cost about what self does.
+
+**Into gen 17** as a second mix (`external/data/gen17/mkplans2.py`, `switch2.sh`), each box from the
+round after the one it is paused in: the five sets displaced in proportion (humans 16, variants 12,
+swings 16, off 8, self 28%) and the six kinds at 1,024 games each, a round 30,544 games. Each box
+builds its own books at seed 1240 + box (`qbooks.sh`): 400,000 lines a kind and 3,000,000 of
+reserves, since it draws about 40 starts for each game it keeps. Rewritten rounds take seeds from
+40,000,000 + box * 1,000,000 + 500,000, above any the first mix has.
+
+**How it will be judged:** the files are named by set, so after gen 17 one fit with the six kinds
+and one without, on otherwise the same files, then an SPRT between them, twice over, since one
+pair of fits is one seed.
+
+## E125: the shape of the clock, both ways lost
+
+E102's 500 games against syntaks at 60+1 show the two clocks spending in opposite shapes. Mean
+seconds a move:
+
+| Move | 3 | 4 | 5-10 | 15 | 20 | 30 | 40 |
+|---|---|---|---|---|---|---|---|
+| Yapper | 2.1 | 1.9 | 1.8-1.9 | 2.1 | 2.3 | 2.6 | 2.3 |
+| syntaks | 5.9 | 3.5 | 2.0-2.6 | 1.9 | 1.8 | 1.6 | 1.6 |
+
+Yapper's clock does not lose those games. At the turn, its own score first under -1, it has a
+median 42 s left to syntaks's 38. It first falls under 5 s in 248 of its 319 losses, but at a
+median own score of -12.7, and in only 18 of them above -3; 75 of its 8,813 moves within 1 of level
+were played under 5 s, and no game was lost on time. The late seconds go to lost games. E112's
+self-play at 30+0.3 spends the same way: 72% of the clock left at move 20, half at move 30.
+
+The moves-left guess, 3 + 1.5 stones of the shorter reserve, is 5 to 8 moves short in the middle
+game: at 8 to 11 stones it expects 15 and games went 24. E73 tuned the guess at 8+0.08 and it
+barely moved, so the clock's shape had never been tested. The user: hypotheses one SPRT each, then
+an SPSA if one pays. Both sides play one `make TUNE=on` build (bench 1040418) with the values set on
+dev alone, at 30+0.3 and [0, 10], as E109 and E112 were. The values come from a model of the clock
+fitted to Yapper's own spending: a move spends 0.88 to 0.93 of its share, through each game's
+median reserve.
+
+| Test | Values | Clock, dev against base | Result |
+|---|---|---|---|
+| E125a: spend early, as syntaks does | TimeMovesPerStone 80, TimeMovesMin 16 | moves 3-20 x1.35 (depth +0.9), 30-45 x0.68 (depth -0.7), level at move 45 | 1108 games, +232 -251 =625, **-6.0 +/- 11.9**, pairs [20, 127, 269, 128, 10], FAILED in 3 h 15 m |
+| E125b: spend late | TimeMoves 0, TimeMovesPerStone 240, TimeMovesMin 5 | moves 3-20 x0.81 (depth -0.5), 30-45 x1.21 (depth +0.6), level at move 45 | 734 games, +148 -174 =412, **-12.3 +/- 14.5**, pairs [9, 96, 187, 62, 13], FAILED in 2 h 8 m |
+
+Both did what they set out to and both lost. Today's shape sits at or near the best this
+formula gives in self-play: early depth and late depth are each worth about what they cost, so
+moving a fifth to a third of the time either way loses. With E73's tune barely moving the same
+knobs, an SPSA over them has nothing to find and was not run. Whatever syntaks gains on the
+longer clock, it is not from how Yapper shares its own out. The clock keeps its defaults.
+
+## E126: the newest syntaks, and the old one again
+
+The user heard that syntaks had grown much stronger, and asked for the newest build beside the old,
+which stays the yardstick every result since E40 was read against. `main` at 4f224c9 (2026-11-14),
+17 commits past 905022f, built stock as a black box with the network its build fetches, cnet023,
+the newest published; source deleted unread: `external/engines/syntaks-4f224c9.exe`. Today's
+master, 4306fca (bench 1040418, E121's play), against each as E102 was measured: 8+0.08, 2 komi,
+E87's 1000 openings (6s_4ply, seeds 1 and 2), 7 at once, nothing beside it. No game lost on time.
+
+| Against | Games | Result | Lost by road / on flats |
+|---|---|---|---|
+| syntaks 905022f, the yardstick | 1000 | +322 -465 =213, **-50 [-69, -31]**, pairs [105, 95, 182, 74, 44] | 213 / 252 |
+| syntaks 4f224c9, cnet023 | 1000 | +50 -759 =191, **-307.5 [-332, -286]**, pairs [280, 156, 57, 7, 0] | 257 / 502 |
+
+Against the yardstick master is where E102 was: paired with E102's games opening by opening, -7
++/- 31 and +14 +/- 30 on the two seeds. E109, E112 and E121 passed for about 56 in self-play, E109
+and E112 at 30+0.3, and none of it shows at 8+0.08 here. Master loses 46 more games by road than
+E102 did, 213 to 167, and 22 fewer on flats: E109 searches late road replies a ply shallower, so
+that is the first suspect, though about 2.4 standard errors is a lead, not a finding.
+
+The new syntaks is about 240 above the old on the same openings, +231 and +249 paired. Nearly all
+of what it adds comes on the count: Yapper's losses on flats double, 252 to 502, where those by
+road move from 213 to 257. It wins quiet games that the old one drew or lost, which points at
+judgement more than tactics. syntaks 4f224c9 is the bar from here; 905022f stays as the yardstick.
+Logs in `external/games/e126`, script `external/build/e126/gauntlet.sh`.
+
+## E127: the search's kernels by hand, and what knowing the board's size is worth
+
+A pure speedup of 4306fca: the same move, nodes and score on every position raced, and bench
+1040418. The question was what code specialised by board size would gain. A sampled profile of
+E121's search on its own self-play (`external/build/e127/profile.py`) put the time in a few
+kernels, so each was written by hand and raced alone and together, with and without the size
+compiled in.
+
+Conditions: 300,000 nodes a search from 25 positions of E107's self-play games 0-5, pinned to a
+core, builds interleaved, median of 7 paired rounds, clang native, gen 17's download running
+throughout. An identical copy of the baseline read between -0.4% and +0.4% over these runs.
+
+| Change | Alone |
+|---|---|
+| A node that goes on to search gets its frame before its children need it | **+14.8%** |
+| A spread's squares and swing from a table and popcounts | +3.0% |
+| Both sides' road ends flooded at once | +2.7% |
+| ... without wrap masks below 8x8 | +3.8%, with the row above |
+| ... and before the table's probe, while its line is on the way | +5.5%, with the two above |
+| The best move left found in vectors, with no early exit | +2.2% |
+| The bias kept in the accumulator | nothing alone, about +2% on the rest |
+| The pool's rounded square as one multiply | nothing alone, about +1% on the rest |
+| A stack's road lines tested four directions at once | nothing alone, about +1% on the rest |
+
+The first was a fault of the search's, not of the network's. A table or cache hit leaves a node
+without a frame, so each of its children carried its own from further up: 7.17 rows an update, and
+a quarter of updates added seven rows or more.
+
+All of them together, as in `src/`:
+
+| Build | Faster |
+|---|---|
+| clang native | **+38.1%** [+37.4, +39.0] |
+| ... on 116 positions of games 40-63, not used while building | **+38.4%** [+37.7, +38.6] |
+| ... with seven engines at once, as a match runs | **+36.5%** [+35.1, +38.5] |
+| gcc native | +29.2% [+28.6, +29.6] |
+| clang generic | +21.7% [+21.3, +22.4] |
+| gcc popcnt | +21.9% [+21.3, +24.1] |
+| 5x5, 7x7, 8x8, from the books | +31.3%, +24.8%, +24.6% |
+
+Raced again from the index as staged, the same machine code, later the same night with the desktop
+in use: +36.9% [+35.5, +38.2] on the first positions and +36.3% [+35.5, +37.1] on the unused ones.
+So it is 36% to 38% on clang native.
+
+What the size itself is worth, from a build for 6x6 alone: size, masks, edges and links constants,
+no wrap masks and no towers.
+
+| 6x6 alone, against the same kernels for every size | Gain |
+|---|---|
+| Search, on the unused positions | about +1.5% |
+| Perft, full, start and middle game | +3.5%, +1.5% |
+
+So there is still one code path, and one thing in it goes by size: the wrap masks, which only 8x8
+needs. Also tried and not kept: a kernel for each count of rows (-2.5%), the network's table laid
+out by token (level), and that layout with a row for each orbit of the size's squares, a sixth of
+the memory on 6x6, which read about 4% slower alone and level with seven engines at once. That
+table is for input buckets to retest, since theirs would be four and five times the size.
+
+Perft's code is instruction for instruction what it was. The start position's full count reads 6%
+lower where the linker now puts it, and level with both builds' functions aligned to a page.
+
+Gates: `make check`, and `make perftdiff` over 101,986 positions with no difference. Selftest
+now holds the paired floods to the single ones, the swing to the move played and the table's
+squares to `move_squares()`, 0 failures on native, generic and popcnt builds. Bench 1040418 from
+clang and gcc, native and not, release, `TUNE=on` and debug. The AVX2 paths each have a portable
+fallback, which compiles for ARM and has not been timed there. Not played: no Elo is claimed.
+
 ## Mistakes worth not repeating
 
 - **A gain at equal nodes is not a gain until its cost has been on the clock.** The prior from

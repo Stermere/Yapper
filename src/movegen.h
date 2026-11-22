@@ -5,8 +5,21 @@
 #include "board.h"
 #include "types.h"
 
+/* [square][direction][hops]: the squares a spread lands on, none for no hops. */
+extern u64 MoveLine[SQUARE_COUNT][4][MAX_SIZE + 1];
+
 /* Must run once before generating. */
 void movegen_init(void);
+
+/* move_squares() from that table, for where a node asks, with no loop over the hops. */
+static inline u64 movegen_squares(Move m) {
+    if (m == MOVE_NONE) {
+        return 0;
+    }
+    const int sq = move_square(m);
+    return 1ULL << sq |
+           MoveLine[sq][move_direction(m)][__builtin_popcount((unsigned)move_pattern(m))];
+}
 
 /* Writes every legal move and returns how many. `list` needs MAX_MOVES entries. The
  * position must not be over. */

@@ -80,7 +80,8 @@ typedef struct NNWeights {
     const i16 *l4;      /* [bucket][unit of the layer before] */
 } NNWeights;
 
-/* The accumulator of one node, white's view and then black's, and the tokens it was summed from. */
+/* The accumulator of one node, white's view and then black's, each begun at the bias, and the
+ * tokens it was summed from. */
 typedef struct NNFrame {
     _Alignas(64) i16 acc[NN_HIDDEN];
     i16 feature[SQUARE_COUNT]; /* 0 for empty, else token + 1, negated for a black top */

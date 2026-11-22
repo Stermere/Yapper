@@ -38,6 +38,9 @@ static u16 FlatsAndWalls[256][2 * LANE_MOVES];
  * line and a position in it: low nibble towards bit 7, high nibble towards bit 0. */
 static u8 LineReach[256][8];
 
+u64 MoveLine[SQUARE_COUNT][4][MAX_SIZE + 1];
+static u8 ReversedByte[256];
+
 static int pattern_hops(int pattern) { return __builtin_popcount(pattern); }
 static int pattern_carry(int pattern) { return 32 - __builtin_clz(pattern); }
 
@@ -47,6 +50,22 @@ static inline int carry_limit(const Board *b, int sq) {
 }
 
 void movegen_init(void) {
+    for (int sq = 0; sq < SQUARE_COUNT; sq++) {
+        for (int dir = 0; dir < 4; dir++) {
+            u64 line = 0;
+            int at   = sq;
+            for (int hops = 1; hops <= MAX_SIZE; hops++) {
+                at += DirectionStep[dir];
+                line |= at >= 0 && at < SQUARE_COUNT ? 1ULL << at : 0;
+                MoveLine[sq][dir][hops] = line;
+            }
+        }
+    }
+    for (int byte = 0; byte < 256; byte++) {
+        for (int bit = 0; bit < 8; bit++) {
+            ReversedByte[byte] |= (u8)(((byte >> bit) & 1) << (7 - bit));
+        }
+    }
     for (int empty = 0; empty < 256; empty++) {
         int found = 0;
         for (int file = 0; file < 8; file++) {
@@ -263,23 +282,6 @@ int movegen_count(const Board *b) {
     return count;
 }
 
-/* A stack's square and the next `hops` squares of a direction, all known to be on the board. */
-static inline u64 line_from(int sq, int dir, int hops) {
-    const u64 across = (2ULL << hops) - 1;
-    const u64 along  = FILE_A & (~0ULL >> (56 - 8 * hops));
-    switch (dir) {
-    case NORTH: return along << sq;
-    case EAST: return across << sq;
-    case SOUTH: return along << (sq - 8 * hops);
-    default: return across << (sq - hops);
-    }
-}
-
-/* A road's first new square touches one end of it and its last touches the other. */
-static inline bool line_joins(u64 line, const u64 ends[4]) {
-    return ((line & ends[0]) && (line & ends[1])) || ((line & ends[2]) && (line & ends[3]));
-}
-
 /* Would this spread finish a road through `area`, the road stones of `us`? A tall stack has
  * dozens of patterns on a line that gets this far, nearly all for nothing, so what each one
  * leaves on top is read off the stack's bits rather than played. A stone a pattern ends a hop
@@ -335,20 +337,26 @@ bool movegen_road_spread(const Board *b, int us, const u64 ends[4]) {
         const int carry = carry_limit(b, sq);
         int reach[4];
         stack_reaches(blockers, sq, reach);
+        /* A road's first new square touches one end of it and its last touches the other. All four
+         * directions at once: which of them join is as random as the stones, and few do. */
+        const bool cap = (b->caps >> sq) & 1;
+        unsigned joins = 0, crushes = 0;
         for (int dir = 0; dir < 4; dir++) {
-            const bool crush = ((b->caps >> sq) & 1) && wall_past(b, sq, dir, reach[dir]);
-            const int open   = reach[dir] + crush;
-            const int hops   = open < carry ? open : carry;
-            if (hops == 0) {
-                continue;
-            }
-            if (!line_joins(line_from(sq, dir, hops), ends)) {
-                continue;
-            }
+            const bool crush      = cap && wall_past(b, sq, dir, reach[dir]);
+            const int open        = reach[dir] + crush;
+            const int hops        = open < carry ? open : carry;
+            const u64 line        = 1ULL << sq | MoveLine[sq][dir][hops];
+            const unsigned across = ((line & ends[0]) != 0) & ((line & ends[1]) != 0);
+            const unsigned along  = ((line & ends[2]) != 0) & ((line & ends[3]) != 0);
+            joins |= ((across | along) & (unsigned)(hops != 0)) << dir;
+            crushes |= (unsigned)crush << dir;
+        }
+        for (; joins; joins &= joins - 1) {
+            const int dir = __builtin_ctz(joins);
             Move list[2 * 255 + LANE_MOVES];
             const u16 base = (u16)(sq | dir << 6);
             Move *end      = emit_run(list, Spreads[carry][reach[dir]], base);
-            if (crush) {
+            if ((crushes >> dir) & 1) {
                 end = emit_run(end, Crushes[carry][reach[dir]], base);
             }
             for (const Move *m = list; m < end; m++) {
@@ -362,22 +370,19 @@ bool movegen_road_spread(const Board *b, int us, const u64 ends[4]) {
 }
 
 int movegen_spread_swing(const Board *b, Move m, int us) {
-    const int sq    = move_square(m);
-    const int step  = DirectionStep[move_direction(m)];
-    const int carry = move_carry(m);
-    const u64 word  = b->stones[sq];
-    int swing       = -1;
-    if (board_short_height(b, sq) > carry) {
-        swing += ((word >> carry) & 1) == (u64)us ? 1 : -1;
-    }
-    int to = sq;
-    for (int hops = move_pattern(m); hops; hops &= hops - 1) {
-        to += step;
-        const int before = (b->owned[us] >> to) & 1 ? 1 : (b->owned[!us] >> to) & 1 ? -1 : 0;
-        const int after  = ((word >> (carry - 1 - __builtin_ctz(hops))) & 1) == (u64)us ? 1 : -1;
-        swing += after - before;
-    }
-    return swing;
+    const int sq      = move_square(m);
+    const int pattern = move_pattern(m);
+    const int carry   = move_carry(m);
+    const int hops    = popcount((u64)pattern);
+    const u64 word    = b->stones[sq];
+    /* Our stones among those carried, counted from the bottom as the pattern counts them, so the
+     * pattern picks out each hop's top. */
+    const unsigned ours = (unsigned)ReversedByte[(u8)(us ? word : ~word)] >> (8 - carry);
+    const u64 rest      = word >> carry;
+    const int left      = (rest > 1) * (1 - 2 * (int)((rest ^ (u64)us) & 1));
+    const u64 line      = MoveLine[sq][move_direction(m)][hops];
+    return -1 + left + 2 * popcount((u64)(ours & (unsigned)pattern)) - hops -
+           popcount(line & b->owned[us]) + popcount(line & b->owned[!us]);
 }
 
 void movegen_road_answer(const Board *b, int color, u64 threats, RoadAnswer *a) {
@@ -395,8 +400,7 @@ bool movegen_may_answer(const RoadAnswer *a, Move m) {
     if (move_is_place(m)) {
         return (a->threats & (a->threats - 1)) == 0 && ((a->threats >> move_square(m)) & 1);
     }
-    const u64 line =
-        line_from(move_square(m), move_direction(m), __builtin_popcount(move_pattern(m)));
+    const u64 line = movegen_squares(m);
     for (int i = 0; i < a->count; i++) {
         if (!(line & a->needs[i])) {
             return false;
