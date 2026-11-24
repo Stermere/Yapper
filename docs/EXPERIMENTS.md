@@ -5962,7 +5962,10 @@ and the tune; the SPRT above puts about 38 of the difference on the tune. So gen
 build would come from a player about 95 above gen 16's, at 11% more time a game.
 
 Gen 17 started the same night on this build, eight Hetzner CPX62 at 66 rounds of 30,500 games
-(`external/data/gen17/README.txt`).
+(`external/data/gen17/README.txt`). The user ended it on 2026-11-22, each box at a round's end: 421
+rounds of the 528 planned, 12,858,400 games, 905.2M scored positions, every file the same size on
+its box, at home and on the storage box, and 478 games of the last rounds clean through takref.
+360.7 server-hours, $75.14.
 
 ## E124: quirky starts, under way
 
@@ -6150,12 +6153,540 @@ squares to `move_squares()`, 0 failures on native, generic and popcnt builds. Be
 clang and gcc, native and not, release, `TUNE=on` and debug. The AVX2 paths each have a portable
 fallback, which compiles for ARM and has not been timed there. Not played: no Elo is claimed.
 
+## E128: input buckets, by the game's stage and by the capstone, not kept
+
+A wider network costs every move. Input buckets give the filters more weights for the same rows a
+move: a view's key picks the plane its rows are read from. The fit keeps a plane every bucket
+shares and each bucket's difference from it, begun at zero, and writes the engine their sum. The
+other sizes' networks are copied into every plane, and with copied weights every build benches
+1040418 with selftest clean. Built on 7506a48 in `external/build/e128`; nothing of it is in `src/`.
+
+| Schema | Planes | A view's key |
+|---|---|---|
+| stage | 4 | stones left: 0-4, 5-9, 10-14, 15 and more |
+| edge | 4 | its own capstone on the edge's ring, the next ring, further in, or none on the board |
+| quadrant | 5 | the quadrant of its own capstone as each orientation sees it, or none |
+
+Quadrant was dropped during its first fit, as the symmetries undo it. On 6x6 every square puts the
+capstone in each quadrant in two of the eight orientations, so its four planes score exactly as one
+quadrant with four times the filters summed in fours: 0 differences over 200,000 random positions
+and weights (`capsym.c`). Edge is the key no turn of the board changes: 89,148 checks on every
+size, two capstones included, 0 failures (`edgekey.c`). In E107's self-play after the book a side's
+own capstone is on the outer ring in 12.7% of positions, the next in 34.9%, the centre four in
+45.0% and off the board in 7.4%.
+
+E127's table with a row for each orbit of the size's squares came back for these. 6x6, weights
+copied into every plane, so every build searched master's tree, clang native, pinned:
+
+| Build | Table | Against master, alone | Seven engines at once |
+|---|---|---|---|
+| one plane, expanded | 21.2 MB | -5.5% | -5.4% |
+| one plane, packed | 3.5 MB | -3.2% | -2.5% |
+| stage, expanded | 84.9 MB | -10.7% | -11.8% |
+| stage, packed | 14.2 MB | -9.0%, again -9.2% | -7.3%, again -9.6% |
+| edge, expanded | 84.9 MB | -10.1% | -11.3% |
+| edge, packed | 14.2 MB | -7.5% | -6.5% |
+| quadrant, expanded | 106.2 MB | -11.9% | -13.1% |
+| quadrant, packed | 17.7 MB | -8.0% | -6.8% |
+
+The one-plane builds hold master's weights in the buckets' layout: their update alone costs about
+5%, and packing takes back 2 to 3 points of it. Master keeps its own table and loop.
+
+Fits: lambda 0.7, decay 0.01, smooth 4, seed 0, each schema against a control fitted on the same
+positions. A quarter is 193M positions of gens 16 and 17 over 8 epochs; all is 991M, every file of
+gens 16 and 17 as they stood, 70,384, over 16 epochs, with 67.2M held out. Gen 15 is left out, as
+g17fit's fit without it held out better on both newer generations, on one seed each. Matches on
+6s_4ply, 7 at once, SPRT [0, 10]; the matches on the clock played frozen copies of the binaries
+that played at 100,000 nodes (`full.py`, `clock.py`).
+
+| Fit | Held out, against results | 100,000 nodes a move | 8+0.08 |
+|---|---|---|---|
+| control, quarter | 0.441730 | | |
+| stage, quarter | 0.443800 | -8.9 +/- 13.4, 1790 games, FAILED | |
+| edge, quarter | 0.445479 | -27.0 +/- 20.2, 798 games, FAILED | |
+| control, all | 0.436648 | | |
+| stage, all | 0.435846 | **+33.2 +/- 19.2**, 808 games, PASSED | **+2.4 +/- 15.6**, 860 games, stopped |
+| edge, all | 0.435964 | **+48.1 +/- 23.3**, 458 games, PASSED | **+2.2 +/- 19.2**, 474 games, stopped |
+
+On the quarter both schemas fitted their own games better than control and held-out games worse.
+On all of it both held out better, by 0.0008 and 0.0007 on each generation, and won at equal
+nodes, though a test that stops early on a pass reads high, and each is one seed. On the clock both
+played level: the table's cost, 7.3% to 9.6% for stage and 6.5% to 7.5% for edge, is 20 to 30 at
+E19's 205 a doubling, measured on a much older engine, which is about what each won. The user
+stopped both. Stage's key is the output bucket's made coarser, and every layer after the filters
+already has weights for each output bucket: the game's stage was specialised already.
+
+Edge's networks also search bigger trees to the same depth: bench 1565510 to control's 1154384 on
+all the data, and 2075734 to 1002509 on the quarter. 89% of the quarter's increase is bench's third
+position, a forced loss control proves at depth 4 and edge at 11; the other 6x6 positions took 28%
+more. Checked before the long fits: every frame of bench and of 25 self-play searches on each
+quarter network, 5.24M, equal to a refresh, and 270,277 of them to a naive sum from the exported
+header (`verify.py`). Each fit's engine stayed within a hundredth of its fit.
+
+Each clocked log runs three pairs past the result above: the stop killed an engine in each, and
+`tools/match.py` scored it a loss. The results are the games before them, with no time loss, crash
+or illegal move. Logs in `external/games/e128`.
+
+For a larger network later: a schema has to win more at equal nodes than its table costs, about 25
+here, or cost less. A loop for one key a view might take back some of the buckets' 5%; not built.
+
+## E129: a deep network, its judgement in a search, and what it costs there
+
+The fixed-depth ladder against both syntaks builds (master 7506a48, 400 games a leg) put the gap in
+judgement: the new build (4f224c9) has gained about 460 on the old one at depth 6 alone, where
+Yapper went from +636 to +178. So a value network with depth over the board, in place of one layer
+of whole-board filters: a residual tower on 6x6, fitted by hand-written CUDA in
+`external/build/deep` (no framework), every source file of the engine compiled in, so positions,
+held-out games and the smoothed target are nntrain's own. Nothing of it is in `src/`.
+
+| Piece | What it is |
+|---|---|
+| input | a square's token (top stone and what lies under it, nn_feature), its height and own stones, the square's place, and E80's twelve globals |
+| tower | 6 blocks of two 3x3 convolutions, 64 channels, a gate on each residual, the board's mean and max fed back as a bias every third block |
+| value | 1x1 to 32, mean and max over the board with the globals, 128 hidden, a logit for the side to move |
+| policy | 1x1 to 32 a square; a move's logit sums what its squares say: a placement's square and stone, a spread's source, every square it drops on by whose stone lands, where it ends, carry, hops, a wall flattened |
+
+The kernels were checked against plain loops (forward 2.6e-5, gradients 5.7e-5), every gradient
+group against finite differences at the best of four steps (31 groups under 1%), and the baseline
+pass reproduced E128's quarter control on the same held-out games exactly (0.441735 against the
+log's 0.441730). AdamW, lr 2e-3, decay 1e-4, warm-up 2%, a cosine to 2%, gradients clipped at 5, a
+mean of the weights at 0.9998 for scoring, the policy's loss at half weight; 4096 positions a step,
+about 77,000 a second on the 3070.
+
+On E128's quarter (193M positions, 13.07M held out), two epochs:
+
+| Network | Held out, against results | Gen 16 | Gen 17 | Moves, top-1 |
+|---|---|---|---|---|
+| quarter control, the NNUE on the same positions, 8 epochs | 0.441735 | 0.439167 | 0.447583 | |
+| net6.h as shipped (E121, all data) | 0.439208 | 0.436556 | 0.445252 | policy.c 20.1% |
+| deep 64x6, one epoch | 0.431153 (1 game in 4) | 0.428978 | 0.436113 | 38.9% |
+| deep 64x6, two epochs | **0.429294** | 0.426959 | 0.434612 | **39.5%**, 1.88 nats |
+
+In the engine (`external/build/e129`, a copy of master with `deepnet.c`): the same forward pass in
+floats, checked against the card on 85,469 held-out positions, every loss the same to 2e-9. Winograd
+F(2x2, 3x3) halves its convolutions: 282 us an evaluation alone against 557 direct, about 800 of
+master's nodes at 2.9M a second. Options `DeepNet`, `DeepDepth`, `DeepWeight`, `DeepValueDepth`,
+`DeepMix`, `DeepAll`; with none set it benches 1040418.
+
+| Use | Test | Result |
+|---|---|---|
+| the whole evaluation, every node | equal depth 5, one-epoch net, 200 games | **+269.4 +/- 54.7**, penta [1, 2, 19, 22, 56] |
+| its value as the level of the subtree, from 6 plies left | equal depth 8, one-epoch net, 300 games | **-125.7 +/- 35.9** |
+| its policy ordering nodes with 8 plies or more left | equal depth 10, 400 games | **+33.1 +/- 25.7** |
+| the same | 8+0.08, SPRT [0, 5] | **-36.3 +/- 15.5**, 816 games, FAILED |
+
+The network judges far better inside a search too, not only on the games' own positions, where E81
+found no static shape that did. But at 800 nodes an evaluation it cannot be the evaluation. Read at
+a node with many plies below, as a correction carried down to every leaf of the subtree, it lost
+126: the tower already sees some of what the search below goes on to find, and the two add. Its
+policy orders better at equal depth, but nodes to depth 12 rose 15 to 18% (24 positions), and with
+the evaluations' own time the clock took that and more. Ordering the moves is not where a better
+judge pays: the table move and the killers already lead at the nodes it can afford. What it judges
+has to reach the evaluation every node reads, which leaves teaching the NNUE: its scores in place
+of the search's as the target (the data's format keeps a score a ply, so a copy of the games
+relabelled reads unchanged), on these positions and on ones off the game line, where E80 found the
+evaluation 150 short. Not yet tried.
+
+## E130: what the deep network knows that the engine's does not, and the one fact a node can count
+
+E129's network judges far better than the engine's but costs 800 nodes an evaluation. Teaching the
+engine's network from its scores on the same positions cannot give it what it failed to learn from
+them, so the deep network was used as an oracle instead: where the two disagree, what on the board
+says so, and can a node compute it. `external/build/resid`: `resid.c` replays games, takes the
+positions a fit takes, scores each with both networks and writes exact quantities beside them;
+`resid.py` fits on half the games and scores the other half.
+
+The positions are 2,695,431 from 503 of the 28,144 gen 17 files no list has fitted (E128's lists
+predate them), so neither network has seen them: the deep network (two epochs) scores 0.42987
+against results, the engine's (E121's net6.h) 0.44094, recalibrated 0.43004. The NNUE's logit
+plus the deep one's, as a ceiling, 0.41844: a gap of 0.01160. A group of quantities is scored by
+what it closes of that gap when added to the NNUE's logit, binned, in a logistic fit of the
+result.
+
+| Quantities | Closes |
+|---|---|
+| Stones left, empties, buckets; flats, walls, capstones; the lead by the stones left | 0.4% to 0.8% |
+| Each side's fewest placements to a road, with captures, squares on a cheapest road | 0.4% to 0.9% |
+| Placements that leave a road to finish, one or two | 0.3% |
+| Groups: how many, spans, edges; stacks: how many, tallest, own stones and captives under the top | 0.4% to 0.6% |
+| Reach of each side's spreads, tops within it, walls a capstone can flatten, moves | 0.1% to 0.4% |
+| Each side's moves that threaten a road, the best swing of tops in a move, of road cost | 0.7% to 2.2% |
+| **The other side can finish a road with a spread** (`movegen_road_spread`, a bit) | **8.0%** |
+| All the above, binned, linear | 12.7% |
+| A small network on all of them | 11.4% at best |
+| A one-ply search on the NNUE; the other side's best reply to a pass | 24.7%; 7.9% |
+| Everything, with both searches | 46.2% |
+
+E57 again: the NNUE has learned every count of the board for itself, roads included. What it has
+not is what a move can do, and the one piece of that a node can afford is the other side's road by
+spread. It stands in 12.5% of game positions, which no fit excludes (only roads by placement are),
+and there the NNUE reads 50.3% for the side to move where the games give 46.0% and the deep network
+47.1%. The four ways the search was taught to act on it lost (E23, E41, E54); no fit had been given
+it.
+
+**Where the two networks part on the board.** 1500 of those positions, every occupied square
+emptied alone and every pair together (`probe.c`): a pair's interaction f - f(-i) - f(-j) + f(-i-j)
+in each network, 533,947 pairs.
+
+| Pair | Share of pairs | Mean interaction, deep / NNUE | Correlation | Share of the squared difference |
+|---|---|---|---|---|
+| Same rank or file, 1 apart | 10.1% | 0.336 / 0.332 | 0.63 | 11.2% |
+| Same line, 2 to 5 apart | 18.7% | 0.28 to 0.30, both | 0.55 to 0.59 | 19.2% |
+| Diagonal, knight's move, 2 diagonal | 27.1% | 0.27 to 0.30, both | 0.58 | 26.4% |
+| Further | 43.9% | 0.276 / 0.281 | 0.57 | 43.3% |
+
+The engine's network reads pairs of squares as strongly as the deep one at every distance, and the
+two disagree equally everywhere: no rank, file or neighbourhood holds what it misses, so neither
+lines nor local patches as inputs have anything here to aim at. What the deep network has beyond it
+is judgement spread over the whole board, about two fifths of it the kind a move ahead supplies.
+
+**The fact as an input.** `NN_BUCKETS` 16: a position whose other side has a road by spread reads
+heads of its own, the stones-left bucket plus 8, so the fit learns what the threat is worth in each
+phase and through the head in each position. `eval_net_inputs_ends()` takes the other side's ends
+that the search already has, and the fit works them out with the same `board_road_ends_both()`, so
+the two read the same bit. Selftest passes 1,057,231,412 checks. E128's quarter recipe, seed 0,
+against its control:
+
+| Held out | The control (E128's q-control) | With the input |
+|---|---|---|
+| Against the target | 0.487771 | **0.486168** |
+| Against results | 0.441730 | **0.439800** |
+| 6x6 gen 16 / gen 17 | 0.439163 / 0.447579 | 0.437294 / 0.445508 |
+
+0.0019, five times what two seeds of one recipe differ by (E92), and twice what the bit added on
+top of the network predicted: the fit uses it in context. But the check costs as much as it buys.
+On 24 positions of Yapper's own games searched to depth 11, the same build with the bit worked out
+and thrown away runs at 2.04M nodes a second against 2.63M without it: **22% of the speed**, about
+400 cycles an evaluation, where E61 put the search's own check at 4.6% of its time. Counted inside
+it, an evaluation's check tries 13 spreads, 1.2 lines a call touching both ends of a road; bounding
+a line by everything it can reach becoming the mover's prunes none, since a line touching both ends
+always makes a road that way. A version that skips any spread whose stones fall inside a set that
+already failed (`external/build/e130f`) was built and not timed.
+
+| Match | Result |
+|---|---|
+| With the input vs the control, both quarter fits, 8+0.08, [0, 5] | Stopped by the user at 92 games, +25 -30 =37, -18.9 +/- 49.8: at that price the fit's 0.0019 (about 19 by E42's rule) against a fifth of the speed (E57 put 15% at 20 to 25) is not worth the games. Not kept |
+
+## E131: one block of the deep network against the engine's
+
+If local composition were where the deep network's judgement came from, a design the search could
+keep up to date move by move would follow: exact local patterns as tokens, beside the templates. So
+the deep trainer fitted the smallest tower first, one block of two 3x3 convolutions at 64 channels
+with the board's mean and max fed back, a 5x5 view of each square and nothing more, on E128's
+quarter for two epochs in the 64x6 run's recipe, scored on the same 13,074,769 held-out positions:
+
+| Network | Weights | Against results | CPU, an evaluation |
+|---|---|---|---|
+| The engine's, E128's quarter control | 2.4M | 0.441735 | about 0.15 us |
+| Deep 64x1 | 139,456 | **0.447350** | 62 us with a fit beside it, about 54 alone |
+| Deep 64x6, E129 | 517,312 | 0.429294 | 282 us |
+
+One block is 0.0056 worse than the engine's network, which E58 and E81 found for one layer of local
+filters: the templates over the whole board are the stronger reading, and what the deep network adds
+comes from stacking blocks. And at 50 us, 150 of master's nodes, even one block cannot be the
+evaluation at a node, so no depth of tower can. The ladder was stopped there by the user, with 64x2
+part way through its first epoch, and convolutional networks are set aside.
+
+## E132: what pooling over the orientations loses, and a tail of experts chosen by a gate
+
+The head squares each filter's units and sums them over the eight orientations before anything
+combines two filters. An outside proposal called that blind to two patterns firing in the same
+orientation, that is in the same place, and offered two fixes that keep the score blind to how the
+board is turned: the 64 products of a filter's unit in the two views, orientation by orientation
+(A), or units that read all 128 units of an orientation together before the sum (B). The user asked
+next for a tail of experts chosen by a gate, such as a road threat.
+
+One co-location is within reach already: a filter with the weights of two others squares to
+z1² + 2 z1 z2 + z2², and every unit reads both sides' stones, so any one product costs a filter.
+What the head lacks is many at once. Whether that binds was measured on E130's 2,695,431 held-out
+positions: `external/build/resid/coloc.c` writes the 1,024 clipped units the head pools, row for row
+with `study.f32` (the engine's logit matches exactly), and every head below is a residual on the
+NNUE's logit, fitted on even files and scored on odd ones (`coloc.py`, `coloc2.py`, `gates.py`,
+`gates2.py`). B's control shuffles each unit's eight orientations on its own, which leaves every
+pooled square as it was and destroys every co-location.
+
+| Head | Against results, share of the gap | deep - NNUE, held-out R² |
+|---|---|---|
+| P, the 128 pooled squares, MLP 32 | 2.4% | 8.10% |
+| P + A | 2.6% | 8.19% |
+| P + B, 32 units | 3.2% | 9.52% |
+| P + B, orientations shuffled | **3.3%** | 9.33% |
+
+Fitted to results the heads overfit after one or two epochs and are read at their best; fitted to
+the deep network's logit, after six. Co-location is worth 0.19 points of R², A 0.09, where E130's
+weakest board counts were 0.1 to 0.8, and nothing against results. The pooling is not where the deep
+network's judgement lies.
+
+The tail, by gate (deep - NNUE, held-out R², four epochs; one head and no gate 7.69%, the NNUE's
+logit, skips and bucket alone 5.39%):
+
+| Gate | As an input | An expert for each value |
+|---|---|---|
+| The other side has a road by spread, 12.5% | **11.28%** | 11.11% |
+| They have a move that threatens a road | 8.14% | 7.59% |
+| We have one | 7.88% | 7.29% |
+| Their road cost with captures, three bins | 8.13% | 7.25% |
+| Ours | 7.88% | 6.91% |
+| Capstones on the board; either side's tallest stack | 7.73% to 7.76% | 7.45% to 7.67% |
+| No fact: a router over four experts of 32, against one head of 128 | 9.34%, 9.22% on a second seed | 8.55%, 8.51% |
+
+Experts never beat the same gate given as an input: splitting the positions costs more than the
+specialising gains. And R² of deep - NNUE overstates. Added to the NNUE's logit and recalibrated on
+half of the held-out games, scored on the other half, the router's prediction closes 0.1% of the
+results gap, a head of 128 at most 0.1%, one of 32 nothing, and each position routed to its likeliest
+expert (the router's top weight averaged 0.42) no more. What the NNUE's own pooled squares predict of
+the deep network is how the two are calibrated, not what the deep network knows. Only the spread road
+counts: 4.9% of the gap this way, 8.0% in E130's linear fit, and E130's sixteen buckets were exactly
+this tail with this gate. That fit gained 0.0019 and its check cost 22% of the speed, so the question
+left is the price of that one bit. Nothing kept.
+
+## E133: trained selectors, for E130's bit and for the tail
+
+E130's bit, the other side's road by spread, is worth 4.9% of the results gap as a head's input
+(E132) and costs 22% of the speed to work out. Three ways to have it cheaper were tried, and then the
+user's selector for the tail itself: a router sending each position to one of several heads.
+
+**The exact check made faster.** `external/build/e130f` skips any spread whose road stones lie
+inside a set that already failed. It is exact: E130's speed builds patched with it
+(`external/build/e130v/v1f`, `v2f`) search the same trees, bench 4,327,504 each. On 24 positions of
+Yapper's games to depth 11, two rounds:
+
+| Build | Mnps |
+|---|---|
+| The bit never worked out (v2 / v2f) | 2.649, 2.631 / 2.645, 2.624 |
+| The bit worked out and thrown away (v1) | 2.081, 2.091 |
+| ... with the pruning (v1f) | 2.041, 2.051 |
+
+No faster: the floods it saves are not where the time goes.
+
+**A sub-case of the bit, exactly.** Fitted positions never have a road by placement, so a gap the
+other side could fill holds a flat of ours. `external/build/resid/sbits.c`, scored as E132's gates:
+
+| Gate | Positions | Of the bit's positions | Results gap closed |
+|---|---|---|---|
+| The whole bit | 12.48% | | 4.9% |
+| A lone stone of theirs onto a gap | 5.74% | 46% | 0.7% |
+| Any stone of theirs one square onto a gap | 7.39% | 59% | 1.5% |
+
+Half the positions carry a seventh of the worth: what makes the bit worth having is what a stack can
+do.
+
+**A trained selector for the bit.** Read off the network's own units (the pooled squares, skips and
+bucket, never its logit, which a selector has to precede), it reaches AUC 0.831 with one unit, 0.858
+with 32, and 0.866 with E132's 32 units an orientation; its guess as the gate closes 0.0% of the
+gap. It cannot help by construction: what a selector reads off the units, the head can. With
+filters of its own, eight in the engine's shape trained on the bit alone (`selnet.py`, `feats.c`),
+an eighth of the accumulator's work, AUC 0.771 and 0.0% again. No template finds the threat.
+
+**A selector for the tail.** Corrections on the engine's logit, trained to the fit's own target
+(0.7 of the smoothed search score, 0.3 of the result) on even files and scored on odd ones (`tail.py`),
+as gains over the recalibrated logit (target 0.47722, results 0.43487), negative being worse:
+
+| Tail | Against the target | Against results |
+|---|---|---|
+| One of 32 | -0.1e-4 | +3.6e-4 |
+| One of 128, four times the cost | -2.1e-4 | +2.9e-4 |
+| A router over four of 32, all computed | -2.3e-4 | +3.4e-4 |
+| A router to one of four, switch-style and load balanced | -2.0e-4 | +2.3e-4 |
+| ... to one of eight | -3.7e-4 | +0.6e-4 |
+| The nearest of four centres of the pooled squares, a tail each | -2.9e-4 | +1.5e-4 |
+| ... of eight | -5.0e-4 | -0.3e-4 |
+
+Past its first epoch every tail beyond one fits its own positions and loses held-out ones, and at the
+first epoch none gains more than 0.6e-4 on the target. The engine's tail already reads what the
+pooled squares hold, and a router adds capacity, not information. E128 found capacity paying only on
+all the data, so 1.35M positions cannot exclude a gain at that scale, but nothing here points to one.
+Nothing kept.
+
+## E134: gen 17 fitted, every quirky kind kept
+
+The user, once gen 17 was in: find whether any of E124's six kinds is bad, and keep only what
+gains. E124 planned one fit with the kinds and one without, played against each other twice over;
+asking after each kind needed more fits than matches could judge, so the kinds were judged on
+held-out games and only the network that came of it played. A fit reports on the held-out games of
+the files it lists, so fits of different lists report on different games. `external/build/e134/heldeval.c` scores a network as nntrain scores a warm
+start, on the held-out games of any list. A game is held out by its place in its own file, so a
+file's held-out games are the same whichever fit read it, and heldeval gives a fit's own report to
+the last digit. Every network here is scored on the held-out games of the normal files (gen 16, and
+gen 17's humans, variants, swings, off and self), which all of them read and none fitted, and on
+each kind's own.
+
+**Stage A**, on a quarter: every fourth file of gens 16 and 17 in order, 24,632 files and 317.8M
+positions to fit, 8 epochs at E128's settings (lambda 0.7, decay 0.01, smooth 4); all six kinds,
+none, and each left out, on seeds 0 and 1, and all six again on seed 2 (`stageA.sh`). The six are
+13.0% of the quarter's positions, each 2.1 to 2.3%. The normal held-out games, 18.9M positions,
+against results, x 1e-4 better than all six of the same seed, and against the fit's target, the
+mean of the two seeds:
+
+| Fit | Positions | Seed 0 | Seed 1 | Against the target |
+|---|---|---|---|---|
+| none | 276.6M | -15.9 | -11.8 | -9.1 |
+| all but stacks | 310.6M | -6.8 | -1.3 | -4.6 |
+| all but reserves | 310.8M | -5.1 | -5.0 | -4.8 |
+| all but regions | 310.9M | -2.5 | -2.9 | -3.5 |
+| all but caps | 310.9M | -1.2 | -2.6 | -1.5 |
+| all but walls | 311.2M | +0.7 | +0.9 | -0.4 |
+| all but roads | 311.2M | +0.7 | +0.8 | +0.1 |
+
+All six on three seeds: 0.443175, 0.442986 and 0.442697 against results, a spread of 4.8e-4, and
+2.1e-4 against the target. Each kind's own held-out games, against the target, x 1e-4 worse than
+all six, the mean of seeds 0 and 1:
+
+| Fit | stacks | reserves | walls | caps | roads | regions |
+|---|---|---|---|---|---|---|
+| none | +17.3 | +15.5 | +26.6 | +11.3 | +11.9 | +11.6 |
+| all but stacks | +6.2 | +4.2 | +4.4 | +4.1 | +3.6 | +2.8 |
+| all but reserves | +3.8 | +5.8 | +4.2 | +4.4 | +5.2 | +4.1 |
+| all but walls | -0.5 | +1.3 | +11.7 | +0.3 | +1.1 | -0.8 |
+| all but caps | +0.8 | +1.6 | +4.2 | +2.7 | +2.2 | +1.1 |
+| all but roads | -0.6 | +0.3 | +1.5 | +0.3 | +0.5 | -0.2 |
+| all but regions | +0.5 | +3.4 | +5.0 | +2.5 | +3.2 | +1.8 |
+
+The rule, set before the fits: a kind goes only if leaving it out beats all six by more than the
+seed spread on both seeds. None does, so all six stay. Together they are worth 13.9e-4 against
+results from 13% of the positions; for scale, E128's control gained 50.8e-4 from a quarter to all
+of it, four times the positions over twice the epochs. Stacks and reserves help every kind's
+positions as well as the normal games, and every kind helps the others: none is worse on each
+kind's games than leaving out that kind alone. Walls helps walls' positions and little else. Roads
+shows no gain anywhere, its own positions included, and is the one to try without if any is.
+
+**Stage B**, all of it: every file of gens 16 and 17, 98,528, 1,271M positions to fit, the same
+settings over 16 epochs, seed 0, in blocks of 16M positions rather than 64M to fit the memory free
+(a block's size changes only the shuffle) (`full.sh`). The load committed 40.3 GB at its peak, the
+page file growing from 16 to 22.6 GB, then the fit held 17.3 GB and ran at full speed, 2 h 48 min.
+On the held-out games of every normal file, 75.5M positions, which none of the three fitted:
+
+| Network | Against the target | Against results | gen 16 | gen 17 |
+|---|---|---|---|---|
+| all of gens 16 and 17 | 0.485274 | 0.439599 | 0.433000 | 0.445547 |
+| E128's control, 70,384 files | 0.485557 | 0.440740 | 0.433986 | 0.446828 |
+| shipped | 0.486139 | 0.444635 | 0.437460 | 0.451103 |
+
+11.4e-4 better against results than E128's control, which never played master, and 50.4e-4 better
+than the shipped network, on both generations. For scale, E128's buckets held out 7e-4 to 8e-4
+better than their control and won 33 and 48 at 100,000 nodes; this network has the same shape, so
+nothing to pay on the clock. Its engine is within 4 hundredths of its fit (mean 0.64), bench
+1033020, selftest clean; frozen copies of it and master in `external/build/e134/bin`. Against
+master, which plays E121's network, 8+0.08, SPRT [0, 10], 6s_4ply, seed 134, 7 at once, nothing
+else running (`sprt.sh`):
+
+| Match | Games | Result |
+|---|---|---|
+| E134 against master, 8+0.08 | 794 | +252 -185 =357, **+29.4 +/- 17.7**, pairs [20, 86, 133, 123, 35], LLR 2.96, **PASSED** |
+
+In 39 minutes, with two threefold repetitions and no game lost on time; a test that stops early on
+a pass reads high. Kept: `src/net6.h` is this fit's, every other size E97's. Bench 1033020, the
+same for `make release`, `make TUNE=on` and `ARCH=generic`, and `make check` passes.
+
+## E135: untied filters, stopped at the smoke fit
+
+The user's first pick from the architecture rebuilds, 2026-11-23: each of the 1024 units a filter of
+its own, 512 a view with weights at every square, in place of 64 filters seen through the board's
+eight symmetries, so the same table and the same work a move. `external/build/e135/make_tree.py`
+makes it from master: `NN_FILTERS` 512 and `NN_ORIENTATIONS` 1, which the engine, its 32-bit bounds
+and the card's kernel all take as written; each game in a fit turned by a symmetry drawn each epoch
+from the seed and its key, held-out games as played; selftest's eight-way check of the evaluation
+off in that tree only (1,052,227,848 checks, 0 failures). A fit repeats to the byte, the engine reads
+within 2 hundredths of it, and the 6x6 header is 37 MB.
+
+Every 49th file of E134's list, 2,011 files and 26.0M positions, 2 epochs at E134's settings:
+
+| Fit | Held out, target | Against results | Time |
+|---|---|---|---|
+| tied, master | 0.515042 | 0.479208 | 32 s |
+| tied, its games turned as the untied fit's are | 0.514618 | 0.478990 | 31 s |
+| untied | 0.526642 | 0.493449 | 91 s |
+
+Turning the games leaves the tied fit where it was, so the 142e-4 is the untied network's: each of
+its weights learns from an eighth of the positions a tied one does, and the head's gradient adds
+make its fit 3.4 times as slow, about 9.5 hours for all the data. Nor is it eight times the filters:
+Tak's value and the turned games are symmetric, so the best untied network still spends a pattern's
+units in all eight orientations, and saves only on patterns that are themselves symmetric. Not
+fitted in full.
+
+## E136: the network steering the search, killed by its own test
+
+The user asked for something more innovative than a larger network, 2026-11-23. The proposal: two
+more outputs on the same accumulator, one for how far a search will move from the static score
+(volatility) and one for the other side having a winning blow next move (threat), with the search's
+margins, stand pat and reductions reading them. E80 had found reverse futility's wrong returns
+gathered where the other side can finish a road by spread (4.5% of the returns, 57% of the wrong
+ones), and E133 the network's own units reading that bit at AUC 0.87, so the hope was a free and
+wider version of what four exact checks had paid too much for (E23, E41, E54).
+
+The test, with its bar set before it ran: on held-out positions of E134's normal files, which it
+never fitted (`external/build/e136/vol.c`, 1,374,263 positions of 990 files), heads fitted on even
+files and scored on odd ones (`vol.py`). The units' head had to put at least 30% of the large misses
+(the game's search score over two flats from E134's) in its top tenth, and 1.25 times what a head on
+cheap facts puts there (the stones left, buried stones, walls, empties, the tallest stack, both
+sides' road by spread, lead, reserve, ply, the score itself).
+
+| Head on | Spearman | R2, log | Large misses in the top 10% | top 20% |
+|---|---|---|---|---|
+| The score's size alone | 0.293 | 0.386 | 13.0% | 26.1% |
+| Cheap facts | 0.428 | 0.450 | **20.1%** | 37.6% |
+| The network's pooled units | 0.412 | 0.452 | **19.6%** | 36.0% |
+| Both | 0.444 | 0.477 | 21.8% | 38.5% |
+
+Against the smoothed score it reads the same: 19.6% against 20.3%. A fifth of positions miss by over
+two flats and the best head's top tenth holds twice its share of them: how far a search moves is
+barely on the board, and the units know no more of it than a few counts do. The threat head reads
+the spread bit at AUC 0.842 (cheap facts 0.663), which is the bit itself, less exactly. Killed.
+
+**Where the deep network's knowledge sits.** On E130's positions (`phase.py`), logistic fits of the
+result on each network's score and on both: the engine's 0.43001, the deep one's 0.42073, both
+0.41842, a gap of 0.01159. Per position the gap is 0.011 from 6 to 30 stones left and 0.014 with
+2 or fewer; the last five stones hold half of it because half the positions are there. It is spread
+over the game as E130 found it spread over the board.
+
+## E137: the deep network on the search's own positions
+
+The user asked whether teaching the engine's network from the deep one (E129's last paragraph) could
+be a large step. E129's case leaned on E80: the evaluation 150 short one move off the game line, on
+positions no fit had seen. So before any fit: does the deep network read the positions the search
+asks about better than the engine's does, by more than it reads games' own positions better?
+
+`external/build/e137/tree.c` scores E80's 2,476,740 tree positions (no road to answer, no forced
+result; every score matches E80's side files) with E134's net6.h and E129's two-epoch deep network,
+neither ever fitted on a tree position. `tree.py` reads each against the node's own 20,000-node
+search, and fits a line of the search's score on each network's score (both clipped to 1000) on
+even files and reads what it leaves on odd ones. Games' own positions are E130's study, with E121's
+network, the same way.
+
+| Positions | Network | Search less the network | Spread | Spread after a line |
+|---|---|---|---|---|
+| Tree, E80 | E79, whose search wrote them | +149.0 | 229.5 | 182.4 |
+| | E134 | **+27.9** | 223.2 | 170.2 |
+| | deep | -6.5 | 215.6 | 157.1 |
+| | both in one line | | | 154.2: the deep network takes **17.9%** of E134's leftover variance |
+| Games, E130 | E121 | +8.8 | 283.1 | 182.3 |
+| | deep | +4.4 | 259.8 | 174.0 |
+| | both in one line | | | 164.4: **18.7%** of E121's |
+
+What the deep network takes of the engine's leftover on tree positions, by plies into the tree (1-2,
+3-6, 7 on): 15.9%, 17.4%, 18.6%. By the game's ply (before 40, 40-79, 80 on): 23.2%, 17.2%, 16.5%.
+Where the other side has a road by spread: 19.4%.
+
+E80's flat and a half is mostly gone: E134's network reads the search's own positions 28 short where
+E79's read them 149 short, and it has never been fitted on one either. The deep network adds the
+same share off the game line as on it, about 18% of what the engine's network leaves, at every depth
+into the tree and in every phase. Off the line holds no store of judgement for a teacher beyond what
+it brings on the line, so teaching is worth at most the deep network's edge on games (99e-4 against
+results, E129), of which the engine's shape takes only part (twice the width took 25e-4, E91). What
+neither network reads, 82% of the leftover against a 20,000-node search, is what the search finds.
+No fit yet.
+
 ## Mistakes worth not repeating
 
 - **A gain at equal nodes is not a gain until its cost has been on the clock.** The prior from
   depth 1 read +47 at 200,000 nodes a move, and three ways of having it for less were built
   before the plain thing was played at 8+0.08, where it read -15, E100. One match on the clock
-  first would have said what the cost was worth.
+  first would have said what the cost was worth. E128's input buckets won 33 and 48 at 100,000
+  nodes and played level at 8+0.08.
+- **A quarter of the data does not judge a bigger network.** E128's buckets fitted held-out games
+  worse on a quarter and lost at equal nodes, then fitted better on all of it and won there.
+- **A stopped match ends on forfeits.** Killing it scores each game in play as a loss for the engine
+  found gone. Read the result from the pairs before the stop, E128.
 - **One change at values that have been looked at.** E100's first match on the clock set two
   knobs at once from guesses, and the counts that would have set them took ten minutes.
 - **A tail is read by place in the list, not by a margin in nats.** E104's first reading had the
