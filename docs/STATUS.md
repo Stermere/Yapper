@@ -312,6 +312,23 @@ alone on every file of both, 1,271M positions, holds normal games out 50.4e-4 be
 results than E121's network, and played **+29.4 +/- 17.7** against master at 8+0.08, passing in
 794 games. Kept: `src/net6.h` is E134's, bench 1033020.
 
+Why the NNUE falls short of the deep network: fitted on the deep network's own scores, which carry no
+noise, it ends where it ends on results (0.4423 against 0.4417) and stays 0.0107 nats from them on
+the positions it was fitted on. It cannot represent the judgement, so teaching it from the deep
+network gives it nothing at its shape. Twice the filters close a quarter of that distance, a
+head four times as wide an eighth, twice the epochs 4%; no count, no move ahead and no sum of
+local patterns of stacks and lines closes more than a tenth. What it misses grows with the stacks
+in every stage: how what is on the board combines, which two layers over the board form only by
+brute width. Capacity pays twice as much on the deep network's labels as on results, E138.
+
+A second level over the board, corner windows of each orientation composed by 32 units and pooled
+beside the filters, holds the quarter out 37e-4 better against results than master's shape, a
+third of the deep network's lead, but runs at 0.47 of master on 6x6. Taken in one orientation
+chosen by the network's own units it is exactly symmetric and runs at 0.69, and 0.81 without
+windows, which fell behind at once; computed only where it could change a decision it still needs
+half the evaluations. Each of these loses more to speed than it wins, at four to seven a point of
+speed. Not kept, E139.
+
 ## Done and verified
 
 | Piece | State | Evidence |

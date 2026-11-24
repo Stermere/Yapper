@@ -6676,6 +6676,267 @@ results, E129), of which the engine's shape takes only part (twice the width too
 neither network reads, 82% of the leftover against a 20,000-node search, is what the search finds.
 No fit yet.
 
+## E138: why the engine's network cannot copy the deep one
+
+The user asked why the engine's network cannot reach the deep network's accuracy (E129, 99e-4
+better against results), and for the remedy. Two causes were open. It may not learn the judgement
+from game results: one result labels about sixty positions, and E128's quarter control scores its
+held-out games 0.0053 worse than its own, where the deep network scores both alike (0.428998 fitted,
+0.429306 held out). Or it may not be able to represent it. So the engine's network was fitted on the
+deep network's own scores, which carry no noise.
+
+`deep.c --relabel` (`external/build/deep`, built as deep5.exe) scores every position the fit takes
+with E129's two-epoch network averaged over the eight symmetries, so that a student exactly
+symmetric is not asked to copy the teacher's asymmetry, and writes round(310 x logit) into that
+ply's score, in copies of E128's quarter. Averaged, the teacher reads the held-out games at 0.426937
+against results, against 0.429306 one way round (its own log, 0.429294). nntrain reads the copies
+unchanged with lambda 1 and no smoothing, so held out against the target is against the teacher,
+whose own entropy (0.479474 on the fitted positions, 0.479734 held out) is the floor; what a fit
+scores above it is KL(teacher || fit). E128's quarter recipe otherwise, seed 0. 128 filters needed
+E91's step kernel, several units a thread, ported to today's trainer; at 64 it writes master's
+network byte for byte. All in `external/build/e138`.
+
+| Fit | Labels | Above the teacher, its own positions | Held out | Held out, against results |
+|---|---|---|---|---|
+| quarter control, E128 | results | | | 0.441735 |
+| t64, master's shape | teacher | 0.0107 | 0.0113 | 0.442343 |
+| t64e16, the same, 16 epochs | teacher | 0.0103 | 0.0108 | 0.441771 |
+| th64, head 64-64 | teacher | 0.0094 | 0.0099 | 0.440412 |
+| t128, 128 filters | teacher | 0.0079 | 0.0087 | **0.438219** |
+| r128, 128 filters | results | | | 0.439286 |
+| the teacher | | 0 | 0 | 0.426937 |
+
+Fitted on the teacher, master's shape ends where it ends on results, and stays 0.0107 above the
+teacher on the very positions it was fitted on, with nothing left to generalise (0.0008 between
+them). It cannot represent the judgement; the 0.0053 it loses on results between its own games and
+held-out ones was noise it learned by heart. Relabelling the games gives it nothing, as the user
+held. Twice the epochs take 4% of it, so the fit is not stopping short. Every lever of capacity takes a slice: a head four times as wide 13%, twice the filters 26%,
+which costs a quarter of the speed (E91). And labels and capacity work together: twice the filters
+gain 0.0041 against results on the teacher's labels and 0.0024 on results, where r128 spends its
+extra units learning noise (0.0092 between its own games and held-out ones, the control 0.0053).
+
+Where t64 parts from the teacher, on 1,310,915 positions of 303 relabelled files
+(`resid/resid_t.py`, E130's `resid.c` built with t64's network; a correction fitted on even files,
+scored on odd): the error is broad (rms 0.45 logits, the worst tenth of positions holds half of it).
+Every count of E130 together closes 3.9% of it, roads by spread 2.6%, a one-ply search on t64 9.6%,
+all of them 11.6%. A weight for every stack and direction by what the stack is and the next two
+squares that way (5,880 tokens, `resid/rays.py`) closes 1.0%, the control of square tokens 0.1%. It
+grows with the stacks in every stage of the game (`resid/split.py`): with under three stones left,
+0.0105, 0.0145, 0.0173 and 0.0228 for a tallest stack of up to 3, 4 to 6, 7 to 9 and 10 or more; with
+fifteen or more left, 0.0064, 0.0085, 0.0102. Heights up to six are exact in the token, so the window
+is not it.
+
+So the engine's network misses how what is on the board combines, which no count, no move ahead and
+no sum of local patterns supplies: a sum of templates squared and pooled, then 128 numbers into a
+head, is two layers over the board, and the deep network's edge is in composing what it sees, block
+on block (E131: one block is worse than the templates). Width and head buy composition slowly by
+brute force. What would buy it in kind is depth over the board the search can keep up to date move
+by move.
+
+## E139: a second level over the board, accurate and too slow
+
+E138's remedy, fitted on the usual target as the user asked, with merged sizes kept working, since
+every size is to be refitted from 6x6 with one network path. `external/build/e139`: each tree is a
+copy of master with `nn.h`, `nn.c`, `nntrain.c` and selftest changed; nothing is in `src/`.
+
+| Piece | What it is |
+|---|---|
+| windows | in each orientation and view, the board's four corner windows of side size / 2 + 1, 16 units each, reading only the stacks inside: rows of the same accumulator, zero outside their window |
+| second level | in each orientation, both views' window units clipped, through 32 units, the same in every orientation; clipped, squared and pooled over the orientations as the filters are |
+| head | reads 160 pools, the filters' 128 and the second level's 32 |
+| fit | window rows on the trainer's grid as the filters are; window bias and second level per size, as the head |
+
+Symmetry and the colour swap hold by construction, and selftest passes 1,057,225,781 checks on random
+weights. The trainer's step kernel was checked weight by weight against finite differences of
+`forward()` (`gradcheck.c`, every block within 1.5%). With master's six networks and the second level
+zeroed it benches 1033020, master's count. A fit of 5x5, 6x6 and 7x7 together writes all three, each
+within a hundredth of the engine, and a warm start from them scores exactly what they ended at.
+
+Fits on E128's quarter in its control's recipe, held out against results:
+
+| Fit | Held out, against the target | Against results | 6x6 alone, against master |
+|---|---|---|---|
+| E128's control | 0.487771 | 0.441730 | 1.00 |
+| twice the filters, E138's r128 | 0.486542 | 0.439286 | about 0.75 |
+| windows and a second level | 0.485925 | 0.438962 | 0.55 |
+| the same, the second level also reading the filter units | 0.485386 | **0.438001** | 0.47 |
+
+37e-4 from master's shape is a third of the deep network's lead, about 37 at equal nodes by E42's
+rule, and a little more than twice the filters. The engine reads the last within 1.01 hundredths
+of its fit on average, worst 7: cutting a second-level unit by 8 bits before it is squared costs
+more with 256 inputs. On 6x6 alone (`speed6.py`, bench's eight 6x6 positions to depth 11 over TEI)
+it runs at 0.47 of master: the window rows a fifth of a node, the second level, eight orientations
+of 32 by 256, most of the rest. The mixed bench, whose other sizes count flats, flatters it to 0.75.
+
+Ways to make it cheaper, each exact unless said:
+
+| Change | 6x6 speed | Accuracy |
+|---|---|---|
+| skip input pairs both clipped to zero, by a scalar list | slower | |
+| the same found eight at a time by a compare and a mask | +12% on the fitted network | |
+| the second level in one orientation only, the one whose side to move's filter units sum highest, a tie going to the smaller units as bytes | 0.69 of master with windows | fit stopped by the user before its first epoch |
+| the same without windows | 0.81 | epoch 1 behind the control's (0.456856 to 0.456279), stopped |
+
+Fitted with the second level reading them, the units went sparse by themselves: 80% of filter units
+and 73% of window units at zero, where 71% and 53% were before. The one-orientation level is symmetric
+by construction: turning the board permutes the orientations' sums, so the frame turns with it, and two
+orientations whose units are equal give the same second level whichever is taken. Its trainer picks
+the orientation from the engine's own integers and reads within 0.48 hundredths. An L1 pull toward
+zero on the second level's inputs was stopped by the user in its first epoch, since its shape could
+not ship.
+
+Last, the second level computed only where it could change a decision. In a copy of master's search
+that only counts (bench unchanged), of the evaluations the network computes, 15%, 28%, 46% and 57%
+land within 25, 50, 100 and 150 hundredths of the bound that reads them: stand pat against alpha and
+beta, reverse futility against beta and its margin, ProbCut and the null move against beta. Two fits
+of master's shape that differ only by seed differ by 100 rms on 212,964 positions; the second level's
+network differs from the control by 125, so its own correction is about 75 rms, and keeping most of
+it means half of all evaluations. At 0.4 us each in eight orientations, or 0.14 in one, that is 0.75
+or 0.88 of master. E128's buckets gave up 33 to 48 at equal nodes to 6.5% to 10% of speed, four to
+seven a point, so 37 at equal nodes cannot pay for even the best of these. Not kept; the second level at every
+node is closed at today's speed. Two seeds of one recipe disagreeing by more than the whole second
+level does leaves the fit's own variance as an error that costs a node nothing to attack.
+
+## E140: a wider head, stopped in its second epoch
+
+More weights where a node pays least for them: the head, 16-32 today. Its cost was measured exactly
+first (`external/build/e139/widen_head.py`): master's six networks with the head widened and every new
+unit zero bench 1033020, master's count, so any change in speed is the width's own. On 6x6 alone
+(`speed6.py`, depth 11, median of four) 32-32 runs at 0.953 of master and 64-64 at 0.773, so 64-64
+cannot pay and 32-32 needed 0.002 to 0.003 against results on the quarter. Its quarter fit in
+E128's control's recipe stood 0.455674 against results at epoch 1, 6e-4 ahead of the control's
+0.456279 where the second level had stood 19e-4 ahead, and was stopped in epoch 2. Not kept.
+
+## E141: more output buckets, free at a node, level in play
+
+Capacity with no cost at a node: master's eight output buckets by stones left, each split three ways
+by a second count. A key has to be the same under the board's symmetries and a colour swap, so each
+is a count from the side to move's view. `external/build/e141`: a tree is master with `NN_BUCKETS`
+and `eval_net_inputs()` changed; the trainer reads the bucket through the latter, so fit and engine
+agree with nothing else touched.
+
+Three keys were weighed on 5.2M 6x6 positions of E128's quarter. Whether each side's capstone is
+on the board was dropped there: both are out in 97% to 100% of positions past the opening and 72% in
+it, and one on the board is always a top stone the inputs already read. Stones buried under others
+(stones played less squares covered) follow the stage so closely that fixed cuts would empty most
+buckets, so each stage is cut at its own thirds. The flat lead with komi splits behind, level and
+ahead about 50, 16 and 34 in every stage. Each key's cost was measured exactly: master's heads copied
+into every new bucket bench 1033020 for all three trees, and on 6x6 alone they run at 1.013, 1.004
+and 0.992 of master, inside the runs' noise.
+
+Quarter fits in E128's control's recipe, all eight epochs (the user: more heads on less data
+converge later, so none was judged before its third), averaged, held out against results:
+
+| Fit | Buckets | Held out | Against results | Gen 16 | Gen 17 |
+|---|---|---|---|---|---|
+| E128's control | 8 | 0.487771 | 0.441730 | 0.439163 | 0.447579 |
+| buried stones | 24 | 0.486920 | 0.440736 | 0.438241 | 0.446420 |
+| flat lead | 24 | 0.486875 | 0.440680 | 0.438163 | 0.446414 |
+| both | 72 | 0.486597 | **0.440182** | 0.437672 | 0.445900 |
+
+Three seeds of one recipe spread 4e-4 here (E134), so each key wins by 2.5 to 4 spreads and both
+together by about one more. The 72-bucket fit started worst, 9e-4 behind the control at epoch 1,
+and finished best. Fitted on all the data in master's own recipe and list (E134's, 16 epochs), it
+was level or behind master's fit for seven epochs and ahead from the eighth, ending 0.480826 held
+out and **0.435134** against results to 0.481219 and 0.435604: 5e-4, the same on both gens, a third
+of the quarter's. The engine read it within 0.65 hundredths on average, worst 5, as master's own.
+Against master at 8+0.08, with master's other sizes carried in all 72 buckets so only 6x6 differed:
+**-11.0 +/- 14.4**, SPRT [0, 10] failed in 982 games.
+
+Not kept. Unlike E128's input buckets, capacity in the head paid less on all the data than on the
+quarter, not more: 6.5 times the data let eight heads learn most of what the split gave 72. 5e-4
+is about 5 at equal nodes by E42's rule, within the 10 to 20 that two fits of one recipe differ by,
+and the match found nothing of it. The head is not where master's network is short.
+
+## E142: master's network fitted better, with the fit steered from inside
+
+Master's shape left alone; only how it is fitted changes. `external/build/e142`, nothing in `src/`.
+
+**Seeds averaged, then distilled.** E134 left three quarter fits of one recipe that differ only by
+seed. They sit 93 to 104 hundredths apart on the same positions, and averaging their outputs holds
+the quarter out 15e-4 better against results for two and 20e-4 for three (0.438909 alone on average,
+0.436902 for all three). A network of master's shape fitted on the three's mean score, written into
+a copy of the quarter (`relabel.c`, λ 1, no smoothing, as E138 did), led the same seed's usual fit by
+75e-4 after one epoch, stopped improving by the third and was behind from the seventh, when it was
+stopped. E138 again: a teacher's scores do not lift this shape, even a teacher of its own shape.
+
+**The fit steered from inside.** The trainer (`make_loop.py`, `loop_code.c`) stops at a checkpoint
+every so many epochs, saves its whole state (weights, Adam's moments, the mean), writes what it knows
+about itself, and waits for a file of decisions: the rate, a rate per layer, decay, λ, smoothing,
+when the mean starts, a rollback to any saved state, stop. Every decision is logged with its step,
+and a replay of the log writes the same bytes. Without the options it writes master's trainer's
+bytes. Decisions read half of the held-out positions, chunks of 4096 taken alternately; the other
+half judges. The target was left alone: moving λ toward the results would improve the loss against
+results without playing better (E81).
+
+Fitted on all of master's data in master's own recipe and seed, it was master's fit to the digit
+until the first decision. The first checkpoint found **34 of the head's 128 second-layer units dead**:
+in their bucket each sat at 0 or 1 on every position and had had no gradient for tens of thousands of
+steps. Master's shipped network has them too. `revive.c` brings such a unit back on a saved state: its
+constant goes into the next layer's bias, using the weights as rounded (the raw weights moved the
+output up to 8.5 hundredths, the rounded ones 0.0007), its outgoing weights go to zero, and it starts
+again as at a fit's start; the fit loads the state by rollback. Revived with Adam's moments cleared,
+most died again within an epoch: the step counter's correction then makes a restarted weight step
+three to six times the rate for hundreds of steps. With no momentum and its layer's typical second
+moment, the head stayed alive to the end. That was the only decision taken.
+
+| All data, averaged | Held out | Against results | Reporting half |
+|---|---|---|---|
+| master's network (E134) | 0.481219 | 0.435604 | 0.435838 |
+| steered, head revived from epoch 2 | 0.480795 | **0.435056** | **0.435315** |
+
+5e-4 on the half no decision read. A shared seed does not remove a seed's noise, since any change
+sends the fit down another path, so this is one to a few seeds' worth, not a clean measure.
+
+Two other readings. At a rate around 0.0008 the weights bounce across the valley floor: the mean of
+two checkpoints half an epoch apart held out 24e-4 better than either, where half an epoch's progress
+was 7e-4. But the rest of the schedule still brought 26e-4 beyond that mean, so the schedule was left
+alone, and afterwards the best mean of saved states (epochs 15 and 16) added only 0.7e-4 to the
+trainer's own last-tenth mean: the cosine and the mean already take the noise. And 5% to 9% of the
+second layer's lead, reserve and komi weights sit at the fixed point's clip, which no loop decision
+can relieve.
+
+**Trainer screens.** Quarter fits in E128's control's recipe, one change each, two seeds each against
+the control at the same seed. The control's two seeds differ by 8e-4 here, twice E134's spread, so
+only a change that agrees across seeds counts:
+
+| Change, against its own seed's control | Seed 0 | Seed 1 |
+|---|---|---|
+| peak rate 0.001 (0.002) | +5e-4 | |
+| peak rate 0.004 | +7e-4 | |
+| warm-up over the first 2% of steps | -6e-4 | -4e-4 |
+| a filter weight whose token was in no position of the batch keeps its moments and takes no step | +1e-4 | |
+| filter decay 0.03 (0.01) | -5e-4 | -5e-4 |
+| dead head units revived at every epoch | -15e-4 | -5e-4 |
+| warm-up, decay 0.03 and revival together | -15e-4 | -11e-4 |
+
+The rate is at its best. Without warm-up 40 to 66 second-layer units are dead after the first epoch
+of the quarter, with it 12: the first steps at the full rate are what kill them. The untaken branch
+of the sparse update, compiled in, changed how the card's compiler fuses the Adam step and moved a
+default fit at the sixth digit, so it is compiled in only when asked for. Revival first missed most
+dead units on the quarter: its test, a second moment below 1e-30, suits an epoch of all the data; it
+now asks for a second moment below a thousandth of its layer's.
+
+The three together on all the data, in master's recipe (`f-combo`), ran behind master's fit on held
+out from the third epoch to the fifteenth, as much as 1.2e-3 behind the revived run against results,
+and the last tenth's mean brought it level with that run:
+
+| All data, averaged | Held out | Against results | Reporting half |
+|---|---|---|---|
+| master's network | 0.481219 | 0.435604 | 0.435838 |
+| head revived from epoch 2 | 0.480795 | 0.435056 | 0.435315 |
+| warm-up, decay 0.03, revival every epoch | 0.480852 | 0.435216 | 0.435477 |
+
+The engine reads it less closely than any other fit, within 1.24 hundredths on average and 7 at
+worst against the usual 0.5 to 0.65 and 3 to 5. Decay 0.03, which won both quarter seeds, is the
+suspect for both: on six and a half times the data the rare rows it calms get positions enough of
+their own, the stronger pull holds the filters back, and the smaller weights round more coarsely to
+the fixed point.
+
+Not kept: nothing has played. Revival is the one gain to hold on all the data, twice, and E141's
+verdict on the head needs a rider: it is short of nothing, but master's recipe leaves a quarter of it
+dead. The fit to make is warm-up and revival at decay 0.01.
+
 ## Mistakes worth not repeating
 
 - **A gain at equal nodes is not a gain until its cost has been on the clock.** The prior from
