@@ -4,10 +4,7 @@ A Tak engine in C, aiming to be the strongest there is on a plain CPU, on anythi
 desktop to an ARM board. It plays 3x3 through 8x8 under the
 [USTAK rules](https://ustak.org/play-beautiful-game-tak/), with komi as an option.
 
-The board and move generation are complete and verified. Every size is evaluated by a network of
-its own, all of one shape and fitted to self-play. Tiltak is long behind it, and the last build
-measured against syntaks on 6x6 read -54 at 8+0.08, though further behind at longer clocks: see
-[docs/STATUS.md](docs/STATUS.md).
+This engine writen entirely by AI with some human guidance. No other engines code or data was used in the creation of Yapper.
 
 ## Build
 
