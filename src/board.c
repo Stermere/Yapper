@@ -571,11 +571,13 @@ typedef long long Lanes4Signed __attribute__((vector_size(32)));
 static inline __attribute__((always_inline)) void ends_both(const Board *b, int us, u64 ours[4],
                                                             u64 theirs[4], bool wraps) {
     const Lanes4 edges = {FILE_A & b->mask, b->file_last, RANK_1 & b->mask, b->rank_last};
-    const Lanes4 east  = (Lanes4){0} + (wraps ? ~FILE_H : ~0ULL);
-    const Lanes4 west  = (Lanes4){0} + (wraps ? ~FILE_A : ~0ULL);
+    /* Cast, since u64 is unsigned long where long is 64 bits, and clang will not put an unsigned
+     * long long into those lanes without one. */
+    const Lanes4 east  = (Lanes4){0} + (u64)(wraps ? ~FILE_H : ~0ULL);
+    const Lanes4 west  = (Lanes4){0} + (u64)(wraps ? ~FILE_A : ~0ULL);
     const Lanes4 mine  = (Lanes4){0} + board_road_stones(b, us);
     const Lanes4 other = (Lanes4){0} + board_road_stones(b, !us);
-#define AROUND(x) ((x) << 8 | (x) >> 8 | ((x)&east) << 1 | ((x)&west) >> 1)
+#define AROUND(x) ((x) << 8 | (x) >> 8 | (east & (x)) << 1 | (west & (x)) >> 1)
     Lanes4 group = edges & mine, their_group = edges & other;
     for (;;) {
         const Lanes4 front       = AROUND(group) & mine & ~group;
@@ -600,9 +602,9 @@ static inline __attribute__((always_inline)) void ends_of(const Board *b, int co
     const Lanes2 sides = {FILE_A & b->mask, b->file_last};
     const Lanes2 heads = {RANK_1 & b->mask, b->rank_last};
     const Lanes2 area  = (Lanes2){0} + board_road_stones(b, color);
-    const Lanes2 east  = (Lanes2){0} + (wraps ? ~FILE_H : ~0ULL);
-    const Lanes2 west  = (Lanes2){0} + (wraps ? ~FILE_A : ~0ULL);
-#define AROUND(x) ((x) << 8 | (x) >> 8 | ((x)&east) << 1 | ((x)&west) >> 1)
+    const Lanes2 east  = (Lanes2){0} + (u64)(wraps ? ~FILE_H : ~0ULL);
+    const Lanes2 west  = (Lanes2){0} + (u64)(wraps ? ~FILE_A : ~0ULL);
+#define AROUND(x) ((x) << 8 | (x) >> 8 | (east & (x)) << 1 | (west & (x)) >> 1)
     Lanes2 across = sides & area, along = heads & area;
     for (;;) {
         const Lanes2 front_across = AROUND(across) & area & ~across;

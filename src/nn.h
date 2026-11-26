@@ -29,16 +29,15 @@
                             */
 #define NN_BUCKETS 8
 
-/* Fixed point. An activation of 1 is NN_QA and an output weight of 1 is NN_QB, which keeps
- * an activation times a weight inside 16 bits. An output of 1 is NN_SCALE hundredths of a
- * flat, which keeps a flat near 100: the search's margins are written in those units. */
+/* Fixed point. An activation of 1 is NN_QA. An output of 1 is NN_SCALE hundredths of a flat,
+ * which keeps a flat near 100: the search's margins are written in those units. */
 #define NN_QA    255
-#define NN_QB    64
 #define NN_SCALE 310
 
 /* A head reads each filter's units pooled over the eight orientations, in both views, with the
- * skip inputs, through NN_L2 and then NN_L3 clipped units, and the output adds them to the
- * straight sum of the pools. Pooling first keeps the head blind to how the board is turned. */
+ * skip inputs, through NN_L2 and then NN_L3 clipped units. It is the only reading of the stacks:
+ * a straight sum of the pools beside it carried the board while a third of the head died, E143.
+ * Pooling first keeps the head blind to how the board is turned. */
 #define NN_POOLS (NN_SIDES * NN_FILTERS)
 #define NN_L2    16
 #define NN_L3    32
@@ -65,12 +64,11 @@
 #define NN_KOMI_UNIT    4
 
 /* Weights as a trainer writes them for one size: each filter once, before the symmetries are
- * applied, with a cell for each square of that size, and its bias, output, skip and head. A pool
+ * applied, with a cell for each square of that size, and its bias, skip and head. A pool
  * is [view][filter], the side to move's view first. */
 typedef struct NNWeights {
     const i16 *filters; /* [cell][input][filter], a cell a square, rank by rank */
     const i16 *bias;    /* [filter], the same in both views */
-    const i16 *output;  /* [bucket][pool] */
     const i32 *skip;    /* [bucket][4]: lead, reserve, komi and a constant, in 64ths */
     const i16 *l2;      /* [bucket][unit][pool] */
     const i16 *l2_skip; /* [bucket][unit][3]: lead, reserve and komi */

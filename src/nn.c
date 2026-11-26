@@ -15,7 +15,6 @@
 #define NN_BUILTIN(N)                                                                         \
     _Static_assert(sizeof(Net##N##Filters) == sizeof(i16) * N * N * NN_INPUTS * NN_FILTERS && \
                        sizeof(Net##N##Bias) == sizeof(i16) * NN_FILTERS &&                    \
-                       sizeof(Net##N##Output) == sizeof(i16) * NN_BUCKETS * NN_POOLS &&       \
                        sizeof(Net##N##Skip) == sizeof(i32) * NN_BUCKETS * 4 &&                \
                        sizeof(Net##N##L2) == sizeof(i16) * NN_BUCKETS * NN_L2 * NN_POOLS &&   \
                        sizeof(Net##N##L2Skip) == sizeof(i16) * NN_BUCKETS * NN_L2 * 3 &&      \
@@ -24,9 +23,9 @@
                        sizeof(Net##N##L3Bias) == sizeof(i32) * NN_BUCKETS * NN_L3 &&          \
                        sizeof(Net##N##L4) == sizeof(i16) * NN_BUCKETS * NN_L3,                \
                    "net" #N ".h was fitted for a network of another shape");                  \
-    static const NNWeights Builtin##N = {                                                     \
-        Net##N##Filters, Net##N##Bias,   Net##N##Output, Net##N##Skip,   Net##N##L2,          \
-        Net##N##L2Skip,  Net##N##L2Bias, Net##N##L3,     Net##N##L3Bias, Net##N##L4};
+    static const NNWeights Builtin##N = {Net##N##Filters, Net##N##Bias,   Net##N##Skip,       \
+                                         Net##N##L2,      Net##N##L2Skip, Net##N##L2Bias,     \
+                                         Net##N##L3,      Net##N##L3Bias, Net##N##L4};
 #if __has_include("net3.h")
 #include "net3.h"
 NN_BUILTIN(3)
@@ -76,7 +75,6 @@ typedef struct Net {
     i16 *table;
     void *block;
     _Alignas(64) i16 bias[NN_VIEW];
-    _Alignas(64) i16 output[NN_BUCKETS][NN_POOLS];
     i32 skip[NN_BUCKETS][4];
     /* The head's layers by pairs of inputs, [pair][unit][which of the two]: see pair_products(). */
     _Alignas(64) i16 l2_pairs[NN_BUCKETS][NN_POOLS / 2][NN_L2 * 2];
@@ -145,7 +143,6 @@ bool nn_install(int size, const NNWeights *weights) {
             net->bias[g * NN_FILTERS + f] = weights->bias[f];
         }
     }
-    memcpy(net->output, weights->output, sizeof(net->output));
     memcpy(net->skip, weights->skip, sizeof(net->skip));
     for (int bucket = 0; bucket < NN_BUCKETS; bucket++) {
         for (int unit = 0; unit < NN_L2; unit++) {
@@ -313,14 +310,6 @@ void nn_derive(const Board *b, NNFrame *frame, const NNFrame *from, u64 touched)
     frame->computed = true;
 }
 
-/* clang sizes this loop's vectors by the 32-bit sum, which halves them, unless told otherwise.
- * gcc gets the full width by itself, and a pragma only clang knows would warn there. */
-#if defined(__clang__)
-#define FULL_WIDTH _Pragma("clang loop vectorize_width(16) interleave_count(1)")
-#else
-#define FULL_WIDTH
-#endif
-
 /* Clipped and squared, each square cut by NN_POOL_SHIFT to 16 bits, then pooled over the
  * orientations, so every layer above is 16 by 16 bits into 32. */
 #define NN_POOLED_MAX \
@@ -329,14 +318,12 @@ void nn_derive(const Board *b, NNFrame *frame, const NNFrame *from, u64 touched)
 #define NN_Z_SHIFT 8 /* a third-layer unit, NN_QY * NN_Q3 to 1, down to NN_QY */
 _Static_assert(NN_QU << NN_POOL_SHIFT == 1 << 16, "a pooled 1 stands for 2^16 of the squares");
 _Static_assert(NN_POOLED_MAX <= 32767, "a pooled filter fits 16 bits");
-_Static_assert(((i64)NN_POOLS) * NN_POOLED_MAX * 127 < 1LL << 31, "the straight sum fits 32 bits");
 _Static_assert(((i64)NN_POOLS) * NN_POOLED_MAX * NN_L2_LIMIT < (1LL << 31) - (1LL << 28),
                "a second-layer sum fits 32 bits, with room for its skip inputs and bias");
 _Static_assert(((i64)NN_L2) * NN_QY * NN_L3_LIMIT < (1LL << 31) - (1LL << 28),
                "a third-layer sum fits 32 bits, with room for its bias");
 _Static_assert((NN_QU * NN_Q2) >> NN_Y_SHIFT == NN_QY && (NN_QY * NN_Q3) >> NN_Z_SHIFT == NN_QY,
                "each unit is cut to NN_QY");
-_Static_assert(NN_QY *NN_Q4 % (NN_QB * NN_QU) == 0, "the straight sum scales to the head's units");
 _Static_assert(((i64)NN_L3) * NN_QY * NN_L4_LIMIT < 1LL << 31, "the head's output fits 32 bits");
 
 typedef u16 NNUVec __attribute__((vector_size(NN_VEC_BYTES), may_alias));
@@ -370,15 +357,6 @@ static __attribute__((noinline)) void pool(const i16 *restrict acc, i16 *restric
         }
     }
     memcpy(pooled, sums, sizeof(sums));
-}
-
-static __attribute__((noinline)) i32 dot(const i16 *restrict a, const i16 *restrict b) {
-    i32 sum = 0;
-    FULL_WIDTH
-    for (int k = 0; k < NN_POOLS; k++) {
-        sum += (i32)a[k] * b[k];
-    }
-    return sum;
 }
 
 /* A layer of the head is small and dense. A dot product for each unit ends in a sum across a
@@ -441,7 +419,6 @@ i64 nn_score(int size, const NNFrame *frame, const NNInputs *in) {
     pool(frame->acc + in->stm * NN_VIEW, pooled);
     pool(frame->acc + (in->stm ^ 1) * NN_VIEW, pooled + NN_FILTERS);
 
-    const i32 linear    = dot(net->output[bucket], pooled);
     const i32 inputs[3] = {in->lead * (NN_QU / NN_LEAD_UNIT),
                            in->reserve * (NN_QU / NN_RESERVE_UNIT),
                            in->komi * (NN_QU / NN_KOMI_UNIT)};
@@ -489,8 +466,7 @@ i64 nn_score(int size, const NNFrame *frame, const NNInputs *in) {
         head += (i64)net->l4[bucket][k] * ((v + (1 << (NN_Z_SHIFT - 1))) >> NN_Z_SHIFT);
     }
 
-    const i64 whole = (i64)linear * (NN_QY * NN_Q4 / (NN_QB * NN_QU)) + head;
     const i32 *skip = net->skip[bucket];
-    return whole * NN_SCALE * 64 / ((i64)NN_QY * NN_Q4) + (i64)skip[0] * in->lead +
+    return head * NN_SCALE * 64 / ((i64)NN_QY * NN_Q4) + (i64)skip[0] * in->lead +
            (i64)skip[1] * in->reserve + (i64)skip[2] * in->komi + skip[3];
 }

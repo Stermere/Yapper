@@ -170,7 +170,7 @@ files of gen 15 it never read, gen 16's 6x6 files home at 07:53 on 2026-11-16 an
 other sizes, each listed once after the rest: `external/build/e89/full.list`, 20,775 listings,
 613M positions.
 
-E97's, which plays now on every size but 6x6, drops 6x6's generations before 15, which E90 found
+E97's, which played every size but 6x6 until E143, drops 6x6's generations before 15, which E90 found
 a weight, takes every gen 16 6x6 file home at 05:27 on 2026-11-17, fits twice as long with the two
 big boards sitting out the first half, E92, and decays the filters, E97
 (`external/build/e99/full.list`, 31,232 listings, 711M positions):
@@ -180,10 +180,36 @@ yapper nntrain src/net.h 1 0.7 16 15 --share 7=0.33 --share 8=0.2 --join 7=9 --j
     --decay 0.01 --lambda 3=0.5 --lambda 4=0.5 --smooth 4 @external/build/e99/full.list
 ```
 
-6x6 plays E108's: the same command on E97's list with the 7,408 gen 16 files it never read, every
-file of gen 16 (`external/build/e108/full.list`, 38,640 listings, 866M positions), of whose headers
-only `net6.h` was kept, E121. Fitted again on 6x6's games alone, the same options played level with
-E97's network, about 6 below this one: E120.
+6x6 played E108's, the same command on every file of gen 16 (`external/build/e108/full.list`,
+38,640 listings, 866M positions), of whose headers only `net6.h` was kept, E121; then E134's, 6x6
+alone on every file of gens 16 and 17. Since E143 the network has no linear term on the pools and
+every header was fitted again. 6x6 plays E134's command in the head-only trainer
+(`external/build/e134/lists/f-all.list`, 98,528 files, 1,271M positions):
+
+```sh
+yapper nntrain <out> 1 0.7 16 8 --decay 0.01 --smooth 4 --seed 0 --block 16 @f-all.list
+```
+
+The other sizes play E145's fits of gen 18 (3x3 to 8x8 but 6x6, `external/data/gen18`). 5x5, 7x7
+and 8x8 come from one fit of every size: gen 18's files of 4x4 to 8x8, a quarter of 3x3's, and gen
+17 6x6 files to about the other sizes' total, since the big boards need 6x6's filters
+(`external/build/e145/lists/gen18.list`; its 6x6 header was thrown away):
+
+```sh
+yapper nntrain <out> 1 0.7 16 8 --share 7=0.33 --share 8=0.2 --join 7=9 --join 8=9 --decay 0.01 \
+    --lambda 3=0.5 --lambda 4=0.5 --smooth 4 --seed 0 --block 16 @gen18.list
+```
+
+3x3 and 4x4 are each fitted alone on their gen 18 files (`lists/alone-<n>.list`), which fits them
+better and keeps their engine within a hundredth of the fit, where sharing the grid with bigger
+boards did not:
+
+```sh
+yapper nntrain <out> 1 0.7 16 8 --decay 0.01 --smooth 4 --seed 0 --block 16 --lambda 4=0.5 @alone-4.list
+```
+
+A header has no Output array since E143. A trainer reads a header's arrays by name, so an older
+one still starts a fit, with its straight sum of the pools dropped.
 
 `--join 7=9` keeps 7x7's positions out of every epoch before the ninth. The filters are shared by
 every size, and a size with few games for its squares is fitted best late and briefly: the big

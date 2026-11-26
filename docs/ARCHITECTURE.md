@@ -222,7 +222,7 @@ the nearest ancestor that has one, through the squares that the moves on the pat
 changed, and the search already records those moves. Selftest checks a frame carried this way
 against a refresh, bit for bit.
 
-**What is not stacks goes around it.** Output weights come in eight buckets by stones left,
+**What is not stacks goes around it.** Every weight after the pooling comes in eight buckets by stones left,
 finer near the end, where what a flat is worth climbs steeply. That is the smaller of what
 either side has left and the empty squares, since a game ends on whichever comes first. A linear
 skip adds the flat lead with komi, the reserves and komi itself, which are what a game is finally
@@ -230,9 +230,12 @@ counted on.
 
 **A head reads the pools.** Each filter's eight units, squared, are pooled into one in each view,
 so nothing past the pooling can tell how the board is turned. Two small layers read the 128 pools,
-16 clipped units and then 32, the first with the lead, reserves and komi too, and the output adds
-the 32 to the straight sum of the pools. Each size and bucket has a head of its own. It costs a
-fifth of the search's speed and played +54 in self-play, +86 at equal nodes: EXPERIMENTS.md E48.
+16 clipped units and then 32, the first with the lead, reserves and komi too, and the 32 weighed
+into the score are the network's whole reading of the stacks. Each size and bucket has a head of
+its own. It costs a fifth of the search's speed and played +54 in self-play, +86 at equal nodes:
+EXPERIMENTS.md E48. Until E143 a straight sum of the pools sat beside it, the network the head was
+first fitted on top of; it carried most of the board while a third of the head's first layer sat
+dead. Without it the head stays alive and the network holds out and plays the same.
 
 **It is integer.** Activations are clipped to [0, 1], where 1 is 255, and squared; each square is
 cut to 16 bits before it is pooled, so the pools are summed in 16 bits. Every layer of the head

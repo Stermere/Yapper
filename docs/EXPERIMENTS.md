@@ -6937,6 +6937,105 @@ Not kept: nothing has played. Revival is the one gain to hold on all the data, t
 verdict on the head needs a rider: it is short of nothing, but master's recipe leaves a quarter of it
 dead. The fit to make is warm-up and revival at decay 0.01.
 
+## E143: the head alone, the straight sum of the pools taken out
+
+The user asked why the network had both a linear term on the 128 pools and a head of 16 then 32
+units, and to take the linear term out. It was there as the head's starting point: E48 added the head
+beside the network of E44, so a head that had learned nothing added nothing. Fits are from nothing
+since E87, so that reason was gone; E65 had measured the linear sum as the main positional path (a
+spread of 253 hundredths on bench against the head's 126), and no experiment had removed it.
+
+`external/build/e143/make_tree.py` made the test tree: the trainer holds the output weights at zero
+(their random draw still taken, so every other weight starts as in master's fit of the same seed),
+and nn_score() drops the dot product. E134's recipe, list and seed, all of gens 16 and 17:
+
+| Averaged weights, the same held-out games | Master's fit (E134) | The head alone | |
+|---|---|---|---|
+| Held out, against the target | 0.481219 | 0.481057 | -1.6e-4 |
+| Against results | 0.435604 | **0.435471** | -1.3e-4 |
+| Gen 16 / gen 17 | 0.433000 / 0.437443 | 0.432805 / 0.437353 | |
+| Engine against the fit | 0.64, worst 4 | 0.64, worst 4 | |
+
+Level within the seeds' spread. What changed is the head. On 336,710 held-out positions of 401
+files (`deadunits.c`), a unit is dead when it sits at one side of its clip on every position of its
+bucket:
+
+| | Master's network | The head alone |
+|---|---|---|
+| First head layer, dead | 37 of 128 | 4 of 128 |
+| Second head layer, dead | 6 of 256 | 0 of 256 |
+| First layer inside its clip, on an average position | 51.2% | 61.8% |
+| Second layer inside its clip | 30.4% | 60.3% |
+
+The linear sum carried the board and left a third of the head with no gradient; without it the head
+carries the board and stays alive.
+
+| Match | Games | Result |
+|---|---|---|
+| The head alone against master, 8+0.08, non-regression [-20, 5] | 248 | +66 -51 =131, **+21.0 +/- 29.7**, pairs [6, 25, 49, 36, 8], **PASSED** |
+
+The other sizes' networks (E97) leaned on the linear sum, so they were fitted again head-only, warm
+from the new 6x6 network's filters with fresh heads: E97's listings of 3x3 to 5x5, 7x7 and 8x8 as
+E97 weighted them, and every sixteenth gen 17 6x6 file, 141M positions, 8 epochs at rate 0.001,
+E97's shares and lambdas, decay 0.01 (`lists/others.list`, `f-others`); its 6x6 network was
+discarded. On the newest games, gen 16 at 20,000 nodes, it held out against results 1.8e-4, 2.7e-4
+and 2.0e-4 better than E97 on 4x4, 5x5 and 8x8 and 1.5e-4 worse on 7x7 (3x3 2.7e-4 worse). At
+8+0.08, non-regression [-20, 5]: 4x4 **+4.6 +/- 19.3**, PASSED in 150 games; 5x5 -6.4 +/- 16.4 when
+the user stopped it at 650 games; 7x7 and 8x8 not played. Gen 18 (more games of those sizes) is
+under way to fit them properly.
+
+Kept as a full removal (`make_clean.py`): no Output array in a header, no output weights in the
+engine, the trainer, its two kernels or selftest. A trainer reads a header's arrays by name, so an
+older header still starts a fit, its straight sum dropped. Every network shipped has zero output
+weights, so the removal benches as the test tree did, 1082203, from native, generic, release and
+TUNE=on builds; a warm fit at rate 1e-12 writes the 6x6 header back byte for byte; make check
+clean. The other sizes' warm refits were replaced the next day by E145's.
+
+## E145: the other sizes on gen 18
+
+Gen 18 played 3x3, 4x4, 5x5, 7x7 and 8x8 on four rented servers from 2026-11-24 23:55 PST, at
+20,000 soft nodes, by master's engine with E123's datagen tune (so E97's networks played those
+sizes), from random openings, every round giving each size about the same scored positions
+(external/data/gen18/README.txt). At 16:00 the next day 79 cells of each size were home: 38.5M to
+41.0M scored positions a size. Two ways of fitting them, both in the head-only trainer:
+
+- Every size together: 4x4 to 8x8 every file home, 3x3 a quarter, and gen 17 6x6 files spread
+  evenly to the other sizes' total (13,671 files, about 170M positions), E97's multi-size recipe
+  (16 epochs, shares 7=0.33 and 8=0.2, both joining at the ninth, decay 0.01, lambda 0.5 on 3x3
+  and 4x4, smoothed over 4): 28 minutes, its 6x6 network thrown away.
+- Each size alone, E134's single-size recipe on the same files (3x3 every file of the same 79
+  cells): 2 to 6 minutes each.
+
+Held out against results on gen 18's held-out games, with the networks staged by E143 (its warm
+refit) on the same games:
+
+| Size | E143's refit | Together | Alone | Engine against fit, together / alone |
+|---|---|---|---|---|
+| 3x3 | 0.596015 | 0.504869 | 0.500615 (all 79 cells' games) | 3.09, worst 36 / 0.55, worst 5 |
+| 4x4 | 0.432900 | 0.379636 | **0.376395** | 1.29, worst 15 / 0.58, worst 3 |
+| 5x5 | 0.378304 | **0.334529** | 0.335523 | 0.56 / 0.51 |
+| 7x7 | 0.449046 | **0.433065** | 0.439747 | 0.49 / 0.50 |
+| 8x8 | 0.491454 | **0.478257** | 0.486782 | 0.49 / 0.50 |
+
+The small boards fit better alone, and only alone does the engine read them as closely as their fits:
+sharing the grid with bigger boards gave their heads weights large enough to magnify the fixed
+point's rounding. 7x7 and 8x8 run short of data alone (7x7 held out flat from the fourth epoch,
+8x8's loss against the target rising) and gain from 6x6's filters, as E92 found.
+
+Kept: 3x3 and 4x4 fitted alone, 5x5, 7x7 and 8x8 from the fit of every size, 6x6 E143's. Against
+the networks E143 staged, 8+0.08, SPRT [0, 10], each size's 4-ply book:
+
+| Size | Games | Result |
+|---|---|---|
+| 4x4 | 208 | +56 -25 =127, **+52.2 +/- 18.3**, PASSED |
+| 5x5 | 208 | +105 -57 =46, **+81.6 +/- 27.3**, PASSED |
+| 7x7 | 260 | +196 -50 =14, **+220.6 +/- 53.0**, PASSED |
+| 8x8 | 208 | +194 -13 =1, **+463.4 +/- 99.6**, PASSED |
+
+The margins on 7x7 and 8x8 say more about E143's warm refits, which were never played there, than
+about gen 18. Against E97's networks, which leaned on the straight sum, nothing was played. Bench
+932009 from native, generic, release and TUNE=on builds; make check clean.
+
 ## Mistakes worth not repeating
 
 - **A gain at equal nodes is not a gain until its cost has been on the clock.** The prior from

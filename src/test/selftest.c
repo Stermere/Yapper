@@ -414,7 +414,7 @@ static void check_frame(const Board *b, NNFrame *frames, const Move *made, int p
  * before one has been trained. Symmetry holds for any weights, by construction. */
 static void network_games(int size, int games, int halfkomi) {
     static i16 filters[SQUARE_COUNT * NN_INPUTS * NN_FILTERS];
-    static i16 bias[NN_FILTERS], output[NN_BUCKETS * NN_POOLS];
+    static i16 bias[NN_FILTERS];
     static i32 skip[NN_BUCKETS * 4];
     static i16 l2[NN_BUCKETS * NN_L2 * NN_POOLS], l2_skip[NN_BUCKETS * NN_L2 * 3];
     static i16 l3[NN_BUCKETS * NN_L3 * NN_L2], l4[NN_BUCKETS * NN_L3];
@@ -424,9 +424,6 @@ static void network_games(int size, int games, int halfkomi) {
     }
     for (int i = 0; i < NN_FILTERS; i++) {
         bias[i] = (i16)(rng() % 201) - 100;
-    }
-    for (int i = 0; i < NN_BUCKETS * NN_POOLS; i++) {
-        output[i] = (i16)(rng() % 255) - 127;
     }
     /* The head's units sit inside their clips often enough to be tested on both sides of them. */
     for (int i = 0; i < NN_BUCKETS * NN_L2 * NN_POOLS; i++) {
@@ -448,7 +445,7 @@ static void network_games(int size, int games, int halfkomi) {
     for (int i = 0; i < NN_BUCKETS * 4; i++) {
         skip[i] = (i32)(rng() % 2001) - 1000;
     }
-    const NNWeights random = {filters, bias, output, skip, l2, l2_skip, l2_bias, l3, l3_bias, l4};
+    const NNWeights random = {filters, bias, skip, l2, l2_skip, l2_bias, l3, l3_bias, l4};
     CHECK(nn_install(size, &random), "installing a network on %d", size);
 
     static Move list[MAX_MOVES];

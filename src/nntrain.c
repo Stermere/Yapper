@@ -51,10 +51,9 @@
 #define NT_GROUPS 32
 
 /* Weights stay inside what the fixed point can hold: 64 stones of the largest filter weight
- * still fit 16 bits with the bias added, and an output weight is at most 127 / NN_QB. */
+ * still fit 16 bits with the bias added. */
 #define NT_FILTER_LIMIT    1.5f
 #define NT_BIAS_LIMIT      1.98f
-#define NT_OUTPUT_LIMIT    1.98f
 #define NT_L2_LIMIT        ((float)NN_L2_LIMIT / NN_Q2)
 #define NT_L3_LIMIT        ((float)NN_L3_LIMIT / NN_Q3)
 #define NT_L4_LIMIT        ((float)NN_L4_LIMIT / NN_Q4)
@@ -175,9 +174,9 @@ typedef struct NTLoader {
     u32 *perm;                           /* the games in this epoch's order */
 } NTLoader;
 
-/* Filters, then bias, output and skip, in one array so the optimiser can walk it as one. */
+/* Filters, then bias, skip and head, in one array so the optimiser can walk it as one. */
 typedef struct NTModel {
-    u64 bias_at, output_at, skip_at, l2_at, l2_skip_at, l2_bias_at, l3_at, l3_bias_at, l4_at, count;
+    u64 bias_at, skip_at, l2_at, l2_skip_at, l2_bias_at, l3_at, l3_bias_at, l4_at, count;
     float *p;
     /* `p` rounded to the engine's fixed point. The fit reads only this, so what is fitted is
      * what plays, to within the engine's last rounding, while `p` keeps the small steps. */
@@ -378,11 +377,8 @@ static bool nt_play(const DataGame *game, u64 key, int keep, NTVisit visit, void
 /* How many steps of the engine's fixed point make one of weight `i`. */
 static inline double unit_of(const NTModel *model, u64 i) {
     static const double skip_units[4] = {NT_LEAD_UNIT, NT_RESERVE_UNIT, NT_KOMI_UNIT, 1.0};
-    if (i < model->output_at) {
-        return NN_QA;
-    }
     if (i < model->skip_at) {
-        return NN_QB;
+        return NN_QA;
     }
     if (i < model->l2_at) {
         return NN_SCALE * 64.0 / skip_units[(i - model->skip_at) % 4];
@@ -396,8 +392,7 @@ static inline double unit_of(const NTModel *model, u64 i) {
 
 static inline float limit_of(const NTModel *model, u64 i) {
     return i < model->bias_at      ? NT_FILTER_LIMIT
-           : i < model->output_at  ? NT_BIAS_LIMIT
-           : i < model->skip_at    ? NT_OUTPUT_LIMIT
+           : i < model->skip_at    ? NT_BIAS_LIMIT
            : i < model->l2_at      ? 1e9f
            : i < model->l2_bias_at ? NT_L2_LIMIT
            : i < model->l3_at      ? NT_HEAD_BIAS_LIMIT
@@ -438,13 +433,8 @@ static inline u64 bias_of(const NTModel *model, int size) {
     return model->bias_at + (u64)size * NN_FILTERS;
 }
 
-/* A bucket's output weights, the side to move's view first. */
-/* A size and bucket's set of output, skip and head weights. */
+/* A size and bucket's set of skip and head weights. */
 static inline u64 set_of(int size, int bucket) { return (u64)size * NN_BUCKETS + (u64)bucket; }
-
-static inline u64 output_of(const NTModel *model, int size, int bucket) {
-    return model->output_at + set_of(size, bucket) * NN_POOLS;
-}
 
 static inline u64 skip_of(const NTModel *model, int size, int bucket) {
     return model->skip_at + set_of(size, bucket) * 4;
@@ -508,7 +498,6 @@ static float forward(const NTModel *model, const NTSample *s, const u16 *feature
         }
     }
     const float *bias   = model->q + bias_of(model, s->size);
-    const float *wout   = model->q + output_of(model, s->size, s->bucket);
     const float *skip   = model->q + skip_of(model, s->size, s->bucket);
     const float *l2     = model->q + l2_of(model, s->size, s->bucket);
     const float *l2skip = model->q + l2_skip_of(model, s->size, s->bucket);
@@ -533,7 +522,6 @@ static float forward(const NTModel *model, const NTSample *s, const u16 *feature
     float out = skip[0] * in[0] + skip[1] * in[1] + skip[2] * in[2] + skip[3];
     for (int k = 0; k < NN_POOLS; k++) {
         t->pooled[k] = sums[k] * NT_POOL;
-        out += wout[k] * t->pooled[k];
     }
     for (int j = 0; j < NN_L2; j++) {
         float y = l2bias[j] + l2skip[j * 3] * in[0] + l2skip[j * 3 + 1] * in[1] +
@@ -1135,8 +1123,7 @@ static float model_random(float width) {
 
 static bool model_init(NTModel *model, u64 seed) {
     model->bias_at    = (u64)NT_GRID * NT_GRID * NN_INPUTS * NN_FILTERS;
-    model->output_at  = model->bias_at + NT_SLOTS * NN_FILTERS;
-    model->skip_at    = model->output_at + NT_SLOTS * NN_BUCKETS * NN_POOLS;
+    model->skip_at    = model->bias_at + NT_SLOTS * NN_FILTERS;
     model->l2_at      = model->skip_at + NT_SLOTS * NN_BUCKETS * 4;
     model->l2_skip_at = model->l2_at + NT_SLOTS * NN_BUCKETS * NN_L2 * NN_POOLS;
     model->l2_bias_at = model->l2_skip_at + NT_SLOTS * NN_BUCKETS * NN_L2 * 3;
@@ -1164,9 +1151,6 @@ static bool model_init(NTModel *model, u64 seed) {
     }
     for (int i = 0; i < NT_SLOTS * NN_FILTERS; i++) {
         model->p[model->bias_at + i] = 0.5f;
-    }
-    for (int i = 0; i < NT_SLOTS * NN_BUCKETS * NN_POOLS; i++) {
-        model->p[model->output_at + i] = model_random(0.05f);
     }
     /* Each unit of the head starts inside its clip, so that it learns from the first step, and
      * adds little to the output until it has. */
@@ -1218,7 +1202,6 @@ static bool model_take(NTModel *model, int size, const NNWeights *w, bool *taken
         bool wide;
     } parts[] = {
         {model->bias_at, NN_FILTERS, w->bias, false},
-        {model->output_at, NN_BUCKETS * NN_POOLS, w->output, false},
         {model->skip_at, NN_BUCKETS * 4, w->skip, true},
         {model->l2_at, NN_BUCKETS * NN_L2 * NN_POOLS, w->l2, false},
         {model->l2_skip_at, NN_BUCKETS * NN_L2 * 3, w->l2_skip, false},
@@ -1275,7 +1258,7 @@ static bool model_warm_file(NTModel *model, const char *path, bool *taken) {
         return false;
     }
     static i16 filters[SQUARE_COUNT * NN_INPUTS * NN_FILTERS];
-    static i16 bias[NN_FILTERS], output[NN_BUCKETS * NN_POOLS];
+    static i16 bias[NN_FILTERS];
     static i32 skip[NN_BUCKETS * 4];
     static i16 l2[NN_BUCKETS * NN_L2 * NN_POOLS], l2_skip[NN_BUCKETS * NN_L2 * 3];
     static i16 l3[NN_BUCKETS * NN_L3 * NN_L2], l4[NN_BUCKETS * NN_L3];
@@ -1288,7 +1271,6 @@ static bool model_warm_file(NTModel *model, const char *path, bool *taken) {
     } arrays[] = {
         {"Filters", filters, (u64)size * size * NN_INPUTS * NN_FILTERS, false},
         {"Bias", bias, NN_FILTERS, false},
-        {"Output", output, NN_BUCKETS * NN_POOLS, false},
         {"Skip", skip, NN_BUCKETS * 4, true},
         {"L2", l2, NN_BUCKETS * NN_L2 * NN_POOLS, false},
         {"L2Skip", l2_skip, NN_BUCKETS * NN_L2 * 3, false},
@@ -1329,7 +1311,7 @@ static bool model_warm_file(NTModel *model, const char *path, bool *taken) {
         }
     }
     free(text);
-    const NNWeights w = {filters, bias, output, skip, l2, l2_skip, l2_bias, l3, l3_bias, l4};
+    const NNWeights w = {filters, bias, skip, l2, l2_skip, l2_bias, l3, l3_bias, l4};
     if (!model_take(model, size, &w, taken)) {
         return false;
     }
@@ -1340,7 +1322,6 @@ static bool model_warm_file(NTModel *model, const char *path, bool *taken) {
 typedef struct NTQuantised {
     i16 *filters;
     i16 bias[NT_SLOTS * NN_FILTERS];
-    i16 output[NT_SLOTS * NN_BUCKETS * NN_POOLS];
     i32 skip[NT_SLOTS * NN_BUCKETS * 4];
     i16 l2[NT_SLOTS * NN_BUCKETS * NN_L2 * NN_POOLS];
     i16 l2_skip[NT_SLOTS * NN_BUCKETS * NN_L2 * 3];
@@ -1357,9 +1338,6 @@ static void quantise_model(const NTModel *model, NTQuantised *q) {
     }
     for (int i = 0; i < NT_SLOTS * NN_FILTERS; i++) {
         q->bias[i] = (i16)grid(model, model->bias_at + i, model->p[model->bias_at + i]);
-    }
-    for (int i = 0; i < NT_SLOTS * NN_BUCKETS * NN_POOLS; i++) {
-        q->output[i] = (i16)grid(model, model->output_at + i, model->p[model->output_at + i]);
     }
     for (int i = 0; i < NT_SLOTS * NN_BUCKETS * 4; i++) {
         q->skip[i] = (i32)grid(model, model->skip_at + i, model->p[model->skip_at + i]);
@@ -1397,7 +1375,6 @@ static void local_filters(const NTQuantised *q, int size, i16 *out) {
 static NNWeights weights_for(const NTQuantised *q, int size, const i16 *filters) {
     return (NNWeights){filters,
                        q->bias + size * NN_FILTERS,
-                       q->output + size * NN_BUCKETS * NN_POOLS,
                        q->skip + size * NN_BUCKETS * 4,
                        q->l2 + size * NN_BUCKETS * NN_L2 * NN_POOLS,
                        q->l2_skip + size * NN_BUCKETS * NN_L2 * 3,
@@ -1453,7 +1430,6 @@ static bool write_headers(const char *dir, const NTQuantised *q, int sizes) {
         } arrays[] = {
             {"i16", "Filters", w.filters, (u64)size * size * NN_INPUTS * NN_FILTERS, false},
             {"i16", "Bias", w.bias, NN_FILTERS, false},
-            {"i16", "Output", w.output, NN_BUCKETS * NN_POOLS, false},
             {"i32", "Skip", w.skip, NN_BUCKETS * 4, true},
             {"i16", "L2", w.l2, NN_BUCKETS * NN_L2 * NN_POOLS, false},
             {"i16", "L2Skip", w.l2_skip, NN_BUCKETS * NN_L2 * 3, false},
@@ -1691,7 +1667,7 @@ static const char KernelBody[] =
     "extern \"C\" __global__ void __launch_bounds__(V * G * F)\n"
     "train_step(const Packed *packed, const unsigned short *stacks,\n"
     "        const float *q, const int *image, int *grad_filters, unsigned long long *grad,\n"
-    "        unsigned long long *loss, int squares, int bias_at, int output_at, int skip_at,\n"
+    "        unsigned long long *loss, int squares, int bias_at, int skip_at,\n"
     "        int l2_at, int l2_skip_at, int l2_bias_at, int l3_at, int l3_bias_at, int l4_at,\n"
     "        float scale) {\n"
     "    __shared__ unsigned short feature[MAX_SQUARES];\n"
@@ -1699,7 +1675,6 @@ static const char KernelBody[] =
     "    __shared__ float delta[V][G][F];\n"
     "    __shared__ float pooled[POOLS];\n"
     "    __shared__ float pooled_slope[POOLS];\n"
-    "    __shared__ float warp_out[POOLS / 32];\n"
     "    __shared__ float warp_l2[L2][POOLS / 32];\n"
     "    __shared__ float y[L2], y_slope[L2], h[L3], h_slope[L3];\n"
     "    __shared__ float shared_slope;\n"
@@ -1717,7 +1692,6 @@ static const char KernelBody[] =
     "    }\n"
     "    const int set = s.size * NN_BUCKETS + s.bucket;\n"
     "    const int bias = bias_at + s.size * F;\n"
-    "    const int wout = output_at + set * POOLS;\n"
     "    const int skip_from = skip_at + set * 4;\n"
     "    const int l2 = l2_at + set * L2 * POOLS;\n"
     "    const int l2_skip = l2_skip_at + set * L2 * 3;\n"
@@ -1738,10 +1712,6 @@ static const char KernelBody[] =
     "    }\n"
     "    __syncthreads();\n"
     "    const float u = pooled[k];\n"
-    "    if (g == 0) {\n"
-    "        const float out = warp_sum(q[wout + k] * u);\n"
-    "        if (f % 32 == 0) warp_out[k / 32] = out;\n"
-    "    }\n"
     "    for (int j = g; j < L2; j += G) {\n"
     "        const float part = warp_sum(q[l2 + j * POOLS + k] * u);\n"
     "        if (f % 32 == 0) warp_l2[j][k / 32] = part;\n"
@@ -1763,10 +1733,8 @@ static const char KernelBody[] =
     "    }\n"
     "    __syncthreads();\n"
     "    if (threadIdx.x == 0) {\n"
-    "        float out = warp_out[0];\n"
-    "        for (int w = 1; w < POOLS / 32; w++) out += warp_out[w];\n"
     "        const float *skip = q + skip_from;\n"
-    "        out = skip[0] * in0 + skip[1] * in1 + skip[2] * in2 + skip[3] + out;\n"
+    "        float out = skip[0] * in0 + skip[1] * in1 + skip[2] * in2 + skip[3];\n"
     "        for (int c = 0; c < L3; c++) out += q[l4 + c] * clipped(h[c]);\n"
     "        const float p = 1.0f / (1.0f + expf(-out * LOSS_RATIO[s.size]));\n"
     "        const float slope = (p - s.target) * scale * LOSS_RATIO[s.size];\n"
@@ -1815,10 +1783,9 @@ static const char KernelBody[] =
     "u));\n"
     "    }\n"
     "    if (g == 0) {\n"
-    "        float d = slope * q[wout + k];\n"
+    "        float d = 0.0f;\n"
     "        for (int j = 0; j < L2; j++) d += y_slope[j] * q[l2 + j * POOLS + k];\n"
     "        pooled_slope[k] = d * POOL;\n"
-    "        atomicAdd(grad + wout + k, fixed_of(slope * u));\n"
     "    }\n"
     "    __syncthreads();\n"
     "    const float d = pre > 0.0f && pre < 1.0f ? pooled_slope[k] * 2.0f * pre : 0.0f;\n"
@@ -1838,7 +1805,7 @@ static const char KernelBody[] =
     "    }\n"
     "}\n"
     "extern \"C\" __global__ void adam(float *p, float *m, float *v, float *q, float *a,\n"
-    "        int *grad_filters, unsigned long long *grad, int count, int bias_at, int output_at,\n"
+    "        int *grad_filters, unsigned long long *grad, int count, int bias_at,\n"
     "        int skip_at, int l2_at, int l2_bias_at, int l3_at, int l3_bias_at, int l4_at,\n"
     "        double rate, double kept, double seen, double decay, double average) {\n"
     "    const int i = blockIdx.x * blockDim.x + threadIdx.x;\n"
@@ -1855,15 +1822,15 @@ static const char KernelBody[] =
     "    v[i] = (float)(BETA2 * v[i] + (1.0 - BETA2) * g * g);\n"
     "    float w = p[i] - (float)(rate * (m[i] / kept) / (sqrt(v[i] / seen) + 1e-8));\n"
     "    if (decay > 0.0 && i < bias_at) w -= (float)(rate * decay * p[i]);\n"
-    "    const float limit = i < bias_at ? FILTER_LIMIT : i < output_at ? BIAS_LIMIT\n"
-    "                      : i < skip_at ? OUTPUT_LIMIT : i < l2_at ? 1e9f\n"
+    "    const float limit = i < bias_at ? FILTER_LIMIT : i < skip_at ? BIAS_LIMIT\n"
+    "                      : i < l2_at ? 1e9f\n"
     "                      : i < l2_bias_at ? L2_LIMIT : i < l3_at ? HEAD_BIAS_LIMIT\n"
     "                      : i < l3_bias_at ? L3_LIMIT : i < l4_at ? HEAD_BIAS_LIMIT : L4_LIMIT;\n"
     "    p[i] = w > limit ? limit : w < -limit ? -limit : w;\n"
     "    const int k = (i - skip_at) % 4;\n"
     "    const double skip_unit = k == 0 ? LEAD_UNIT : k == 1 ? RESERVE_UNIT\n"
     "                           : k == 2 ? KOMI_UNIT : 1.0f;\n"
-    "    const double unit = i < output_at ? QA : i < skip_at ? QB\n"
+    "    const double unit = i < skip_at ? QA\n"
     "                      : i < l2_at ? SCALE * 64.0 / skip_unit : i < l2_bias_at ? Q2\n"
     "                      : i < l3_at ? QU * Q2 : i < l3_bias_at ? Q3 : i < l4_at ? QY * Q3 : "
     "Q4;\n"
@@ -1883,23 +1850,22 @@ static const char *kernel_source(void) {
              "#define NN_TOKENS %d\n#define NN_INPUTS %d\n#define NN_SIDES %d\n"
              "#define NN_FILTERS %d\n#define NN_ORIENTATIONS %d\n"
              "#define IMAGE_STRIDE %d\n#define MAX_SQUARES %d\n#define NN_BUCKETS %d\n"
-             "#define QA %.17g\n#define QB %.17g\n#define SCALE %.17g\n"
+             "#define QA %.17g\n#define SCALE %.17g\n"
              "#define LEAD_UNIT ((float)%.9g)\n#define RESERVE_UNIT ((float)%.9g)\n"
              "#define KOMI_UNIT ((float)%.9g)\n#define BETA1 %.17g\n#define BETA2 %.17g\n"
              "#define FILTER_LIMIT ((float)%.9g)\n#define BIAS_LIMIT ((float)%.9g)\n"
-             "#define OUTPUT_LIMIT ((float)%.9g)\n"
              "#define POOLS %d\n#define L2 %d\n#define L3 %d\n#define QU %.17g\n#define Q2 %.17g\n"
              "#define Q3 %.17g\n#define Q4 %.17g\n#define QY %.17g\n#define POOL ((float)%.9g)\n"
              "#define L2_LIMIT ((float)%.9g)\n#define L3_LIMIT ((float)%.9g)\n"
              "#define L4_LIMIT ((float)%.9g)\n#define HEAD_BIAS_LIMIT ((float)%.9g)\n"
              "__constant__ float LOSS_RATIO[%d] = {%s};\n%s",
              NN_TOKENS, NN_INPUTS, NN_SIDES, NN_FILTERS, NN_ORIENTATIONS, MAX_SIZE * MAX_SIZE,
-             SQUARE_COUNT, NN_BUCKETS, (double)NN_QA, (double)NN_QB, (double)NN_SCALE,
-             (double)NT_LEAD_UNIT, (double)NT_RESERVE_UNIT, (double)NT_KOMI_UNIT, NT_BETA1,
-             NT_BETA2, (double)NT_FILTER_LIMIT, (double)NT_BIAS_LIMIT, (double)NT_OUTPUT_LIMIT,
-             NN_POOLS, NN_L2, NN_L3, (double)NN_QU, (double)NN_Q2, (double)NN_Q3, (double)NN_Q4,
-             (double)NN_QY, (double)NT_POOL, (double)NT_L2_LIMIT, (double)NT_L3_LIMIT,
-             (double)NT_L4_LIMIT, (double)NT_HEAD_BIAS_LIMIT, NT_SLOTS, ratios, KernelBody);
+             SQUARE_COUNT, NN_BUCKETS, (double)NN_QA, (double)NN_SCALE, (double)NT_LEAD_UNIT,
+             (double)NT_RESERVE_UNIT, (double)NT_KOMI_UNIT, NT_BETA1, NT_BETA2,
+             (double)NT_FILTER_LIMIT, (double)NT_BIAS_LIMIT, NN_POOLS, NN_L2, NN_L3, (double)NN_QU,
+             (double)NN_Q2, (double)NN_Q3, (double)NN_Q4, (double)NN_QY, (double)NT_POOL,
+             (double)NT_L2_LIMIT, (double)NT_L3_LIMIT, (double)NT_L4_LIMIT,
+             (double)NT_HEAD_BIAS_LIMIT, NT_SLOTS, ratios, KernelBody);
     return source;
 }
 
@@ -1996,7 +1962,7 @@ static bool train_gpu(NTModel *model, NTLoader *loader, const double *lambda, in
     }
 
     int count = (int)model->count, squares = NT_SLOT_SQUARES;
-    int bias_at = (int)model->bias_at, output_at = (int)model->output_at;
+    int bias_at = (int)model->bias_at;
     int skip_at = (int)model->skip_at;
     int l2_at = (int)model->l2_at, l2_skip_at = (int)model->l2_skip_at;
     int l2_bias_at = (int)model->l2_bias_at, l3_at = (int)model->l3_at;
@@ -2053,14 +2019,14 @@ static bool train_gpu(NTModel *model, NTLoader *loader, const double *lambda, in
                     double decay           = Decay;
                     double average         = average_at(step, steps);
                     void *step_arguments[] = {
-                        &batch_packed, &batch_stacks, &q,       &image,      &grad_filters, &grad,
-                        &loss,         &squares,      &bias_at, &output_at,  &skip_at,      &l2_at,
-                        &l2_skip_at,   &l2_bias_at,   &l3_at,   &l3_bias_at, &l4_at,        &scale};
+                        &batch_packed, &batch_stacks, &q,          &image,   &grad_filters,
+                        &grad,         &loss,         &squares,    &bias_at, &skip_at,
+                        &l2_at,        &l2_skip_at,   &l2_bias_at, &l3_at,   &l3_bias_at,
+                        &l4_at,        &scale};
                     void *adam_arguments[] = {
-                        &p,          &m,     &v,          &q,         &a,       &grad_filters,
-                        &grad,       &count, &bias_at,    &output_at, &skip_at, &l2_at,
-                        &l2_bias_at, &l3_at, &l3_bias_at, &l4_at,     &rate,    &kept,
-                        &seen,       &decay, &average};
+                        &p,     &m,       &v,       &q,     &a,          &grad_filters, &grad,
+                        &count, &bias_at, &skip_at, &l2_at, &l2_bias_at, &l3_at,        &l3_bias_at,
+                        &l4_at, &rate,    &kept,    &seen,  &decay,      &average};
                     if (!gpu_launch(step_kernel, n, NN_HIDDEN, step_arguments) ||
                         !gpu_launch(adam_kernel, (unsigned)(count + 255) / 256, 256,
                                     adam_arguments)) {
